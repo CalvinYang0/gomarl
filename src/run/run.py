@@ -7,6 +7,7 @@ import shutil
 import torch as th
 from types import SimpleNamespace as SN
 from utils.logging import Logger
+from utils.grouping import resolve_group_config
 from utils.timehelper import time_left, time_str
 from os.path import dirname, abspath
 
@@ -102,6 +103,8 @@ def run_sequential(args, logger):
     args.n_actions = env_info["n_actions"]
     args.state_shape = env_info["state_shape"]
     args.accumulated_episodes = getattr(args, "accumulated_episodes", None)
+    args.group = resolve_group_config(args)
+    logger.console_logger.info("Group mode: {} | Initial groups: {}".format(args.group_mode, args.group))
 
     if getattr(args, 'agent_own_state_size', False):
         args.agent_own_state_size = get_agent_own_state_size(args.env_args)

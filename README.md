@@ -47,6 +47,17 @@ All results will be saved in the `results` folder.
 
 The config file `src/config/algs/group.yaml` contains default hyperparameters for GoMARL.
 
+For grouping ablations, you can override `group_mode` from the command line:
+
+```shell
+python3 src/main.py --config=group --env-config=sc2 with env_args.map_name=MMM2 group_mode=dynamic
+python3 src/main.py --config=group --env-config=sc2 with env_args.map_name=MMM2 group_mode=one_group
+python3 src/main.py --config=group --env-config=sc2 with env_args.map_name=MMM2 group_mode=singletons
+python3 src/main.py --config=group --env-config=sc2 with env_args.map_name=MMM2 group_mode=same_type
+```
+
+`group_mode=same_type` follows the paper-style type grouping for heterogeneous maps and is currently implemented for `MMM`, `MMM2`, and `3s5z_vs_3s6z`. You can also provide a manual grouping with `group_mode=manual`, for example `group=[[0,1],[2,3,4,5,6,7,8],[9]]`.
+
 
 ## Evaluation
 
