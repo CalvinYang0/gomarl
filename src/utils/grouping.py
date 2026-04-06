@@ -25,7 +25,11 @@ def _validate_group(group, n_agents):
 
 def resolve_group_config(args):
     n_agents = args.n_agents
-    map_name = getattr(args.env_args, "map_name", None)
+    env_args = getattr(args, "env_args", {})
+    if isinstance(env_args, dict):
+        map_name = env_args.get("map_name", None)
+    else:
+        map_name = getattr(env_args, "map_name", None)
     group_mode = getattr(args, "group_mode", "dynamic")
     manual_group = _parse_manual_group(getattr(args, "group", None))
 
