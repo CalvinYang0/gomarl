@@ -53,6 +53,9 @@ class Mixer(nn.Module):
                             nn.ReLU(inplace=True),
                             nn.Linear(self.embed_dim, 1))
 
+        for _ in range(len(self.group) - 1):
+            self.add_new_net()
+
     def add_new_net(self):
         self.hyper_b1.append(nn.Sequential(nn.Linear(self.a_h_dim, self.embed_dim)))
 
