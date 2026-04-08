@@ -38,6 +38,7 @@ class ParallelRunner:
         self.test_stats = {}
 
         self.log_train_stats_t = -100000
+        self.last_test_viz_trace = None
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -68,14 +69,19 @@ class ParallelRunner:
             "avail_actions": [],
             "obs": []
         }
+        reset_viz = []
 
         for parent_conn in self.parent_conns:
             data = parent_conn.recv()
             pre_transition_data["state"].append(data["state"])
             pre_transition_data["avail_actions"].append(data["avail_actions"])
             pre_transition_data["obs"].append(data["obs"])
+            reset_viz.append(data.get("viz_info"))
 
         self.batch.update(pre_transition_data, ts=0)
+        self.current_test_viz_trace = []
+        if reset_viz and reset_viz[0] is not None:
+            self.current_test_viz_trace.append(reset_viz[0])
 
         self.t = 0
         self.env_steps_this_run = 0
@@ -153,6 +159,8 @@ class ParallelRunner:
                     pre_transition_data["state"].append(data["state"])
                     pre_transition_data["avail_actions"].append(data["avail_actions"])
                     pre_transition_data["obs"].append(data["obs"])
+                    if test_mode and idx == 0 and data.get("viz_info") is not None:
+                        self.current_test_viz_trace.append(data["viz_info"])
 
             self.batch.update(post_transition_data, bs=envs_not_terminated, ts=self.t, mark_filled=False)
 
@@ -191,6 +199,9 @@ class ParallelRunner:
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
 
+        if test_mode:
+            self.last_test_viz_trace = self.current_test_viz_trace
+
         return self.batch
 
     def _log(self, returns, stats, prefix):
@@ -220,14 +231,16 @@ def env_worker(remote, env_fn):
                 "obs": obs,
                 "reward": reward,
                 "terminated": terminated,
-                "info": env_info
+                "info": env_info,
+                "viz_info": env.get_group_viz_info()
             })
         elif cmd == "reset":
             env.reset()
             remote.send({
                 "state": env.get_state(),
                 "avail_actions": env.get_avail_actions(),
-                "obs": env.get_obs()
+                "obs": env.get_obs(),
+                "viz_info": env.get_group_viz_info()
             })
         elif cmd == "close":
             env.close()
@@ -250,4 +263,3 @@ class CloudpickleWrapper():
     def __setstate__(self, ob):
         import pickle
         self.x = pickle.loads(ob)
-

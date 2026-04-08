@@ -4,6 +4,7 @@ import json
 import logging
 import numpy as np
 import torch as th
+from utils.group_viz import build_group_viz_frames
 
 class Logger:
     def __init__(self, console_logger):
@@ -46,6 +47,7 @@ class Logger:
             )
 
         self.use_wandb = True
+        self.wandb_module = wandb
 
         alg_name = config.get("name", "unknown_alg")
         env_name = config.get("env", "unknown_env")
@@ -128,6 +130,24 @@ class Logger:
         self.log_stat(prefix + "group_size_min", float(np.min(sizes)), t)
         self.log_misc(prefix + "group_structure", str(group), t)
         self.log_misc(prefix + "group_assignment", str(assignment), t)
+
+    def log_group_viz(self, group_trace, group, t, map_name, max_frames=24, fps=4, prefix="test_"):
+        if not self.use_wandb or not group_trace:
+            return
+        frames = build_group_viz_frames(group_trace, group, map_name, max_frames=max_frames)
+        if not frames:
+            return
+        video = np.stack(frames, axis=0).transpose(0, 3, 1, 2)
+        self._update_wandb_buffer(
+            prefix + "group_graph_video",
+            self.wandb_module.Video(video, fps=fps, format="mp4"),
+            t,
+        )
+        self._update_wandb_buffer(
+            prefix + "group_graph_final",
+            self.wandb_module.Image(frames[-1]),
+            t,
+        )
 
     def print_recent_stats(self):
         log_str = "Recent Stats | t_env: {:>10} | Episode: {:>8}\n".format(*self.stats["episode"][-1])
