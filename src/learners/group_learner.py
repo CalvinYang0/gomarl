@@ -42,6 +42,8 @@ class GROUPLearner:
         
         self.train_t = 0
         self.last_logged_group = copy.deepcopy(self.mixer.group)
+        self.group_graph_sum = None
+        self.group_graph_count = 0
 
         
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
@@ -69,6 +71,14 @@ class GROUPLearner:
         mac_hidden = th.stack(mac_hidden, dim=1)
         mac_group_state = th.stack(mac_group_state, dim=1)
         mac_hidden = mac_hidden.detach()
+
+        if getattr(self.args, "group_update_mode", "contribution") == "hidden_similarity":
+            graph = hidden_similarity_graph(mac_hidden[:, :-1])
+            if self.group_graph_sum is None:
+                self.group_graph_sum = graph
+            else:
+                self.group_graph_sum = self.group_graph_sum + graph
+            self.group_graph_count += 1
 
         # Pick the Q-Values for the actions taken by each agent
         chosen_action_qvals = th.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)
@@ -157,7 +167,7 @@ class GROUPLearner:
     def change_group(self, batch: EpisodeBatch, change_group_i: int):
         group_update_mode = getattr(self.args, "group_update_mode", "contribution")
         if group_update_mode == "hidden_similarity":
-            self._change_group_hidden_similarity(batch, change_group_i)
+            self._change_group_hidden_similarity()
             return
         if group_update_mode == "graph":
             raise NotImplementedError("`group_update_mode=graph` is reserved for the learned graph head version and is not implemented yet.")
@@ -222,24 +232,13 @@ class GROUPLearner:
             self.last_logged_group = copy.deepcopy(group_nxt)
             self._update_targets()
 
-    def _change_group_hidden_similarity(self, batch: EpisodeBatch, change_group_i: int):
-        if change_group_i == 0:
-            self.group_graph_avg = 0
-
-        with th.no_grad():
-            mac_hidden = []
-            self.mac.init_hidden(batch.batch_size)
-            for t in range(batch.max_seq_length):
-                self.mac.forward(batch, t=t)
-                mac_hidden.append(self.mac.hidden_states)
-            mac_hidden = th.stack(mac_hidden, dim=1)
-            graph = hidden_similarity_graph(mac_hidden[:, :-1])
-            self.group_graph_avg += graph
-
-        if change_group_i != self.args.change_group_batch_num - 1:
+    def _change_group_hidden_similarity(self):
+        if self.group_graph_sum is None or self.group_graph_count == 0:
             return
 
-        self.group_graph_avg /= self.args.change_group_batch_num
+        self.group_graph_avg = self.group_graph_sum / self.group_graph_count
+        self.group_graph_sum = None
+        self.group_graph_count = 0
         group_nxt = adjacency_to_groups(
             self.group_graph_avg,
             getattr(self.args, "graph_edge_threshold", 0.75),
@@ -262,9 +261,19 @@ class GROUPLearner:
         self.last_logged_group = copy.deepcopy(group_nxt)
         self._update_targets()
 
-    def log_group_stats(self, t_env: int, prefix="test_"):
+    def log_group_stats(self, t_env: int, prefix="test_", group_trace=None, map_name="unknown_map"):
         group = copy.deepcopy(self.mixer.group)
         self.logger.log_group(group, t_env, prefix=prefix)
+        if getattr(self.args, "visualize_group_graph", False):
+            self.logger.log_group_viz(
+                group_trace,
+                group,
+                t_env,
+                map_name,
+                max_frames=getattr(self.args, "visualize_group_graph_max_frames", 24),
+                fps=getattr(self.args, "visualize_group_graph_fps", 4),
+                prefix=prefix,
+            )
 
     def _update_targets(self):
         self.target_mac.load_state(self.mac)

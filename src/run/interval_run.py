@@ -199,7 +199,12 @@ def run_sequential(args, logger):
             last_test_T = runner.t_env
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
-            learner.log_group_stats(runner.t_env, prefix="test_")
+            learner.log_group_stats(
+                runner.t_env,
+                prefix="test_",
+                group_trace=getattr(runner, "last_test_viz_trace", None),
+                map_name=args.env_args.get("map_name", args.env),
+            )
 
         if args.save_model and (runner.t_env - model_save_time >= args.save_model_interval or model_save_time == 0):
             model_save_time = runner.t_env
@@ -219,16 +224,19 @@ def run_sequential(args, logger):
                     )
 
         if uses_dynamic_grouping(args) and (runner.t_env - last_change_group_T) / args.change_group_interval >= 1.0:
-            for i in range(args.change_group_batch_num):
-                if buffer.can_sample(args.change_group_batch_size):
-                    episode_sample = buffer.sample(args.change_group_batch_size)
-                    max_ep_t = episode_sample.max_t_filled()
-                    episode_sample = episode_sample[:, :max_ep_t]
-                    if episode_sample.device != args.device:
-                        episode_sample.to(args.device)
+            if getattr(args, "group_update_mode", "contribution") == "hidden_similarity":
+                learner.change_group(None, 0)
+            else:
+                for i in range(args.change_group_batch_num):
+                    if buffer.can_sample(args.change_group_batch_size):
+                        episode_sample = buffer.sample(args.change_group_batch_size)
+                        max_ep_t = episode_sample.max_t_filled()
+                        episode_sample = episode_sample[:, :max_ep_t]
+                        if episode_sample.device != args.device:
+                            episode_sample.to(args.device)
 
-                    learner.change_group(episode_sample, i)
-                    del episode_sample
+                        learner.change_group(episode_sample, i)
+                        del episode_sample
             last_change_group_T = runner.t_env
 
         episode += args.batch_size_run
