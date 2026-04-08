@@ -16,6 +16,15 @@ class Logger:
 
         self.stats = defaultdict(lambda: [])
 
+    def _update_wandb_buffer(self, key, value, t):
+        if not self.use_wandb:
+            return
+        if self.wandb_current_t != t and self.wandb_current_data:
+            self.wandb.log(self.wandb_current_data, step=self.wandb_current_t)
+            self.wandb_current_data = {}
+        self.wandb_current_t = t
+        self.wandb_current_data[key] = value
+
     def setup_tb(self, directory_name):
         # Import here so it doesn't have to be installed if you don't use it
         from tensorboard_logger import configure, log_value
@@ -83,11 +92,7 @@ class Logger:
 
         if self.use_wandb:
             wb_value = value.item() if hasattr(value, "item") else value
-            if self.wandb_current_t != t and self.wandb_current_data:
-                self.wandb.log(self.wandb_current_data, step=self.wandb_current_t)
-                self.wandb_current_data = {}
-            self.wandb_current_t = t
-            self.wandb_current_data[key] = wb_value
+            self._update_wandb_buffer(key, wb_value, t)
 
         if self.use_sacred and to_sacred:
             if key in self.sacred_info:
@@ -97,6 +102,32 @@ class Logger:
                 self.sacred_info["{}_T".format(key)] = [t]
                 self.sacred_info[key] = [value]
             self._run_obj.log_scalar(key, value, t)
+
+    def log_misc(self, key, value, t, to_sacred=True):
+        if self.use_wandb:
+            self._update_wandb_buffer(key, value, t)
+
+        if self.use_sacred and to_sacred:
+            if key in self.sacred_info:
+                self.sacred_info["{}_T".format(key)].append(t)
+                self.sacred_info[key].append(value)
+            else:
+                self.sacred_info["{}_T".format(key)] = [t]
+                self.sacred_info[key] = [value]
+
+    def log_group(self, group, t, prefix=""):
+        sizes = [len(group_i) for group_i in group]
+        assignment = [-1 for _ in range(sum(sizes))]
+        for group_id, group_i in enumerate(group):
+            for agent_id in group_i:
+                assignment[agent_id] = group_id
+
+        self.log_stat(prefix + "group_num", len(group), t)
+        self.log_stat(prefix + "group_size_mean", float(np.mean(sizes)), t)
+        self.log_stat(prefix + "group_size_max", float(np.max(sizes)), t)
+        self.log_stat(prefix + "group_size_min", float(np.min(sizes)), t)
+        self.log_misc(prefix + "group_structure", str(group), t)
+        self.log_misc(prefix + "group_assignment", str(assignment), t)
 
     def print_recent_stats(self):
         log_str = "Recent Stats | t_env: {:>10} | Episode: {:>8}\n".format(*self.stats["episode"][-1])

@@ -7,6 +7,7 @@ from torch.optim import RMSprop, Adam
 import torch.nn as nn
 import numpy as np
 from torch.distributions import Categorical
+from utils.graph_grouping import hidden_similarity_graph, adjacency_to_groups, group_assignment
 from utils.th_utils import get_parameters_num
 
 
@@ -40,6 +41,7 @@ class GROUPLearner:
         self.log_stats_t = -self.args.learner_log_interval - 1
         
         self.train_t = 0
+        self.last_logged_group = copy.deepcopy(self.mixer.group)
 
         
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
@@ -153,6 +155,13 @@ class GROUPLearner:
             self.log_stats_t = t_env
     
     def change_group(self, batch: EpisodeBatch, change_group_i: int):
+        group_update_mode = getattr(self.args, "group_update_mode", "contribution")
+        if group_update_mode == "hidden_similarity":
+            self._change_group_hidden_similarity(batch, change_group_i)
+            return
+        if group_update_mode == "graph":
+            raise NotImplementedError("`group_update_mode=graph` is reserved for the learned graph head version and is not implemented yet.")
+
         if change_group_i == 0:
             self.agent_w1_avg = 0
 
@@ -210,7 +219,52 @@ class GROUPLearner:
             
             self.mixer.update_group(group_nxt)
             self.target_mixer.update_group(group_nxt)
+            self.last_logged_group = copy.deepcopy(group_nxt)
             self._update_targets()
+
+    def _change_group_hidden_similarity(self, batch: EpisodeBatch, change_group_i: int):
+        if change_group_i == 0:
+            self.group_graph_avg = 0
+
+        with th.no_grad():
+            mac_hidden = []
+            self.mac.init_hidden(batch.batch_size)
+            for t in range(batch.max_seq_length):
+                self.mac.forward(batch, t=t)
+                mac_hidden.append(self.mac.hidden_states)
+            mac_hidden = th.stack(mac_hidden, dim=1)
+            graph = hidden_similarity_graph(mac_hidden[:, :-1])
+            self.group_graph_avg += graph
+
+        if change_group_i != self.args.change_group_batch_num - 1:
+            return
+
+        self.group_graph_avg /= self.args.change_group_batch_num
+        group_nxt = adjacency_to_groups(
+            self.group_graph_avg,
+            getattr(self.args, "graph_edge_threshold", 0.75),
+        )
+
+        if group_nxt == self.mixer.group:
+            return
+
+        current_group_num = len(self.mixer.group)
+        target_group_num = len(group_nxt)
+        while len(self.mixer.hyper_b1) < target_group_num:
+            self.mixer.add_new_net()
+            self.target_mixer.add_new_net()
+        while len(self.mixer.hyper_b1) > target_group_num:
+            self.mixer.del_net(len(self.mixer.hyper_b1) - 1)
+            self.target_mixer.del_net(len(self.target_mixer.hyper_b1) - 1)
+
+        self.mixer.update_group(group_nxt)
+        self.target_mixer.update_group(group_nxt)
+        self.last_logged_group = copy.deepcopy(group_nxt)
+        self._update_targets()
+
+    def log_group_stats(self, t_env: int, prefix="test_"):
+        group = copy.deepcopy(self.mixer.group)
+        self.logger.log_group(group, t_env, prefix=prefix)
 
     def _update_targets(self):
         self.target_mac.load_state(self.mac)
