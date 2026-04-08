@@ -284,8 +284,15 @@ class GROUPLearner:
             self.group_graph_sum = None
             self.group_graph_count = 0.0
 
-        graph_rows = batch["graph_rows"][:, :-1]
-        filled = batch["filled"][:, :-1].float()
+        with th.no_grad():
+            graph_rows = []
+            self.mac.init_hidden(batch.batch_size)
+            for t in range(batch.max_seq_length):
+                self.mac.forward(batch, t=t)
+                graph_rows.append(self.mac.graph_rows)
+            graph_rows = th.stack(graph_rows, dim=1)
+
+        filled = batch["filled"][:, :batch.max_seq_length].float()
         graph_mask = filled.unsqueeze(-1).unsqueeze(-1)
         weighted_graph = graph_rows * graph_mask
         graph_sum = weighted_graph.sum(dim=(0, 1))
