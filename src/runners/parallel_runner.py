@@ -109,6 +109,7 @@ class ParallelRunner:
 
             actions_chosen = {
                 "actions": actions.unsqueeze(1).to("cpu"),
+                "graph_rows": self.mac.graph_rows[envs_not_terminated].unsqueeze(1).to("cpu"),
             }
             if save_probs:
                 actions_chosen["probs"] = probs.unsqueeze(1).to("cpu")

@@ -78,6 +78,7 @@ class EpisodeRunner:
 
             post_transition_data = {
                 "actions": cpu_actions,
+                "graph_rows": self.mac.graph_rows.to("cpu").numpy(),
                 "reward": [(reward,)],
                 "terminated": [(terminated != env_info.get("episode_limit", False),)],
             }
@@ -95,7 +96,7 @@ class EpisodeRunner:
 
         actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
         cpu_actions = actions.to("cpu").numpy()
-        self.batch.update({"actions": cpu_actions}, ts=self.t)
+        self.batch.update({"actions": cpu_actions, "graph_rows": self.mac.graph_rows.to("cpu").numpy()}, ts=self.t)
         
         cur_stats = self.test_stats if test_mode else self.train_stats
         cur_returns = self.test_returns if test_mode else self.train_returns

@@ -7,7 +7,7 @@ from torch.optim import RMSprop, Adam
 import torch.nn as nn
 import numpy as np
 from torch.distributions import Categorical
-from utils.graph_grouping import hidden_similarity_graph, adjacency_to_groups, group_assignment
+from utils.graph_grouping import hidden_similarity_graph, adjacency_to_groups
 from utils.th_utils import get_parameters_num
 
 
@@ -42,6 +42,8 @@ class GROUPLearner:
         
         self.train_t = 0
         self.last_logged_group = copy.deepcopy(self.mixer.group)
+        self.group_graph_sum = None
+        self.group_graph_count = 0.0
 
         
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
@@ -160,7 +162,8 @@ class GROUPLearner:
             self._change_group_hidden_similarity(batch, change_group_i)
             return
         if group_update_mode == "graph":
-            raise NotImplementedError("`group_update_mode=graph` is reserved for the learned graph head version and is not implemented yet.")
+            self._change_group_graph(batch, change_group_i)
+            return
 
         if change_group_i == 0:
             self.agent_w1_avg = 0
@@ -260,6 +263,60 @@ class GROUPLearner:
             return
 
         current_group_num = len(self.mixer.group)
+        target_group_num = len(group_nxt)
+        while len(self.mixer.hyper_b1) < target_group_num:
+            self.mixer.add_new_net()
+            self.target_mixer.add_new_net()
+        while len(self.mixer.hyper_b1) > target_group_num:
+            self.mixer.del_net(len(self.mixer.hyper_b1) - 1)
+            self.target_mixer.del_net(len(self.target_mixer.hyper_b1) - 1)
+
+        self.mixer.update_group(group_nxt)
+        self.target_mixer.update_group(group_nxt)
+        self.last_logged_group = copy.deepcopy(group_nxt)
+        self._update_targets()
+
+    def _change_group_graph(self, batch: EpisodeBatch, change_group_i: int):
+        if batch is None:
+            return
+
+        if change_group_i == 0:
+            self.group_graph_sum = None
+            self.group_graph_count = 0.0
+
+        graph_rows = batch["graph_rows"][:, :-1]
+        filled = batch["filled"][:, :-1].float()
+        graph_mask = filled.unsqueeze(-1).unsqueeze(-1)
+        weighted_graph = graph_rows * graph_mask
+        graph_sum = weighted_graph.sum(dim=(0, 1))
+        graph_count = graph_mask.sum().item()
+
+        if graph_count == 0:
+            return
+
+        if self.group_graph_sum is None:
+            self.group_graph_sum = graph_sum
+        else:
+            self.group_graph_sum = self.group_graph_sum + graph_sum
+        self.group_graph_count += graph_count
+
+        if change_group_i != self.args.change_group_batch_num - 1:
+            return
+
+        group_graph_avg = self.group_graph_sum / self.group_graph_count
+        self.group_graph_sum = None
+        self.group_graph_count = 0.0
+        group_graph_avg = (group_graph_avg + group_graph_avg.transpose(0, 1)) / 2.0
+        group_graph_avg.fill_diagonal_(0.0)
+
+        group_nxt = adjacency_to_groups(
+            group_graph_avg,
+            getattr(self.args, "graph_edge_threshold", 0.75),
+        )
+
+        if group_nxt == self.mixer.group:
+            return
+
         target_group_num = len(group_nxt)
         while len(self.mixer.hyper_b1) < target_group_num:
             self.mixer.add_new_net()

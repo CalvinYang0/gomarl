@@ -39,6 +39,7 @@ change_group_interval: 100000
 change_group_batch_num: 4           # change group data 256*4
 change_group_batch_size: 256
 change_group_value: 0.7             # change group when w1 < average * change_group_value
+graph_head_hidden_dim: 32           # hidden dim for the graph head when group_update_mode=graph
 graph_edge_threshold: 0.75          # used by hidden_similarity / graph grouping
 visualize_group_graph: False        # log a test-time group graph video/image to W&B
 visualize_group_graph_max_frames: 24
