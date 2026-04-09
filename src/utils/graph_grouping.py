@@ -53,6 +53,46 @@ def local_subgraph_similarity_graph(node_features, neighbor_topk=None):
     return similarity
 
 
+def local_subgraph_fusion_graph(node_features, neighbor_topk=None):
+    base_graph = pseudo_attention_graph(node_features)
+    n_agents = base_graph.size(0)
+    if neighbor_topk is None:
+        neighbor_topk = max(1, n_agents // 2)
+    neighbor_topk = max(1, min(int(neighbor_topk), max(n_agents - 1, 1)))
+
+    fused = base_graph.new_zeros(base_graph.shape)
+    counts = base_graph.new_zeros(base_graph.shape)
+
+    for agent_i in range(n_agents):
+        row = base_graph[agent_i].clone()
+        row[agent_i] = -1e9
+        _, neighbor_indices = th.topk(row, k=neighbor_topk, dim=-1)
+        ordered_nodes = th.cat(
+            [
+                th.tensor([agent_i], device=base_graph.device, dtype=th.long),
+                neighbor_indices.long(),
+            ],
+            dim=0,
+        )
+
+        local_adj = base_graph.index_select(0, ordered_nodes).index_select(1, ordered_nodes)
+        local_adj = 0.5 * (local_adj + local_adj.transpose(0, 1))
+        local_adj.fill_diagonal_(0.0)
+
+        for local_u, global_u in enumerate(ordered_nodes.tolist()):
+            for local_v, global_v in enumerate(ordered_nodes.tolist()):
+                if global_u == global_v:
+                    continue
+                fused[global_u, global_v] += local_adj[local_u, local_v]
+                counts[global_u, global_v] += 1.0
+
+    fused = fused / counts.clamp(min=1.0)
+    fused = fused.masked_fill(counts == 0, 0.0)
+    fused = 0.5 * (fused + fused.transpose(0, 1))
+    fused.fill_diagonal_(0.0)
+    return fused
+
+
 def sparsify_graph(adjacency, topk=None, threshold=0.0):
     n_agents = adjacency.size(0)
     if topk is None:

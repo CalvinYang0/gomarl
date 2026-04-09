@@ -34,7 +34,7 @@ td_lambda: 0.6
 optimizer: 'adam'
 group_mode: "dynamic"              # dynamic | one_group | singletons | same_type | manual
 group: null                         # manual initial group, e.g. [[0,1],[2,3]]
-group_adjustment_mode: "contribution"  # contribution | graph_pseudo_attn | graph_local_subgraph
+group_adjustment_mode: "contribution"  # contribution | graph_pseudo_attn | graph_local_subgraph | graph_local_fusion
 change_group_interval: 100000
 change_group_batch_num: 4           # change group data 256*4
 change_group_batch_size: 256
