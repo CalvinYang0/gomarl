@@ -34,13 +34,14 @@ td_lambda: 0.6
 optimizer: 'adam'
 group_mode: "dynamic"              # dynamic | one_group | singletons | same_type | manual
 group: null                         # manual initial group, e.g. [[0,1],[2,3]]
-group_adjustment_mode: "contribution"  # contribution | graph_pseudo_attn
+group_adjustment_mode: "contribution"  # contribution | graph_pseudo_attn | graph_local_subgraph
 change_group_interval: 100000
 change_group_batch_num: 4           # change group data 256*4
 change_group_batch_size: 256
 change_group_value: 0.7             # change group when w1 < average * change_group_value
 graph_change_group_batch_num: 1
 graph_change_group_batch_size: 32
+graph_local_neighbor_topk: null     # null -> floor(n_agents/2) local neighbors per agent
 graph_topk: null                    # null -> floor(n_agents/2)
 graph_edge_threshold: 0.12
 visualize_group_graph: False        # upload test-time group graph video/image to W&B

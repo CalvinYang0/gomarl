@@ -225,7 +225,7 @@ def run_sequential(args, logger):
 
         if uses_dynamic_grouping(args) and (runner.t_env - last_change_group_T) / args.change_group_interval >= 1.0:
             group_adjustment_mode = getattr(args, "group_adjustment_mode", "contribution")
-            if group_adjustment_mode == "graph_pseudo_attn":
+            if group_adjustment_mode in ["graph_pseudo_attn", "graph_local_subgraph"]:
                 regroup_batch_num = getattr(args, "graph_change_group_batch_num", 1)
                 regroup_batch_size = getattr(args, "graph_change_group_batch_size", 32)
             else:

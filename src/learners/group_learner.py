@@ -8,7 +8,12 @@ import torch.nn as nn
 import numpy as np
 from torch.distributions import Categorical
 from utils.th_utils import get_parameters_num
-from utils.graph_grouping import pseudo_attention_graph, sparsify_graph, adjacency_to_groups
+from utils.graph_grouping import (
+    adjacency_to_groups,
+    local_subgraph_similarity_graph,
+    pseudo_attention_graph,
+    sparsify_graph,
+)
 
 
 class GROUPLearner:
@@ -147,6 +152,36 @@ class GROUPLearner:
         group_nxt = adjacency_to_groups(graph)
         self._apply_group_update(group_nxt)
 
+    def _change_group_graph_local_subgraph(self, batch: EpisodeBatch, change_group_i: int):
+        if change_group_i == 0:
+            self.graph_adj_avg = None
+
+        with th.no_grad():
+            obs = batch["obs"][:, :-1]
+            filled = batch["filled"][:, :-1].squeeze(-1).long()
+            valid_lengths = filled.sum(dim=1).clamp(min=1)
+            last_indices = valid_lengths - 1
+            batch_indices = th.arange(batch.batch_size, device=obs.device)
+            last_obs = obs[batch_indices, last_indices]
+            neighbor_topk = getattr(self.args, "graph_local_neighbor_topk", None)
+            graph = local_subgraph_similarity_graph(last_obs, neighbor_topk=neighbor_topk)
+
+        if self.graph_adj_avg is None:
+            self.graph_adj_avg = graph
+        else:
+            self.graph_adj_avg += graph
+
+        graph_batch_num = getattr(self.args, "graph_change_group_batch_num", 1)
+        if change_group_i != graph_batch_num - 1:
+            return
+
+        graph = self.graph_adj_avg / float(graph_batch_num)
+        topk = getattr(self.args, "graph_topk", None)
+        threshold = getattr(self.args, "graph_edge_threshold", 0.0)
+        graph = sparsify_graph(graph, topk=topk, threshold=threshold)
+        group_nxt = adjacency_to_groups(graph)
+        self._apply_group_update(group_nxt)
+
     
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         # Get the relevant quantities
@@ -262,6 +297,8 @@ class GROUPLearner:
         mode = getattr(self.args, "group_adjustment_mode", "contribution")
         if mode == "graph_pseudo_attn":
             return self._change_group_graph_pseudo_attn(batch, change_group_i)
+        if mode == "graph_local_subgraph":
+            return self._change_group_graph_local_subgraph(batch, change_group_i)
         return self._change_group_contribution(batch, change_group_i)
 
     def log_group_stats(self, t_env: int, prefix="test_", group_trace=None, map_name="unknown_map"):
