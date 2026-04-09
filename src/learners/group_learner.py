@@ -212,6 +212,20 @@ class GROUPLearner:
             self.target_mixer.update_group(group_nxt)
             self._update_targets()
 
+    def log_group_stats(self, t_env: int, prefix="test_", group_trace=None, map_name="unknown_map"):
+        group = copy.deepcopy(self.mixer.group)
+        self.logger.log_group(group, t_env, prefix=prefix)
+        if getattr(self.args, "visualize_group_graph", False):
+            self.logger.log_group_viz(
+                group_trace,
+                group,
+                t_env,
+                map_name,
+                max_frames=getattr(self.args, "visualize_group_graph_max_frames", 24),
+                fps=getattr(self.args, "visualize_group_graph_fps", 4),
+                prefix=prefix,
+            )
+
     def _update_targets(self):
         self.target_mac.load_state(self.mac)
         if self.mixer is not None:

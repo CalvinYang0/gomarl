@@ -24,6 +24,7 @@ class EpisodeRunner:
         self.test_stats = {}
 
         self.log_train_stats_t = -1000000
+        self.last_test_viz_trace = None
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -39,13 +40,19 @@ class EpisodeRunner:
     def close_env(self):
         self.env.close()
 
-    def reset(self):
+    def reset(self, test_mode=False):
         self.batch = self.new_batch()
         self.env.reset()
         self.t = 0
+        self.current_test_viz_trace = None
+        if test_mode and getattr(self.args, "visualize_group_graph", False):
+            self.current_test_viz_trace = []
+            viz_info = self.env.get_group_viz_info()
+            if viz_info is not None:
+                self.current_test_viz_trace.append(viz_info)
 
     def run(self, test_mode=False):
-        self.reset()
+        self.reset(test_mode=test_mode)
 
         terminated = False
         episode_return = 0
@@ -66,6 +73,10 @@ class EpisodeRunner:
             
             reward, terminated, env_info = self.env.step(actions[0])
             episode_return += reward
+            if self.current_test_viz_trace is not None:
+                viz_info = self.env.get_group_viz_info()
+                if viz_info is not None:
+                    self.current_test_viz_trace.append(viz_info)
 
             post_transition_data = {
                 "actions": cpu_actions,
@@ -107,6 +118,9 @@ class EpisodeRunner:
             if hasattr(self.mac.action_selector, "epsilon"):
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
+
+        if test_mode:
+            self.last_test_viz_trace = self.current_test_viz_trace
 
         return self.batch
 

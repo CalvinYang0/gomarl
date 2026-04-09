@@ -38,6 +38,9 @@ change_group_interval: 100000
 change_group_batch_num: 4           # change group data 256*4
 change_group_batch_size: 256
 change_group_value: 0.7             # change group when w1 < average * change_group_value
+visualize_group_graph: False        # upload test-time group graph video/image to W&B
+visualize_group_graph_max_frames: 24
+visualize_group_graph_fps: 4
 
 lasso_alpha_anneal_time: 100000
 lasso_alpha_start: 0.005
