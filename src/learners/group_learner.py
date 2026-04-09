@@ -8,6 +8,7 @@ import torch.nn as nn
 import numpy as np
 from torch.distributions import Categorical
 from utils.th_utils import get_parameters_num
+from utils.graph_grouping import pseudo_attention_graph, sparsify_graph, adjacency_to_groups
 
 
 class GROUPLearner:
@@ -41,7 +42,111 @@ class GROUPLearner:
         
         self.train_t = 0
 
-        
+    def _apply_group_update(self, group_nxt):
+        if group_nxt == self.mixer.group:
+            return
+
+        target_group_num = len(group_nxt)
+        while len(self.mixer.hyper_b1) < target_group_num:
+            self.mixer.add_new_net()
+            self.target_mixer.add_new_net()
+        while len(self.mixer.hyper_b1) > target_group_num:
+            self.mixer.del_net(len(self.mixer.hyper_b1) - 1)
+            self.target_mixer.del_net(len(self.target_mixer.hyper_b1) - 1)
+
+        self.mixer.update_group(group_nxt)
+        self.target_mixer.update_group(group_nxt)
+        self._update_targets()
+
+    def _change_group_contribution(self, batch: EpisodeBatch, change_group_i: int):
+        if change_group_i == 0:
+            self.agent_w1_avg = 0
+
+        mac_hidden = []
+
+        with th.no_grad():
+            self.mac.init_hidden(batch.batch_size)
+            for t in range(batch.max_seq_length):
+                self.mac.forward(batch, t=t)
+                mac_hidden.append(self.mac.hidden_states)
+            mac_hidden = th.stack(mac_hidden, dim=1)
+
+            w1_avg = self.mixer.get_w1_avg(mac_hidden[:, :-1])
+            self.agent_w1_avg += w1_avg
+
+        if change_group_i == self.args.change_group_batch_num - 1:
+
+            self.agent_w1_avg /= self.args.change_group_batch_num
+            group_now = copy.deepcopy(self.mixer.group)
+            group_nxt = copy.deepcopy(self.mixer.group)
+            for group_index, group_i in enumerate(group_now):
+                group_w1_avg = self.agent_w1_avg[group_i]
+
+                group_avg = th.mean(group_w1_avg)
+                relative_lasso_threshold = group_avg * self.args.change_group_value
+                indices = th.where(group_w1_avg < relative_lasso_threshold)[0]
+
+                if len(group_i) < 3:
+                    continue
+
+                if group_index+1 == len(group_now) and len(indices) != 0:
+                    tmp = []
+                    group_nxt.append(tmp)
+                    self.mixer.add_new_net()
+                    self.target_mixer.add_new_net()
+
+                for i in range(len(indices)-1, -1, -1):
+                    idx = group_now[group_index][indices[i]]
+                    group_nxt[group_index+1].append(idx)
+                    del group_nxt[group_index][indices[i]]
+                    for m in self.mixer.hyper_w1[idx]:
+                        if type(m) != nn.ReLU:
+                            m.reset_parameters()
+
+            whether_group_changed = True if group_now != group_nxt else False
+
+            if not whether_group_changed:
+                return
+
+            for i in range(len(group_nxt)-1, -1, -1):
+                if group_nxt[i] == []:
+                    del group_nxt[i]
+                    self.mixer.del_net(i)
+                    self.target_mixer.del_net(i)
+
+            self.mixer.update_group(group_nxt)
+            self.target_mixer.update_group(group_nxt)
+            self._update_targets()
+
+    def _change_group_graph_pseudo_attn(self, batch: EpisodeBatch, change_group_i: int):
+        if change_group_i == 0:
+            self.graph_adj_avg = None
+
+        with th.no_grad():
+            mac_hidden = []
+            self.mac.init_hidden(batch.batch_size)
+            for t in range(batch.max_seq_length):
+                self.mac.forward(batch, t=t)
+                mac_hidden.append(self.mac.hidden_states)
+            mac_hidden = th.stack(mac_hidden, dim=1)
+            graph = pseudo_attention_graph(mac_hidden[:, :-1])
+
+        if self.graph_adj_avg is None:
+            self.graph_adj_avg = graph
+        else:
+            self.graph_adj_avg += graph
+
+        if change_group_i != self.args.change_group_batch_num - 1:
+            return
+
+        graph = self.graph_adj_avg / float(self.args.change_group_batch_num)
+        topk = getattr(self.args, "graph_topk", None)
+        threshold = getattr(self.args, "graph_edge_threshold", 0.0)
+        graph = sparsify_graph(graph, topk=topk, threshold=threshold)
+        group_nxt = adjacency_to_groups(graph)
+        self._apply_group_update(group_nxt)
+
+    
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         # Get the relevant quantities
         rewards = batch["reward"][:, :-1]
@@ -153,64 +258,10 @@ class GROUPLearner:
             self.log_stats_t = t_env
     
     def change_group(self, batch: EpisodeBatch, change_group_i: int):
-        if change_group_i == 0:
-            self.agent_w1_avg = 0
-
-        mac_hidden = []
-
-        with th.no_grad():
-            self.mac.init_hidden(batch.batch_size)
-            for t in range(batch.max_seq_length):
-                agent_outs = self.mac.forward(batch, t=t)
-                mac_hidden.append(self.mac.hidden_states)
-            mac_hidden = th.stack(mac_hidden, dim=1)
-            
-            w1_avg = self.mixer.get_w1_avg(mac_hidden[:, :-1])
-            self.agent_w1_avg += w1_avg
-
-        if change_group_i == self.args.change_group_batch_num - 1:
-            
-            self.agent_w1_avg /= self.args.change_group_batch_num
-            group_now = copy.deepcopy(self.mixer.group)
-            group_nxt = copy.deepcopy(self.mixer.group)
-            for group_index, group_i in enumerate(group_now):
-                group_w1_avg = self.agent_w1_avg[group_i]
-
-                group_avg = th.mean(group_w1_avg)
-                relative_lasso_threshold = group_avg * self.args.change_group_value
-                indices = th.where(group_w1_avg < relative_lasso_threshold)[0]
-
-                if len(group_i) < 3:
-                    continue
-                
-                if group_index+1 == len(group_now) and len(indices) != 0:
-                    tmp = []
-                    group_nxt.append(tmp)
-                    self.mixer.add_new_net()
-                    self.target_mixer.add_new_net()
-                
-                for i in range(len(indices)-1, -1, -1):
-                    idx = group_now[group_index][indices[i]]
-                    group_nxt[group_index+1].append(idx)
-                    del group_nxt[group_index][indices[i]]
-                    for m in self.mixer.hyper_w1[idx]:
-                        if type(m) != nn.ReLU:
-                            m.reset_parameters()
-            
-            whether_group_changed = True if group_now != group_nxt else False
-            
-            if not whether_group_changed:
-                return
-            
-            for i in range(len(group_nxt)-1, -1, -1):
-                if group_nxt[i] == []:
-                    del group_nxt[i]
-                    self.mixer.del_net(i)
-                    self.target_mixer.del_net(i)
-            
-            self.mixer.update_group(group_nxt)
-            self.target_mixer.update_group(group_nxt)
-            self._update_targets()
+        mode = getattr(self.args, "group_adjustment_mode", "contribution")
+        if mode == "graph_pseudo_attn":
+            return self._change_group_graph_pseudo_attn(batch, change_group_i)
+        return self._change_group_contribution(batch, change_group_i)
 
     def log_group_stats(self, t_env: int, prefix="test_", group_trace=None, map_name="unknown_map"):
         group = copy.deepcopy(self.mixer.group)
