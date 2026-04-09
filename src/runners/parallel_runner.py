@@ -64,7 +64,10 @@ class ParallelRunner:
 
         want_viz = test_mode and self.want_group_viz
         for idx, parent_conn in enumerate(self.parent_conns):
-            parent_conn.send(("reset", {"want_viz": want_viz and idx == 0}))
+            if want_viz:
+                parent_conn.send(("reset", {"want_viz": idx == 0}))
+            else:
+                parent_conn.send(("reset", None))
 
         pre_transition_data = {
             "state": [],
@@ -123,10 +126,13 @@ class ParallelRunner:
             for idx, parent_conn in enumerate(self.parent_conns):
                 if idx in envs_not_terminated:
                     if not terminated[idx]:
-                        parent_conn.send(("step", {
-                            "actions": cpu_actions[action_idx],
-                            "want_viz": test_mode and self.want_group_viz and idx == 0,
-                        }))
+                        if test_mode and self.want_group_viz and idx == 0:
+                            parent_conn.send(("step", {
+                                "actions": cpu_actions[action_idx],
+                                "want_viz": True,
+                            }))
+                        else:
+                            parent_conn.send(("step", cpu_actions[action_idx]))
                     action_idx += 1
 
             envs_not_terminated = [b_idx for b_idx, termed in enumerate(terminated) if not termed]
@@ -239,26 +245,30 @@ def env_worker(remote, env_fn):
             state = env.get_state()
             avail_actions = env.get_avail_actions()
             obs = env.get_obs()
-            remote.send({
+            response = {
                 "state": state,
                 "avail_actions": avail_actions,
                 "obs": obs,
                 "reward": reward,
                 "terminated": terminated,
                 "info": env_info,
-                "viz_info": env.get_group_viz_info() if want_viz else None
-            })
+            }
+            if want_viz:
+                response["viz_info"] = env.get_group_viz_info()
+            remote.send(response)
         elif cmd == "reset":
             want_viz = False
             if isinstance(data, dict):
                 want_viz = data.get("want_viz", False)
             env.reset()
-            remote.send({
+            response = {
                 "state": env.get_state(),
                 "avail_actions": env.get_avail_actions(),
                 "obs": env.get_obs(),
-                "viz_info": env.get_group_viz_info() if want_viz else None
-            })
+            }
+            if want_viz:
+                response["viz_info"] = env.get_group_viz_info()
+            remote.send(response)
         elif cmd == "close":
             env.close()
             remote.close()
