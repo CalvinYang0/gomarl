@@ -58,23 +58,6 @@ python3 src/main.py --config=group --env-config=sc2 with env_args.map_name=MMM2 
 
 `group_mode=same_type` follows the paper-style type grouping for heterogeneous maps and is currently implemented for `MMM`, `MMM2`, and `3s5z_vs_3s6z`. You can also provide a manual grouping with `group_mode=manual`, for example `group=[[0,1],[2,3,4,5,6,7,8],[9]]`.
 
-To switch the dynamic group update rule while keeping the same training code, use `group_update_mode`:
-
-```shell
-python3 src/main.py --config=group --env-config=sc2 with env_args.map_name=MMM2 group_mode=dynamic group_update_mode=contribution
-python3 src/main.py --config=group --env-config=sc2 with env_args.map_name=MMM2 group_mode=dynamic group_update_mode=hidden_similarity
-```
-
-During testing, GoMARL now also logs group statistics and the current group structure to Sacred/W&B, so the learned partitions can be compared across different grouping rules.
-
-To visualize the learned grouping as a test-time graph in W&B, enable:
-
-```shell
-python3 src/main.py --config=group --env-config=sc2 with env_args.map_name=MMM2 group_mode=dynamic group_update_mode=hidden_similarity visualize_group_graph=True
-```
-
-For SMAC maps, the visualization shows unit names when available, marks dead units, and draws edges between agents in the same group over the course of the test episode.
-
 
 ## Evaluation
 

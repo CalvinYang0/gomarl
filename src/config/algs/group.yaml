@@ -33,18 +33,11 @@ lr: 0.001                           # Learning rate for agents
 td_lambda: 0.6
 optimizer: 'adam'
 group_mode: "dynamic"              # dynamic | one_group | singletons | same_type | manual
-group_update_mode: "contribution"  # contribution | hidden_similarity | graph
 group: null                         # manual initial group, e.g. [[0,1],[2,3]]
 change_group_interval: 100000
 change_group_batch_num: 4           # change group data 256*4
 change_group_batch_size: 256
 change_group_value: 0.7             # change group when w1 < average * change_group_value
-graph_head_hidden_dim: 32           # hidden dim for the graph head when group_update_mode=graph
-graph_edge_threshold: 0.75          # used by hidden_similarity / graph grouping
-log_group_stats: False              # log group structure/statistics during evaluation
-visualize_group_graph: False        # log a test-time group graph video/image to W&B
-visualize_group_graph_max_frames: 24
-visualize_group_graph_fps: 4
 
 lasso_alpha_anneal_time: 100000
 lasso_alpha_start: 0.005

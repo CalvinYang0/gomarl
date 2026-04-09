@@ -222,12 +222,6 @@ def run_sequential(args, logger):
             last_test_T = runner.t_env
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
-            learner.log_group_stats(
-                runner.t_env,
-                prefix="test_",
-                group_trace=getattr(runner, "last_test_viz_trace", None),
-                map_name=args.env_args.get("map_name", args.env),
-            )
 
         if args.save_model and (runner.t_env - model_save_time >= args.save_model_interval or model_save_time == 0):
             model_save_time = runner.t_env

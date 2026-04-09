@@ -1519,35 +1519,6 @@ class StarCraft2Env(MultiAgentEnv):
         """Get unit by ID."""
         return self.agents[a_id]
 
-    def _get_unit_name(self, unit):
-        if self.map_type == "MMM":
-            if unit.unit_type == self.marauder_id:
-                return "marauder"
-            if unit.unit_type == self.marine_id:
-                return "marine"
-            if unit.unit_type == self.medivac_id:
-                return "medivac"
-        return "agent"
-
-    def get_group_viz_info(self):
-        unit_names = []
-        alive = []
-        type_counts = {}
-
-        for agent_id in range(self.n_agents):
-            unit = self.agents[agent_id]
-            base_name = self._get_unit_name(unit)
-            type_counts.setdefault(base_name, 0)
-            suffix = type_counts[base_name]
-            type_counts[base_name] += 1
-            unit_names.append("{}_{}".format(base_name, suffix))
-            alive.append(1 if unit.health > 0 else 0)
-
-        return {
-            "unit_names": unit_names,
-            "alive": alive,
-        }
-
     def get_stats(self):
         stats = {
             "battles_won": self.battles_won,
