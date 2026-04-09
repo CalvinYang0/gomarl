@@ -8,10 +8,11 @@ def pseudo_attention_graph(mac_hidden):
     hidden = th.nn.functional.normalize(mac_hidden, p=2, dim=-1)
     d = hidden.size(-1)
     scores = th.einsum("btid,btjd->btij", hidden, hidden) / math.sqrt(max(d, 1))
+    eye = th.eye(scores.size(-1), device=scores.device, dtype=th.bool).view(1, 1, scores.size(-1), scores.size(-1))
+    scores = scores.masked_fill(eye, -1e9)
     attn = th.softmax(scores, dim=-1)
     attn = 0.5 * (attn + attn.transpose(-1, -2))
-    eye = th.eye(attn.size(-1), device=attn.device).view(1, 1, attn.size(-1), attn.size(-1))
-    attn = attn * (1 - eye)
+    attn = attn.masked_fill(eye, 0.0)
     return attn.mean(dim=(0, 1))
 
 
