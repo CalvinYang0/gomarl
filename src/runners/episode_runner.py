@@ -11,6 +11,7 @@ class EpisodeRunner:
         self.logger = logger
         self.batch_size = self.args.batch_size_run
         assert self.batch_size == 1
+        self.want_group_viz = getattr(self.args, "visualize_group_graph", False)
 
         self.env = env_REGISTRY[self.args.env](**self.args.env_args)
         self.episode_limit = self.env.episode_limit
@@ -40,17 +41,19 @@ class EpisodeRunner:
     def close_env(self):
         self.env.close()
 
-    def reset(self):
+    def reset(self, test_mode=False):
         self.batch = self.new_batch()
         self.env.reset()
         self.t = 0
-        self.current_test_viz_trace = []
-        viz_info = self.env.get_group_viz_info()
-        if viz_info is not None:
-            self.current_test_viz_trace.append(viz_info)
+        self.current_test_viz_trace = None
+        if test_mode and self.want_group_viz:
+            self.current_test_viz_trace = []
+            viz_info = self.env.get_group_viz_info()
+            if viz_info is not None:
+                self.current_test_viz_trace.append(viz_info)
 
     def run(self, test_mode=False):
-        self.reset()
+        self.reset(test_mode=test_mode)
 
         terminated = False
         episode_return = 0
@@ -71,7 +74,7 @@ class EpisodeRunner:
             
             reward, terminated, env_info = self.env.step(actions[0])
             episode_return += reward
-            if test_mode:
+            if test_mode and self.want_group_viz:
                 viz_info = self.env.get_group_viz_info()
                 if viz_info is not None:
                     self.current_test_viz_trace.append(viz_info)
@@ -117,8 +120,10 @@ class EpisodeRunner:
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
 
-        if test_mode:
+        if test_mode and self.want_group_viz:
             self.last_test_viz_trace = self.current_test_viz_trace
+        elif test_mode:
+            self.last_test_viz_trace = None
 
         return self.batch
 

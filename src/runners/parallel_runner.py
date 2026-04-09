@@ -11,6 +11,7 @@ class ParallelRunner:
         self.args = args
         self.logger = logger
         self.batch_size = self.args.batch_size_run
+        self.want_group_viz = getattr(self.args, "visualize_group_graph", False)
 
         self.parent_conns, self.worker_conns = zip(*[Pipe() for _ in range(self.batch_size)])
         env_fn = env_REGISTRY[self.args.env]
@@ -58,11 +59,12 @@ class ParallelRunner:
         for parent_conn in self.parent_conns:
             parent_conn.send(("close", None))
 
-    def reset(self):
+    def reset(self, test_mode=False):
         self.batch = self.new_batch()
 
-        for parent_conn in self.parent_conns:
-            parent_conn.send(("reset", None))
+        want_viz = test_mode and self.want_group_viz
+        for idx, parent_conn in enumerate(self.parent_conns):
+            parent_conn.send(("reset", {"want_viz": want_viz and idx == 0}))
 
         pre_transition_data = {
             "state": [],
@@ -79,15 +81,17 @@ class ParallelRunner:
             reset_viz.append(data.get("viz_info"))
 
         self.batch.update(pre_transition_data, ts=0)
-        self.current_test_viz_trace = []
-        if reset_viz and reset_viz[0] is not None:
-            self.current_test_viz_trace.append(reset_viz[0])
+        self.current_test_viz_trace = None
+        if want_viz:
+            self.current_test_viz_trace = []
+            if reset_viz and reset_viz[0] is not None:
+                self.current_test_viz_trace.append(reset_viz[0])
 
         self.t = 0
         self.env_steps_this_run = 0
 
     def run(self, test_mode=False):
-        self.reset()
+        self.reset(test_mode=test_mode)
 
         all_terminated = False
         episode_returns = [0 for _ in range(self.batch_size)]
@@ -119,7 +123,10 @@ class ParallelRunner:
             for idx, parent_conn in enumerate(self.parent_conns):
                 if idx in envs_not_terminated:
                     if not terminated[idx]:
-                        parent_conn.send(("step", cpu_actions[action_idx]))
+                        parent_conn.send(("step", {
+                            "actions": cpu_actions[action_idx],
+                            "want_viz": test_mode and self.want_group_viz and idx == 0,
+                        }))
                     action_idx += 1
 
             envs_not_terminated = [b_idx for b_idx, termed in enumerate(terminated) if not termed]
@@ -159,7 +166,7 @@ class ParallelRunner:
                     pre_transition_data["state"].append(data["state"])
                     pre_transition_data["avail_actions"].append(data["avail_actions"])
                     pre_transition_data["obs"].append(data["obs"])
-                    if test_mode and idx == 0 and data.get("viz_info") is not None:
+                    if test_mode and self.want_group_viz and idx == 0 and data.get("viz_info") is not None:
                         self.current_test_viz_trace.append(data["viz_info"])
 
             self.batch.update(post_transition_data, bs=envs_not_terminated, ts=self.t, mark_filled=False)
@@ -199,8 +206,10 @@ class ParallelRunner:
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
 
-        if test_mode:
+        if test_mode and self.want_group_viz:
             self.last_test_viz_trace = self.current_test_viz_trace
+        elif test_mode:
+            self.last_test_viz_trace = None
 
         return self.batch
 
@@ -220,7 +229,12 @@ def env_worker(remote, env_fn):
     while True:
         cmd, data = remote.recv()
         if cmd == "step":
-            actions = data
+            if isinstance(data, dict):
+                actions = data["actions"]
+                want_viz = data.get("want_viz", False)
+            else:
+                actions = data
+                want_viz = False
             reward, terminated, env_info = env.step(actions)
             state = env.get_state()
             avail_actions = env.get_avail_actions()
@@ -232,15 +246,18 @@ def env_worker(remote, env_fn):
                 "reward": reward,
                 "terminated": terminated,
                 "info": env_info,
-                "viz_info": env.get_group_viz_info()
+                "viz_info": env.get_group_viz_info() if want_viz else None
             })
         elif cmd == "reset":
+            want_viz = False
+            if isinstance(data, dict):
+                want_viz = data.get("want_viz", False)
             env.reset()
             remote.send({
                 "state": env.get_state(),
                 "avail_actions": env.get_avail_actions(),
                 "obs": env.get_obs(),
-                "viz_info": env.get_group_viz_info()
+                "viz_info": env.get_group_viz_info() if want_viz else None
             })
         elif cmd == "close":
             env.close()

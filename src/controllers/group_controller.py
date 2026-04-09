@@ -8,8 +8,6 @@ import numpy as np
 class NMAC(BasicMAC):
     def __init__(self, scheme, groups, args):
         super(NMAC, self).__init__(scheme, groups, args)
-        self.group_states = None
-        self.graph_rows = None
         
     def select_actions(self, ep_batch, t_ep, t_env, bs=slice(None), test_mode=False):
         avail_actions = ep_batch["avail_actions"][:, t_ep]
@@ -21,6 +19,6 @@ class NMAC(BasicMAC):
         agent_inputs = self._build_inputs(ep_batch, t)
         avail_actions = ep_batch["avail_actions"][:, t]
 
-        agent_outs, self.hidden_states, self.group_states, self.graph_rows = self.agent(agent_inputs, self.hidden_states)
+        agent_outs, self.hidden_states, self.group_states = self.agent(agent_inputs, self.hidden_states)
 
         return agent_outs

@@ -1,0 +1,51 @@
+# --- Graph-based GoMARL parameters ---
+
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 100000
+
+runner: "parallel"
+run: "interval_run"
+batch_size_run: 8
+buffer_size: 5000
+batch_size: 128
+optimizer: 'adam'
+
+t_max: 10050000
+
+target_update_interval: 200
+
+mac: "graph_group_mac"
+agent: "graph_group"
+agent_output_type: q
+
+learner: "graph_group_learner"
+mixer: "group"
+mixing_embed_dim: 32
+hypernet_embed: 32
+grouping_hypernet_embed: 32
+
+lr: 0.001
+td_lambda: 0.6
+optimizer: 'adam'
+group_mode: "dynamic"
+group_update_mode: "graph"
+group: null
+change_group_interval: 100000
+change_group_batch_num: 4
+change_group_batch_size: 256
+change_group_value: 0.7
+graph_head_hidden_dim: 32
+graph_edge_threshold: 0.75
+log_group_stats: False
+visualize_group_graph: False
+visualize_group_graph_max_frames: 24
+visualize_group_graph_fps: 4
+
+lasso_alpha_anneal_time: 100000
+lasso_alpha_start: 0.005
+lasso_alpha_anneal: 0.96
+sd_alpha: 0.005
+
+name: "graph_group_env=8_adam_td_lambda"
