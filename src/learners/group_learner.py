@@ -123,23 +123,24 @@ class GROUPLearner:
             self.graph_adj_avg = None
 
         with th.no_grad():
-            mac_hidden = []
-            self.mac.init_hidden(batch.batch_size)
-            for t in range(batch.max_seq_length):
-                self.mac.forward(batch, t=t)
-                mac_hidden.append(self.mac.hidden_states)
-            mac_hidden = th.stack(mac_hidden, dim=1)
-            graph = pseudo_attention_graph(mac_hidden[:, :-1])
+            obs = batch["obs"][:, :-1]
+            filled = batch["filled"][:, :-1].squeeze(-1).long()
+            valid_lengths = filled.sum(dim=1).clamp(min=1)
+            last_indices = valid_lengths - 1
+            batch_indices = th.arange(batch.batch_size, device=obs.device)
+            last_obs = obs[batch_indices, last_indices]
+            graph = pseudo_attention_graph(last_obs)
 
         if self.graph_adj_avg is None:
             self.graph_adj_avg = graph
         else:
             self.graph_adj_avg += graph
 
-        if change_group_i != self.args.change_group_batch_num - 1:
+        graph_batch_num = getattr(self.args, "graph_change_group_batch_num", 1)
+        if change_group_i != graph_batch_num - 1:
             return
 
-        graph = self.graph_adj_avg / float(self.args.change_group_batch_num)
+        graph = self.graph_adj_avg / float(graph_batch_num)
         topk = getattr(self.args, "graph_topk", None)
         threshold = getattr(self.args, "graph_edge_threshold", 0.0)
         graph = sparsify_graph(graph, topk=topk, threshold=threshold)

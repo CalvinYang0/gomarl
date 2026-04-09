@@ -3,9 +3,12 @@ import math
 import torch as th
 
 
-def pseudo_attention_graph(mac_hidden):
-    # mac_hidden: [batch, time, n_agents, hidden_dim]
-    hidden = th.nn.functional.normalize(mac_hidden, p=2, dim=-1)
+def pseudo_attention_graph(node_features):
+    # node_features: [batch, time, n_agents, feat_dim] or [batch, n_agents, feat_dim]
+    if node_features.dim() == 3:
+        node_features = node_features.unsqueeze(1)
+
+    hidden = th.nn.functional.normalize(node_features, p=2, dim=-1)
     d = hidden.size(-1)
     scores = th.einsum("btid,btjd->btij", hidden, hidden) / math.sqrt(max(d, 1))
     eye = th.eye(scores.size(-1), device=scores.device, dtype=th.bool).view(1, 1, scores.size(-1), scores.size(-1))
