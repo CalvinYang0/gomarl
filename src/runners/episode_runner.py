@@ -1,6 +1,7 @@
 from envs import REGISTRY as env_REGISTRY
 from functools import partial
 from components.episode_buffer import EpisodeBatch
+import copy
 import numpy as np
 
 
@@ -25,6 +26,7 @@ class EpisodeRunner:
 
         self.log_train_stats_t = -1000000
         self.last_test_viz_trace = None
+        self.last_test_group = None
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -49,7 +51,7 @@ class EpisodeRunner:
             self.current_test_viz_trace = []
             viz_info = self.env.get_group_viz_info()
             if viz_info is not None:
-                self.current_test_viz_trace.append(viz_info)
+                self.current_test_viz_trace.append({"viz_info": viz_info, "group": None})
 
     def run(self, test_mode=False):
         self.reset(test_mode=test_mode)
@@ -76,7 +78,9 @@ class EpisodeRunner:
             if self.current_test_viz_trace is not None:
                 viz_info = self.env.get_group_viz_info()
                 if viz_info is not None:
-                    self.current_test_viz_trace.append(viz_info)
+                    current_groups = getattr(self.mac, "current_groups", None)
+                    current_group = copy.deepcopy(current_groups[0]) if current_groups is not None else None
+                    self.current_test_viz_trace.append({"viz_info": viz_info, "group": current_group})
 
             post_transition_data = {
                 "actions": cpu_actions,
@@ -121,6 +125,8 @@ class EpisodeRunner:
 
         if test_mode:
             self.last_test_viz_trace = self.current_test_viz_trace
+            current_groups = getattr(self.mac, "current_groups", None)
+            self.last_test_group = copy.deepcopy(current_groups[0]) if current_groups is not None else None
 
         return self.batch
 

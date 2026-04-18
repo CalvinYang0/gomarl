@@ -203,6 +203,7 @@ def run_sequential(args, logger):
                 runner.t_env,
                 prefix="test_",
                 group_trace=getattr(runner, "last_test_viz_trace", None),
+                current_group=getattr(runner, "last_test_group", None),
                 map_name=args.env_args.get("map_name", args.env),
             )
 

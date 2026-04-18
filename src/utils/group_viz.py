@@ -83,7 +83,15 @@ def build_group_viz_frames(group_trace, group, map_name, max_frames=24):
         sampled_trace = group_trace
 
     frames = []
-    for step_idx, viz_info in enumerate(sampled_trace):
-        title = "{} | t_ep={} | groups={}".format(map_name, step_idx, group)
-        frames.append(_render_frame(group, viz_info, title))
+    for step_idx, item in enumerate(sampled_trace):
+        if isinstance(item, dict):
+            viz_info = item.get("viz_info")
+            frame_group = item.get("group") if item.get("group") is not None else group
+        else:
+            viz_info = item
+            frame_group = group
+        if viz_info is None:
+            continue
+        title = "{} | t_ep={} | groups={}".format(map_name, step_idx, frame_group)
+        frames.append(_render_frame(frame_group, viz_info, title))
     return frames

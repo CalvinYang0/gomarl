@@ -1,12 +1,13 @@
 import copy
 from components.episode_buffer import EpisodeBatch
 from modules.mixers.group import Mixer as GroupMixer
+from modules.mixers.group_vdn import Mixer as GroupVDNMixer
 from utils.rl_utils import build_td_lambda_targets
 import torch as th
+import torch.nn.functional as F
 from torch.optim import RMSprop, Adam
 import torch.nn as nn
 import numpy as np
-from torch.distributions import Categorical
 from utils.th_utils import get_parameters_num
 from utils.graph_grouping import (
     adjacency_to_groups,
@@ -30,6 +31,8 @@ class GROUPLearner:
 
         if args.mixer == "group":
             self.mixer = GroupMixer(args)
+        elif args.mixer == "group_vdn":
+            self.mixer = GroupVDNMixer(args)
         else:
             raise "mixer error"
         self.target_mixer = copy.deepcopy(self.mixer)
@@ -48,6 +51,49 @@ class GROUPLearner:
         
         self.train_t = 0
 
+    def _zero(self, ref):
+        return ref.new_tensor(0.0)
+
+    def _compute_group_repulsion_loss(self, group_states, group_probs, mask):
+        if self.args.group_head_mode not in ["fixed_group", "struct_group"]:
+            return self._zero(group_states)
+
+        norm_states = F.normalize(group_states, p=2, dim=-1)
+        similarity = th.matmul(norm_states, norm_states.transpose(-1, -2))
+        same_prob = th.matmul(group_probs, group_probs.transpose(-1, -2))
+
+        off_diag = 1.0 - th.eye(self.args.n_agents, device=group_states.device).view(1, 1, self.args.n_agents, self.args.n_agents)
+        valid = mask.unsqueeze(-1).expand_as(similarity) * off_diag
+        if valid.sum() <= 0:
+            return self._zero(group_states)
+
+        loss_terms = -same_prob * similarity + (1.0 - same_prob) * similarity
+        return (loss_terms * valid).sum() / valid.sum()
+
+    def _compute_struct_group_regularizers(self, group_probs, group_graphs, mask):
+        zero = self._zero(group_probs)
+        if self.args.group_head_mode != "struct_group":
+            return zero, zero, zero
+
+        valid = mask.expand_as(group_probs[..., :1]).squeeze(-1)
+        if valid.sum() <= 0:
+            return zero, zero, zero
+
+        mean_probs = (group_probs * valid.unsqueeze(-1)).sum(dim=(0, 1)) / valid.sum()
+        balance_loss = -th.log(mean_probs.clamp(min=1e-8)).mean()
+
+        entropy = -(group_probs.clamp(min=1e-8) * group_probs.clamp(min=1e-8).log()).sum(dim=-1)
+        conf_loss = (entropy * valid).sum() / valid.sum()
+
+        off_diag = 1.0 - th.eye(self.args.n_agents, device=group_graphs.device).view(1, 1, self.args.n_agents, self.args.n_agents)
+        sparse_valid = valid.unsqueeze(-1).expand_as(group_graphs) * off_diag
+        if sparse_valid.sum() <= 0:
+            sparse_loss = zero
+        else:
+            sparse_loss = (group_graphs * sparse_valid).sum() / sparse_valid.sum()
+
+        return balance_loss, conf_loss, sparse_loss
+
     def _apply_group_update(self, group_nxt):
         if group_nxt == self.mixer.group:
             return
@@ -65,6 +111,8 @@ class GROUPLearner:
         self._update_targets()
 
     def _change_group_contribution(self, batch: EpisodeBatch, change_group_i: int):
+        if self.args.mixer != "group":
+            raise RuntimeError("contribution group adjustment requires a mixer that exposes get_w1_avg().")
         if change_group_i == 0:
             self.agent_w1_avg = 0
 
@@ -227,17 +275,23 @@ class GROUPLearner:
         mac_out = []
         mac_hidden = []
         mac_group_state = []
+        mac_group_probs = []
+        mac_group_graphs = []
 
         self.mac.init_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
             agent_outs = self.mac.forward(batch, t=t)
             mac_hidden.append(self.mac.hidden_states)
             mac_group_state.append(self.mac.group_states)
+            mac_group_probs.append(self.mac.group_probs)
+            mac_group_graphs.append(self.mac.group_graphs)
             mac_out.append(agent_outs)
 
         mac_out = th.stack(mac_out, dim=1)
         mac_hidden = th.stack(mac_hidden, dim=1)
         mac_group_state = th.stack(mac_group_state, dim=1)
+        mac_group_probs = th.stack(mac_group_probs, dim=1)
+        mac_group_graphs = th.stack(mac_group_graphs, dim=1)
         mac_hidden = mac_hidden.detach()
 
         # Pick the Q-Values for the actions taken by each agent
@@ -283,13 +337,27 @@ class GROUPLearner:
             lasso_alpha.append(lasso_alpha_time)
 
         # lasso loss
-        lasso_loss = 0
+        lasso_loss = th.tensor(0.0, device=chosen_action_qvals.device)
         for i in range(len(w1_avg_list)):
             group_w1_sum = th.sum(w1_avg_list[i])
             lasso_loss += group_w1_sum * lasso_alpha[i]
-        
-        sd_loss = sd_loss * mask
-        sd_loss = self.args.sd_alpha * sd_loss.sum() / mask.sum()
+
+        if self.args.mixer == "group":
+            sd_loss = sd_loss * mask
+            sd_loss = self.args.sd_alpha * sd_loss.sum() / mask.sum()
+            balance_loss = self._zero(chosen_action_qvals)
+            conf_loss = self._zero(chosen_action_qvals)
+            sparse_loss = self._zero(chosen_action_qvals)
+        else:
+            sd_loss = self.args.sd_alpha * self._compute_group_repulsion_loss(
+                mac_group_state[:, :-1], mac_group_probs[:, :-1], mask
+            )
+            balance_loss, conf_loss, sparse_loss = self._compute_struct_group_regularizers(
+                mac_group_probs[:, :-1], mac_group_graphs[:, :-1], mask
+            )
+            balance_loss = getattr(self.args, "group_balance_alpha", 0.0) * balance_loss
+            conf_loss = getattr(self.args, "group_conf_alpha", 0.0) * conf_loss
+            sparse_loss = getattr(self.args, "group_sparse_alpha", 0.0) * sparse_loss
 
         td_error = (chosen_action_qvals - targets.detach())
         td_error = 0.5 * td_error.pow(2)
@@ -298,7 +366,7 @@ class GROUPLearner:
         masked_td_error = td_error * mask
         td_loss = masked_td_error.sum() / mask.sum()
 
-        loss = td_loss + lasso_loss + sd_loss
+        loss = td_loss + lasso_loss + sd_loss + balance_loss + conf_loss + sparse_loss
 
         # Optimise
         self.optimiser.zero_grad()
@@ -321,6 +389,10 @@ class GROUPLearner:
             self.logger.log_stat("total_loss", loss.item(), t_env)
             self.logger.log_stat("lasso_loss", lasso_loss.item(), t_env)
             self.logger.log_stat("sd_loss", sd_loss.item(), t_env)
+            if self.args.mixer == "group_vdn":
+                self.logger.log_stat("group_balance_loss", balance_loss.item(), t_env)
+                self.logger.log_stat("group_conf_loss", conf_loss.item(), t_env)
+                self.logger.log_stat("group_sparse_loss", sparse_loss.item(), t_env)
             
             self.log_stats_t = t_env
     
@@ -334,8 +406,14 @@ class GROUPLearner:
             return self._change_group_graph_local_fusion(batch, change_group_i)
         return self._change_group_contribution(batch, change_group_i)
 
-    def log_group_stats(self, t_env: int, prefix="test_", group_trace=None, map_name="unknown_map"):
+    def log_group_stats(self, t_env: int, prefix="test_", group_trace=None, current_group=None, map_name="unknown_map"):
         group = copy.deepcopy(self.mixer.group)
+        if current_group is not None:
+            group = copy.deepcopy(current_group)
+        if group_trace:
+            last_group = group_trace[-1].get("group") if isinstance(group_trace[-1], dict) else None
+            if last_group is not None:
+                group = copy.deepcopy(last_group)
         self.logger.log_group(group, t_env, prefix=prefix)
         if getattr(self.args, "visualize_group_graph", False):
             self.logger.log_group_viz(

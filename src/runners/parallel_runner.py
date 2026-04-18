@@ -2,6 +2,7 @@ from envs import REGISTRY as env_REGISTRY
 from functools import partial
 from components.episode_buffer import EpisodeBatch
 from multiprocessing import Pipe, Process
+import copy
 import numpy as np
 import torch as th
 
@@ -39,6 +40,7 @@ class ParallelRunner:
 
         self.log_train_stats_t = -100000
         self.last_test_viz_trace = None
+        self.last_test_group = None
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -85,7 +87,7 @@ class ParallelRunner:
         self.batch.update(pre_transition_data, ts=0)
         self.current_test_viz_trace = None
         if want_group_viz and reset_viz and reset_viz[0] is not None:
-            self.current_test_viz_trace = [reset_viz[0]]
+            self.current_test_viz_trace = [{"viz_info": reset_viz[0], "group": None}]
 
         self.t = 0
         self.env_steps_this_run = 0
@@ -167,7 +169,9 @@ class ParallelRunner:
                     pre_transition_data["avail_actions"].append(data["avail_actions"])
                     pre_transition_data["obs"].append(data["obs"])
                     if self.current_test_viz_trace is not None and idx == 0 and data.get("viz_info") is not None:
-                        self.current_test_viz_trace.append(data["viz_info"])
+                        current_groups = getattr(self.mac, "current_groups", None)
+                        current_group = copy.deepcopy(current_groups[0]) if current_groups is not None else None
+                        self.current_test_viz_trace.append({"viz_info": data["viz_info"], "group": current_group})
 
             self.batch.update(post_transition_data, bs=envs_not_terminated, ts=self.t, mark_filled=False)
 
@@ -208,6 +212,8 @@ class ParallelRunner:
 
         if test_mode:
             self.last_test_viz_trace = self.current_test_viz_trace
+            current_groups = getattr(self.mac, "current_groups", None)
+            self.last_test_group = copy.deepcopy(current_groups[0]) if current_groups is not None else None
 
         return self.batch
 
