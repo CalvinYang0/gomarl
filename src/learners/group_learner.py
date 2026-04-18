@@ -75,7 +75,7 @@ class GROUPLearner:
         if self.args.group_head_mode != "struct_group":
             return zero, zero, zero
 
-        valid = mask.expand_as(group_probs[..., :1]).squeeze(-1)
+        valid = mask.unsqueeze(-1).expand_as(group_probs[..., :1]).squeeze(-1)
         if valid.sum() <= 0:
             return zero, zero, zero
 
