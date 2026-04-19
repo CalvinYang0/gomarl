@@ -56,6 +56,7 @@ class GroupAgent(nn.Module):
                 "graph_better_struct_slow",
                 "graph_better_struct_sparse",
             ]:
+                use_proto_assignment = self.group_head_mode == "graph_better_struct_proto"
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.attn_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 if self.group_head_mode == "graph_better_struct_repr":
@@ -70,7 +71,7 @@ class GroupAgent(nn.Module):
                     nn.Linear(args.hypernet_embed, args.hypernet_embed),
                     nn.Tanh(),
                 )
-                if self.group_head_mode == "graph_better_struct":
+                if not use_proto_assignment:
                     self.group_assign = nn.Linear(args.hypernet_embed, self.group_num)
                 else:
                     self.role_prototypes = nn.Parameter(th.randn(self.group_num, args.hypernet_embed) * 0.1)
