@@ -15,11 +15,16 @@ class GroupAgent(nn.Module):
         self.group_num = getattr(args, "group_num", 3)
         self.group_assignment_tau = getattr(args, "group_assignment_tau", 1.0)
         self.struct_stat_dim = 10
+        self.group_ema_alpha = getattr(args, "group_ema_alpha", 0.8)
 
         self.fc1 = nn.Linear(input_shape, args.rnn_hidden_dim)
         self.rnn = nn.GRUCell(args.rnn_hidden_dim, args.rnn_hidden_dim)
         self.group_embeddings = None
         self.role_prototypes = None
+        self.struct_repr = None
+        self.cached_group_probs = None
+        self.cached_group_graphs = None
+        self.cached_struct_features = None
 
         if self.group_head_mode == "plain":
             self.fc2 = nn.Linear(args.rnn_hidden_dim, args.n_actions)
@@ -44,9 +49,21 @@ class GroupAgent(nn.Module):
                 if (fixed_group_ids < 0).any():
                     raise ValueError("Every agent must appear in `args.group` for fixed_group mode.")
                 self.register_buffer("fixed_group_ids", fixed_group_ids)
-            elif self.group_head_mode in ["graph_better_struct", "graph_better_struct_proto"]:
+            elif self.group_head_mode in [
+                "graph_better_struct",
+                "graph_better_struct_proto",
+                "graph_better_struct_repr",
+                "graph_better_struct_slow",
+                "graph_better_struct_sparse",
+            ]:
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.attn_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
+                if self.group_head_mode == "graph_better_struct_repr":
+                    self.struct_repr = nn.Sequential(
+                        nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
+                    )
                 self.struct_encoder = nn.Sequential(
                     nn.Linear(self.struct_stat_dim, args.hypernet_embed),
                     nn.ReLU(inplace=True),
@@ -77,6 +94,9 @@ class GroupAgent(nn.Module):
         self.group_role_prototypes = None
 
     def init_hidden(self):
+        self.cached_group_probs = None
+        self.cached_group_graphs = None
+        self.cached_struct_features = None
         return self.fc1.weight.new(1, self.args.rnn_hidden_dim).zero_()
 
     def _groups_from_assignment(self, assignments):
@@ -91,15 +111,25 @@ class GroupAgent(nn.Module):
         return [self._groups_from_assignment(assignments) for assignments in hard_assign]
 
     def _build_attention_graph(self, h):
+        source = self.struct_repr(h) if self.struct_repr is not None else h
         b, a, _ = h.size()
-        q = self.attn_q(h)
-        k = self.attn_k(h)
+        q = self.attn_q(source)
+        k = self.attn_k(source)
         scores = th.matmul(q, k.transpose(1, 2)) / math.sqrt(self.a_h_dim)
         eye = th.eye(a, device=h.device, dtype=th.bool).unsqueeze(0)
         scores = scores.masked_fill(eye, -1e9)
         attn = th.softmax(scores, dim=-1)
         attn = 0.5 * (attn + attn.transpose(1, 2))
         attn = attn.masked_fill(eye, 0.0)
+        if self.group_head_mode == "graph_better_struct_sparse":
+            topk = getattr(self.args, "group_sparse_topk", None)
+            topk = max(1, min(a - 1, topk if topk is not None else max(1, a // 2)))
+            vals, idx = th.topk(attn, k=topk, dim=-1)
+            mask = th.zeros_like(attn, dtype=th.bool)
+            mask.scatter_(-1, idx, True)
+            mask = mask & mask.transpose(1, 2)
+            attn = attn * mask.float()
+            attn = 0.5 * (attn + attn.transpose(1, 2))
         return attn
 
     def _build_graph_struct_features(self, attn):
@@ -145,6 +175,14 @@ class GroupAgent(nn.Module):
         struct_feat = self._build_graph_struct_features(attn)
         logits = self.group_assign(struct_feat) / max(self.group_assignment_tau, 1e-6)
         probs = th.softmax(logits, dim=-1)
+        if self.group_head_mode == "graph_better_struct_slow":
+            if self.cached_group_probs is not None:
+                probs = self.group_ema_alpha * self.cached_group_probs + (1.0 - self.group_ema_alpha) * probs
+                struct_feat = self.group_ema_alpha * self.cached_struct_features + (1.0 - self.group_ema_alpha) * struct_feat
+                attn = self.group_ema_alpha * self.cached_group_graphs + (1.0 - self.group_ema_alpha) * attn
+            self.cached_group_probs = probs.detach()
+            self.cached_struct_features = struct_feat.detach()
+            self.cached_group_graphs = attn.detach()
         return probs, struct_feat, attn
 
     def _build_graph_better_struct_proto(self, h):
@@ -196,7 +234,7 @@ class GroupAgent(nn.Module):
             q = th.matmul(h.reshape(b * a, 1, self.a_h_dim), fc2_w) + fc2_b
             q = q.view(b, a, -1)
             struct_feat = group_state
-        elif self.group_head_mode == "graph_better_struct":
+        elif self.group_head_mode in ["graph_better_struct", "graph_better_struct_repr", "graph_better_struct_slow", "graph_better_struct_sparse"]:
             group_probs, struct_feat, group_graphs = self._build_graph_better_struct(h)
             group_emb = th.matmul(group_probs, self.group_embeddings)
             group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
