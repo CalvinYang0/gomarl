@@ -28,7 +28,7 @@ mixer: "group"                     # group | group_vdn
 mixing_embed_dim: 32
 hypernet_embed: 32
 grouping_hypernet_embed: 32
-group_head_mode: "latent"         # latent | plain | fixed_group | graph_better_struct | graph_better_struct_proto | graph_better_struct_repr | graph_better_struct_slow | graph_better_struct_sparse | graph_better_struct_hybrid (hyphen aliases supported)
+group_head_mode: "latent"         # latent | plain | fixed_group | graph_better_struct | graph_better_struct_proto | graph_better_struct_repr | graph_better_struct_slow | graph_better_struct_sparse | graph_better_struct_hybrid | graph_better_struct_row_sparse | graph_better_struct_topk_signature | graph_better_struct_ego_subgraph (hyphen aliases supported)
 group_num: 3
 group_assignment_tau: 1.0
 group_balance_alpha: 0.01
@@ -38,6 +38,7 @@ group_proto_compact_alpha: 0.01
 group_proto_sep_alpha: 0.01
 group_ema_alpha: 0.8
 group_sparse_topk: null
+group_direct_topk: 3
 
 lr: 0.001                           # Learning rate for agents
 td_lambda: 0.6

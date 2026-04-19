@@ -16,6 +16,7 @@ class GroupAgent(nn.Module):
         self.group_assignment_tau = getattr(args, "group_assignment_tau", 1.0)
         self.base_struct_stat_dim = 10
         self.struct_stat_dim = self.base_struct_stat_dim
+        self.group_direct_topk = max(1, min(args.n_agents - 1, getattr(args, "group_direct_topk", 3)))
         self.group_ema_alpha = getattr(args, "group_ema_alpha", 0.8)
 
         self.fc1 = nn.Linear(input_shape, args.rnn_hidden_dim)
@@ -57,10 +58,19 @@ class GroupAgent(nn.Module):
                 "graph_better_struct_slow",
                 "graph_better_struct_sparse",
                 "graph_better_struct_hybrid",
+                "graph_better_struct_row_sparse",
+                "graph_better_struct_topk_signature",
+                "graph_better_struct_ego_subgraph",
             ]:
                 use_proto_assignment = self.group_head_mode == "graph_better_struct_proto"
                 if self.group_head_mode == "graph_better_struct_hybrid":
                     self.struct_stat_dim = self.base_struct_stat_dim + args.n_agents
+                elif self.group_head_mode == "graph_better_struct_row_sparse":
+                    self.struct_stat_dim = args.n_agents + 2
+                elif self.group_head_mode == "graph_better_struct_topk_signature":
+                    self.struct_stat_dim = self.group_direct_topk + self.group_direct_topk * self.group_direct_topk + 2
+                elif self.group_head_mode == "graph_better_struct_ego_subgraph":
+                    self.struct_stat_dim = (self.group_direct_topk + 1) * (self.group_direct_topk + 1) + 2
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.attn_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 if self.group_head_mode == "graph_better_struct_repr":
@@ -137,6 +147,55 @@ class GroupAgent(nn.Module):
             attn = 0.5 * (attn + attn.transpose(1, 2))
         return attn
 
+    def _build_topk_signature_input(self, attn, row_probs, degree, entropy):
+        b, a, _ = attn.size()
+        topk_vals, topk_idx = th.topk(row_probs, k=self.group_direct_topk, dim=-1)
+        signatures = []
+        for bi in range(b):
+            local_signatures = []
+            graph_b = attn[bi]
+            for ai in range(a):
+                nbrs = topk_idx[bi, ai]
+                local_adj = graph_b.index_select(0, nbrs).index_select(1, nbrs)
+                local_signatures.append(
+                    th.cat(
+                        [
+                            topk_vals[bi, ai],
+                            local_adj.reshape(-1),
+                            degree[bi, ai],
+                            entropy[bi, ai],
+                        ],
+                        dim=-1,
+                    )
+                )
+            signatures.append(th.stack(local_signatures, dim=0))
+        return th.stack(signatures, dim=0)
+
+    def _build_ego_subgraph_input(self, attn, degree, entropy):
+        b, a, _ = attn.size()
+        _, topk_idx = th.topk(attn, k=self.group_direct_topk, dim=-1)
+        signatures = []
+        for bi in range(b):
+            local_signatures = []
+            graph_b = attn[bi]
+            for ai in range(a):
+                nbrs = topk_idx[bi, ai]
+                center = nbrs.new_tensor([ai])
+                nodes = th.cat([center, nbrs], dim=0)
+                local_adj = graph_b.index_select(0, nodes).index_select(1, nodes)
+                local_signatures.append(
+                    th.cat(
+                        [
+                            local_adj.reshape(-1),
+                            degree[bi, ai],
+                            entropy[bi, ai],
+                        ],
+                        dim=-1,
+                    )
+                )
+            signatures.append(th.stack(local_signatures, dim=0))
+        return th.stack(signatures, dim=0)
+
     def _build_graph_struct_features(self, attn):
         b, a, _ = attn.size()
         degree = attn.sum(dim=-1, keepdim=True)
@@ -174,6 +233,12 @@ class GroupAgent(nn.Module):
         )
         if self.group_head_mode == "graph_better_struct_hybrid":
             struct_input = th.cat([row_probs, struct_stats], dim=-1)
+        elif self.group_head_mode == "graph_better_struct_row_sparse":
+            struct_input = th.cat([row_probs, degree, entropy], dim=-1)
+        elif self.group_head_mode == "graph_better_struct_topk_signature":
+            struct_input = self._build_topk_signature_input(attn, row_probs, degree, entropy)
+        elif self.group_head_mode == "graph_better_struct_ego_subgraph":
+            struct_input = self._build_ego_subgraph_input(attn, degree, entropy)
         else:
             struct_input = struct_stats
         struct_feat = self.struct_encoder(struct_input.reshape(b * a, -1)).view(b, a, -1)
@@ -243,7 +308,16 @@ class GroupAgent(nn.Module):
             q = th.matmul(h.reshape(b * a, 1, self.a_h_dim), fc2_w) + fc2_b
             q = q.view(b, a, -1)
             struct_feat = group_state
-        elif self.group_head_mode in ["graph_better_struct", "graph_better_struct_repr", "graph_better_struct_slow", "graph_better_struct_sparse", "graph_better_struct_hybrid"]:
+        elif self.group_head_mode in [
+            "graph_better_struct",
+            "graph_better_struct_repr",
+            "graph_better_struct_slow",
+            "graph_better_struct_sparse",
+            "graph_better_struct_hybrid",
+            "graph_better_struct_row_sparse",
+            "graph_better_struct_topk_signature",
+            "graph_better_struct_ego_subgraph",
+        ]:
             group_probs, struct_feat, group_graphs = self._build_graph_better_struct(h)
             group_emb = th.matmul(group_probs, self.group_embeddings)
             group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
