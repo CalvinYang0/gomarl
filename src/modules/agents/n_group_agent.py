@@ -17,6 +17,7 @@ class GroupAgent(nn.Module):
 
         self.fc1 = nn.Linear(input_shape, args.rnn_hidden_dim)
         self.rnn = nn.GRUCell(args.rnn_hidden_dim, args.rnn_hidden_dim)
+        self.group_embeddings = None
 
         if self.group_head_mode == "plain":
             self.fc2 = nn.Linear(args.rnn_hidden_dim, args.n_actions)
@@ -155,7 +156,7 @@ class GroupAgent(nn.Module):
         self.group_probs = group_probs.detach()
         self.group_graphs = group_graphs.detach()
         self.group_struct_features = struct_feat.detach()
-        self.group_role_prototypes = self.group_embeddings.detach()
+        self.group_role_prototypes = None if self.group_embeddings is None else self.group_embeddings.detach()
         self.current_groups = self._assignment_lists(self.group_probs)
 
         return q, h, group_state, group_probs, group_graphs
