@@ -11,7 +11,7 @@ class GroupAgent(nn.Module):
         self.args = args
         self.a_h_dim = args.rnn_hidden_dim
         self.action_dim = args.n_actions
-        self.group_head_mode = getattr(args, "group_head_mode", "latent")
+        self.group_head_mode = getattr(args, "group_head_mode", "latent").replace("-", "_")
         self.group_num = getattr(args, "group_num", 3)
         self.group_assignment_tau = getattr(args, "group_assignment_tau", 1.0)
 
@@ -41,7 +41,7 @@ class GroupAgent(nn.Module):
                 if (fixed_group_ids < 0).any():
                     raise ValueError("Every agent must appear in `args.group` for fixed_group mode.")
                 self.register_buffer("fixed_group_ids", fixed_group_ids)
-            elif self.group_head_mode == "struct_group":
+            elif self.group_head_mode == "graph_better_struct":
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.attn_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.struct_encoder = nn.Sequential(
@@ -67,6 +67,8 @@ class GroupAgent(nn.Module):
         self.group_probs = None
         self.group_graphs = None
         self.current_groups = None
+        self.group_struct_features = None
+        self.group_role_prototypes = None
 
     def init_hidden(self):
         return self.fc1.weight.new(1, self.args.rnn_hidden_dim).zero_()
@@ -82,7 +84,7 @@ class GroupAgent(nn.Module):
         hard_assign = probs.argmax(dim=-1)
         return [self._groups_from_assignment(assignments) for assignments in hard_assign]
 
-    def _build_struct_group(self, h):
+    def _build_graph_better_struct(self, h):
         b, a, _ = h.size()
         q = self.attn_q(h)
         k = self.attn_k(h)
@@ -121,6 +123,7 @@ class GroupAgent(nn.Module):
             group_state = h.new_zeros(b, a, self.args.hypernet_embed)
             group_probs = h.new_zeros(b, a, self.group_num)
             group_graphs = h.new_zeros(b, a, a)
+            struct_feat = h.new_zeros(b, a, self.args.hypernet_embed)
         elif self.group_head_mode == "latent":
             h_detach = h.detach().reshape(b * a, -1)
             group_state = self.hyper_group(h_detach).view(b, a, -1)
@@ -130,6 +133,7 @@ class GroupAgent(nn.Module):
             q = q.view(b, a, -1)
             group_probs = h.new_zeros(b, a, self.group_num)
             group_graphs = h.new_zeros(b, a, a)
+            struct_feat = group_state
         elif self.group_head_mode == "fixed_group":
             group_probs, _, group_graphs = self._build_fixed_group(h)
             group_emb = th.matmul(group_probs, self.group_embeddings)
@@ -138,8 +142,9 @@ class GroupAgent(nn.Module):
             fc2_b = self.hyper_b(group_state.reshape(b * a, -1)).reshape(b * a, 1, self.action_dim)
             q = th.matmul(h.reshape(b * a, 1, self.a_h_dim), fc2_w) + fc2_b
             q = q.view(b, a, -1)
+            struct_feat = group_state
         else:
-            group_probs, struct_feat, group_graphs = self._build_struct_group(h)
+            group_probs, struct_feat, group_graphs = self._build_graph_better_struct(h)
             group_emb = th.matmul(group_probs, self.group_embeddings)
             group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
             fc2_w = self.hyper_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.action_dim)
@@ -149,6 +154,8 @@ class GroupAgent(nn.Module):
 
         self.group_probs = group_probs.detach()
         self.group_graphs = group_graphs.detach()
+        self.group_struct_features = struct_feat.detach()
+        self.group_role_prototypes = self.group_embeddings.detach()
         self.current_groups = self._assignment_lists(self.group_probs)
 
         return q, h, group_state, group_probs, group_graphs

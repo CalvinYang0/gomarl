@@ -20,6 +20,8 @@ class NMAC(BasicMAC):
         avail_actions = ep_batch["avail_actions"][:, t]
 
         agent_outs, self.hidden_states, self.group_states, self.group_probs, self.group_graphs = self.agent(agent_inputs, self.hidden_states)
+        self.group_struct_features = self.agent.group_struct_features
+        self.group_role_prototypes = self.agent.group_role_prototypes
         self.current_groups = self.agent.current_groups
 
         return agent_outs

@@ -6,6 +6,19 @@ import copy
 import numpy as np
 import torch as th
 
+
+def _extract_role_snapshot(mac):
+    role_features = getattr(mac, "group_struct_features", None)
+    role_probs = getattr(mac, "group_probs", None)
+    role_prototypes = getattr(mac, "group_role_prototypes", None)
+    if role_features is None or role_probs is None or role_prototypes is None:
+        return None
+    return {
+        "role_features": copy.deepcopy(role_features[0].detach().cpu().numpy()),
+        "role_probs": copy.deepcopy(role_probs[0].detach().cpu().numpy()),
+        "role_prototypes": copy.deepcopy(role_prototypes.detach().cpu().numpy()),
+    }
+
 class ParallelRunner:
 
     def __init__(self, args, logger):
@@ -171,7 +184,11 @@ class ParallelRunner:
                     if self.current_test_viz_trace is not None and idx == 0 and data.get("viz_info") is not None:
                         current_groups = getattr(self.mac, "current_groups", None)
                         current_group = copy.deepcopy(current_groups[0]) if current_groups is not None else None
-                        self.current_test_viz_trace.append({"viz_info": data["viz_info"], "group": current_group})
+                        role_snapshot = _extract_role_snapshot(self.mac)
+                        frame = {"viz_info": data["viz_info"], "group": current_group}
+                        if role_snapshot is not None:
+                            frame.update(role_snapshot)
+                        self.current_test_viz_trace.append(frame)
 
             self.batch.update(post_transition_data, bs=envs_not_terminated, ts=self.t, mark_filled=False)
 

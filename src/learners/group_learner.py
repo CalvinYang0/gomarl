@@ -55,7 +55,8 @@ class GROUPLearner:
         return ref.new_tensor(0.0)
 
     def _compute_group_repulsion_loss(self, group_states, group_probs, mask):
-        if self.args.group_head_mode not in ["fixed_group", "struct_group"]:
+        group_head_mode = getattr(self.args, "group_head_mode", "latent").replace("-", "_")
+        if group_head_mode not in ["fixed_group", "graph_better_struct"]:
             return self._zero(group_states)
 
         norm_states = F.normalize(group_states, p=2, dim=-1)
@@ -72,7 +73,8 @@ class GROUPLearner:
 
     def _compute_struct_group_regularizers(self, group_probs, group_graphs, mask):
         zero = self._zero(group_probs)
-        if self.args.group_head_mode != "struct_group":
+        group_head_mode = getattr(self.args, "group_head_mode", "latent").replace("-", "_")
+        if group_head_mode != "graph_better_struct":
             return zero, zero, zero
 
         valid = mask.unsqueeze(-1).expand_as(group_probs[..., :1]).squeeze(-1)
@@ -86,11 +88,15 @@ class GROUPLearner:
         conf_loss = (entropy * valid).sum() / valid.sum()
 
         off_diag = 1.0 - th.eye(self.args.n_agents, device=group_graphs.device).view(1, 1, self.args.n_agents, self.args.n_agents)
-        sparse_valid = valid.unsqueeze(-1).expand_as(group_graphs) * off_diag
-        if sparse_valid.sum() <= 0:
+        sparse_graph = group_graphs * off_diag
+        row_sum = sparse_graph.sum(dim=-1, keepdim=True)
+        valid_rows = valid * (row_sum.squeeze(-1) > 0).float()
+        if valid_rows.sum() <= 0:
             sparse_loss = zero
         else:
-            sparse_loss = (group_graphs * sparse_valid).sum() / sparse_valid.sum()
+            row_probs = sparse_graph / row_sum.clamp(min=1e-8)
+            row_entropy = -(row_probs.clamp(min=1e-8) * row_probs.clamp(min=1e-8).log()).sum(dim=-1)
+            sparse_loss = (row_entropy * valid_rows).sum() / valid_rows.sum()
 
         return balance_loss, conf_loss, sparse_loss
 

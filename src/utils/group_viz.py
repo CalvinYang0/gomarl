@@ -95,3 +95,81 @@ def build_group_viz_frames(group_trace, group, map_name, max_frames=24):
         title = "{} | t_ep={} | groups={}".format(map_name, step_idx, frame_group)
         frames.append(_render_frame(frame_group, viz_info, title))
     return frames
+
+
+def _project_to_2d(points):
+    if points.shape[1] == 1:
+        return np.concatenate([points, np.zeros((points.shape[0], 1), dtype=points.dtype)], axis=1)
+    centered = points - points.mean(axis=0, keepdims=True)
+    _, _, vt = np.linalg.svd(centered, full_matrices=False)
+    basis = vt[:2].T
+    return centered @ basis
+
+
+def build_role_scatter_image(group_trace, map_name):
+    if not group_trace:
+        return None
+
+    point_list = []
+    color_list = []
+    label_list = []
+    prototypes = None
+
+    for item in group_trace:
+        if not isinstance(item, dict):
+            continue
+        role_features = item.get("role_features")
+        role_probs = item.get("role_probs")
+        role_prototypes = item.get("role_prototypes")
+        if role_features is None or role_probs is None:
+            continue
+        if role_prototypes is not None:
+            prototypes = np.asarray(role_prototypes, dtype=np.float32)
+        role_features = np.asarray(role_features, dtype=np.float32)
+        role_probs = np.asarray(role_probs, dtype=np.float32)
+        assignments = role_probs.argmax(axis=-1)
+        point_list.append(role_features)
+        color_list.append(assignments)
+        label_list.append(np.arange(role_features.shape[0]))
+
+    if not point_list or prototypes is None:
+        return None
+
+    points = np.concatenate(point_list, axis=0)
+    colors = np.concatenate(color_list, axis=0)
+    labels = np.concatenate(label_list, axis=0)
+    prototypes = np.asarray(prototypes, dtype=np.float32)
+
+    combined = np.concatenate([points, prototypes], axis=0)
+    projected = _project_to_2d(combined)
+    point_xy = projected[: points.shape[0]]
+    proto_xy = projected[points.shape[0]:]
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    cmap = plt.get_cmap("tab10")
+    for group_id in range(prototypes.shape[0]):
+        mask = colors == group_id
+        if mask.any():
+            ax.scatter(
+                point_xy[mask, 0],
+                point_xy[mask, 1],
+                s=22,
+                alpha=0.45,
+                c=[cmap(group_id % 10)],
+                label="agents->role{}".format(group_id),
+            )
+
+    for group_id, (x, y) in enumerate(proto_xy):
+        ax.scatter([x], [y], s=240, marker="X", c=[cmap(group_id % 10)], edgecolors="black", linewidths=1.5, zorder=5)
+        ax.text(x, y, " role{}".format(group_id), fontsize=10, ha="left", va="center")
+
+    ax.set_title("{} | role scatter".format(map_name))
+    ax.set_xlabel("PC1")
+    ax.set_ylabel("PC2")
+    ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    fig.canvas.draw()
+    image = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    image = image.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    plt.close(fig)
+    return image

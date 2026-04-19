@@ -86,13 +86,14 @@ class EpisodeBatch:
 
     def update(self, data, bs=slice(None), ts=slice(None), mark_filled=True):
         slices = self._parse_slices((bs, ts))
+        transition_slices = tuple(slices)
         for k, v in data.items():
             if k in self.data.transition_data:
                 target = self.data.transition_data
                 if mark_filled:
-                    target["filled"][slices] = 1
+                    target["filled"][transition_slices] = 1
                     mark_filled = False
-                _slices = slices
+                _slices = transition_slices
             elif k in self.data.episode_data:
                 target = self.data.episode_data
                 _slices = slices[0]
@@ -100,7 +101,10 @@ class EpisodeBatch:
                 raise KeyError("{} not found in transition or episode data".format(k))
 
             dtype = self.scheme[k].get("dtype", th.float32)
-            v = th.tensor(v, dtype=dtype, device=self.device)
+            if isinstance(v, th.Tensor):
+                v = v.to(device=self.device, dtype=dtype)
+            else:
+                v = th.tensor(v, dtype=dtype, device=self.device)
             self._check_safe_view(v, target[k][_slices])
             target[k][_slices] = v.view_as(target[k][_slices])
 
@@ -145,9 +149,10 @@ class EpisodeBatch:
             return ret
         else:
             item = self._parse_slices(item)
+            transition_item = tuple(item)
             new_data = self._new_data_sn()
             for k, v in self.data.transition_data.items():
-                new_data.transition_data[k] = v[item]
+                new_data.transition_data[k] = v[transition_item]
             for k, v in self.data.episode_data.items():
                 new_data.episode_data[k] = v[item[0]]
 
