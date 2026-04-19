@@ -28,12 +28,14 @@ mixer: "group"                     # group | group_vdn
 mixing_embed_dim: 32
 hypernet_embed: 32
 grouping_hypernet_embed: 32
-group_head_mode: "latent"         # latent | plain | fixed_group | graph_better_struct ("graph-better-struct" alias supported)
+group_head_mode: "latent"         # latent | plain | fixed_group | graph_better_struct | graph_better_struct_proto (hyphen aliases supported)
 group_num: 3
 group_assignment_tau: 1.0
 group_balance_alpha: 0.01
 group_conf_alpha: 0.001
 group_sparse_alpha: 0.001
+group_proto_compact_alpha: 0.01
+group_proto_sep_alpha: 0.01
 
 lr: 0.001                           # Learning rate for agents
 td_lambda: 0.6

@@ -9,13 +9,15 @@ def _extract_role_snapshot(mac):
     role_features = getattr(mac, "group_struct_features", None)
     role_probs = getattr(mac, "group_probs", None)
     role_prototypes = getattr(mac, "group_role_prototypes", None)
-    if role_features is None or role_probs is None or role_prototypes is None:
+    if role_features is None or role_probs is None:
         return None
-    return {
+    snapshot = {
         "role_features": copy.deepcopy(role_features[0].detach().cpu().numpy()),
         "role_probs": copy.deepcopy(role_probs[0].detach().cpu().numpy()),
-        "role_prototypes": copy.deepcopy(role_prototypes.detach().cpu().numpy()),
     }
+    if role_prototypes is not None:
+        snapshot["role_prototypes"] = copy.deepcopy(role_prototypes.detach().cpu().numpy())
+    return snapshot
 
 
 class EpisodeRunner:

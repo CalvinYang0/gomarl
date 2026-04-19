@@ -14,10 +14,12 @@ class GroupAgent(nn.Module):
         self.group_head_mode = getattr(args, "group_head_mode", "latent").replace("-", "_")
         self.group_num = getattr(args, "group_num", 3)
         self.group_assignment_tau = getattr(args, "group_assignment_tau", 1.0)
+        self.struct_stat_dim = 10
 
         self.fc1 = nn.Linear(input_shape, args.rnn_hidden_dim)
         self.rnn = nn.GRUCell(args.rnn_hidden_dim, args.rnn_hidden_dim)
         self.group_embeddings = None
+        self.role_prototypes = None
 
         if self.group_head_mode == "plain":
             self.fc2 = nn.Linear(args.rnn_hidden_dim, args.n_actions)
@@ -42,16 +44,19 @@ class GroupAgent(nn.Module):
                 if (fixed_group_ids < 0).any():
                     raise ValueError("Every agent must appear in `args.group` for fixed_group mode.")
                 self.register_buffer("fixed_group_ids", fixed_group_ids)
-            elif self.group_head_mode == "graph_better_struct":
+            elif self.group_head_mode in ["graph_better_struct", "graph_better_struct_proto"]:
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.attn_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.struct_encoder = nn.Sequential(
-                    nn.Linear(args.n_agents + 2, args.hypernet_embed),
+                    nn.Linear(self.struct_stat_dim, args.hypernet_embed),
                     nn.ReLU(inplace=True),
                     nn.Linear(args.hypernet_embed, args.hypernet_embed),
                     nn.Tanh(),
                 )
-                self.group_assign = nn.Linear(args.hypernet_embed, self.group_num)
+                if self.group_head_mode == "graph_better_struct":
+                    self.group_assign = nn.Linear(args.hypernet_embed, self.group_num)
+                else:
+                    self.role_prototypes = nn.Parameter(th.randn(self.group_num, args.hypernet_embed) * 0.1)
             else:
                 raise ValueError("Unknown `group_head_mode`: {}".format(self.group_head_mode))
 
@@ -85,7 +90,7 @@ class GroupAgent(nn.Module):
         hard_assign = probs.argmax(dim=-1)
         return [self._groups_from_assignment(assignments) for assignments in hard_assign]
 
-    def _build_graph_better_struct(self, h):
+    def _build_attention_graph(self, h):
         b, a, _ = h.size()
         q = self.attn_q(h)
         k = self.attn_k(h)
@@ -95,12 +100,59 @@ class GroupAgent(nn.Module):
         attn = th.softmax(scores, dim=-1)
         attn = 0.5 * (attn + attn.transpose(1, 2))
         attn = attn.masked_fill(eye, 0.0)
+        return attn
 
+    def _build_graph_struct_features(self, attn):
+        b, a, _ = attn.size()
         degree = attn.sum(dim=-1, keepdim=True)
-        entropy = -(attn.clamp(min=1e-8) * attn.clamp(min=1e-8).log()).sum(dim=-1, keepdim=True)
-        struct_input = th.cat([attn, degree, entropy], dim=-1)
-        struct_feat = self.struct_encoder(struct_input.reshape(b * a, -1)).view(b, a, -1)
+        row_probs = attn / degree.clamp(min=1e-8)
+        entropy = -(row_probs.clamp(min=1e-8) * row_probs.clamp(min=1e-8).log()).sum(dim=-1, keepdim=True)
+
+        topk_vals = th.topk(attn, k=min(3, a), dim=-1).values
+        top1 = topk_vals[..., 0:1]
+        top2_mean = topk_vals[..., : min(2, topk_vals.size(-1))].mean(dim=-1, keepdim=True)
+        top3_mean = topk_vals.mean(dim=-1, keepdim=True)
+        second = topk_vals[..., 1:2] if topk_vals.size(-1) > 1 else top1
+        max_second_gap = top1 - second
+
+        a2 = th.matmul(attn, attn)
+        two_hop_mass = a2.sum(dim=-1, keepdim=True)
+        triangle_mass = th.diagonal(th.matmul(a2, attn), dim1=-2, dim2=-1).unsqueeze(-1)
+        local_density = triangle_mass / degree.pow(2).clamp(min=1e-8)
+        neighbor_degree = th.matmul(attn, degree) / degree.clamp(min=1e-8)
+        peak_ratio = top1 / degree.clamp(min=1e-8)
+
+        struct_stats = th.cat(
+            [
+                degree,
+                entropy,
+                top1,
+                top2_mean,
+                top3_mean,
+                max_second_gap,
+                two_hop_mass,
+                triangle_mass,
+                local_density,
+                peak_ratio + neighbor_degree,
+            ],
+            dim=-1,
+        )
+        struct_feat = self.struct_encoder(struct_stats.reshape(b * a, -1)).view(b, a, -1)
+        return struct_feat
+
+    def _build_graph_better_struct(self, h):
+        attn = self._build_attention_graph(h)
+        struct_feat = self._build_graph_struct_features(attn)
         logits = self.group_assign(struct_feat) / max(self.group_assignment_tau, 1e-6)
+        probs = th.softmax(logits, dim=-1)
+        return probs, struct_feat, attn
+
+    def _build_graph_better_struct_proto(self, h):
+        attn = self._build_attention_graph(h)
+        struct_feat = self._build_graph_struct_features(attn)
+        proto = F.normalize(self.role_prototypes, p=2, dim=-1)
+        feat = F.normalize(struct_feat, p=2, dim=-1)
+        logits = th.einsum("bad,kd->bak", feat, proto) / max(self.group_assignment_tau, 1e-6)
         probs = th.softmax(logits, dim=-1)
         return probs, struct_feat, attn
 
@@ -144,7 +196,7 @@ class GroupAgent(nn.Module):
             q = th.matmul(h.reshape(b * a, 1, self.a_h_dim), fc2_w) + fc2_b
             q = q.view(b, a, -1)
             struct_feat = group_state
-        else:
+        elif self.group_head_mode == "graph_better_struct":
             group_probs, struct_feat, group_graphs = self._build_graph_better_struct(h)
             group_emb = th.matmul(group_probs, self.group_embeddings)
             group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
@@ -152,11 +204,19 @@ class GroupAgent(nn.Module):
             fc2_b = self.hyper_b(group_state.reshape(b * a, -1)).reshape(b * a, 1, self.action_dim)
             q = th.matmul(h.reshape(b * a, 1, self.a_h_dim), fc2_w) + fc2_b
             q = q.view(b, a, -1)
+        else:
+            group_probs, struct_feat, group_graphs = self._build_graph_better_struct_proto(h)
+            group_emb = th.matmul(group_probs, self.group_embeddings)
+            group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
+            fc2_w = self.hyper_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.action_dim)
+            fc2_b = self.hyper_b(group_state.reshape(b * a, -1)).reshape(b * a, 1, self.action_dim)
+            q = th.matmul(h.reshape(b * a, 1, self.a_h_dim), fc2_w) + fc2_b
+            q = q.view(b, a, -1)
 
-        self.group_probs = group_probs.detach()
-        self.group_graphs = group_graphs.detach()
-        self.group_struct_features = struct_feat.detach()
-        self.group_role_prototypes = None if self.group_embeddings is None else self.group_embeddings.detach()
-        self.current_groups = self._assignment_lists(self.group_probs)
+        self.group_probs = group_probs
+        self.group_graphs = group_graphs
+        self.group_struct_features = struct_feat
+        self.group_role_prototypes = self.role_prototypes
+        self.current_groups = self._assignment_lists(self.group_probs.detach())
 
         return q, h, group_state, group_probs, group_graphs

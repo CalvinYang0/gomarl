@@ -56,7 +56,7 @@ class GROUPLearner:
 
     def _compute_group_repulsion_loss(self, group_states, group_probs, mask):
         group_head_mode = getattr(self.args, "group_head_mode", "latent").replace("-", "_")
-        if group_head_mode not in ["fixed_group", "graph_better_struct"]:
+        if group_head_mode not in ["fixed_group", "graph_better_struct", "graph_better_struct_proto"]:
             return self._zero(group_states)
 
         norm_states = F.normalize(group_states, p=2, dim=-1)
@@ -74,7 +74,7 @@ class GROUPLearner:
     def _compute_struct_group_regularizers(self, group_probs, group_graphs, mask):
         zero = self._zero(group_probs)
         group_head_mode = getattr(self.args, "group_head_mode", "latent").replace("-", "_")
-        if group_head_mode != "graph_better_struct":
+        if group_head_mode not in ["graph_better_struct", "graph_better_struct_proto"]:
             return zero, zero, zero
 
         valid = mask.unsqueeze(-1).expand_as(group_probs[..., :1]).squeeze(-1)
@@ -99,6 +99,30 @@ class GROUPLearner:
             sparse_loss = (row_entropy * valid_rows).sum() / valid_rows.sum()
 
         return balance_loss, conf_loss, sparse_loss
+
+    def _compute_proto_regularizers(self, struct_features, group_probs, mask):
+        zero = self._zero(struct_features)
+        group_head_mode = getattr(self.args, "group_head_mode", "latent").replace("-", "_")
+        if group_head_mode != "graph_better_struct_proto":
+            return zero, zero
+
+        prototypes = getattr(self.mac.agent, "role_prototypes", None)
+        if prototypes is None:
+            return zero, zero
+
+        valid = mask.unsqueeze(-1).expand_as(group_probs[..., :1]).squeeze(-1)
+        if valid.sum() <= 0:
+            return zero, zero
+
+        distances = (struct_features.unsqueeze(-2) - prototypes.view(1, 1, 1, prototypes.size(0), prototypes.size(1))).pow(2).sum(dim=-1)
+        compact_loss = (group_probs * distances * valid.unsqueeze(-1)).sum() / valid.sum()
+
+        norm_proto = F.normalize(prototypes, p=2, dim=-1)
+        proto_sim = th.matmul(norm_proto, norm_proto.transpose(0, 1))
+        off_diag = 1.0 - th.eye(prototypes.size(0), device=prototypes.device)
+        sep_loss = (proto_sim.pow(2) * off_diag).sum() / off_diag.sum().clamp(min=1.0)
+
+        return compact_loss, sep_loss
 
     def _apply_group_update(self, group_nxt):
         if group_nxt == self.mixer.group:
@@ -283,6 +307,7 @@ class GROUPLearner:
         mac_group_state = []
         mac_group_probs = []
         mac_group_graphs = []
+        mac_struct_features = []
 
         self.mac.init_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
@@ -291,6 +316,7 @@ class GROUPLearner:
             mac_group_state.append(self.mac.group_states)
             mac_group_probs.append(self.mac.group_probs)
             mac_group_graphs.append(self.mac.group_graphs)
+            mac_struct_features.append(self.mac.group_struct_features)
             mac_out.append(agent_outs)
 
         mac_out = th.stack(mac_out, dim=1)
@@ -298,6 +324,7 @@ class GROUPLearner:
         mac_group_state = th.stack(mac_group_state, dim=1)
         mac_group_probs = th.stack(mac_group_probs, dim=1)
         mac_group_graphs = th.stack(mac_group_graphs, dim=1)
+        mac_struct_features = th.stack(mac_struct_features, dim=1)
         mac_hidden = mac_hidden.detach()
 
         # Pick the Q-Values for the actions taken by each agent
@@ -361,9 +388,14 @@ class GROUPLearner:
             balance_loss, conf_loss, sparse_loss = self._compute_struct_group_regularizers(
                 mac_group_probs[:, :-1], mac_group_graphs[:, :-1], mask
             )
+            proto_compact_loss, proto_sep_loss = self._compute_proto_regularizers(
+                mac_struct_features[:, :-1], mac_group_probs[:, :-1], mask
+            )
             balance_loss = getattr(self.args, "group_balance_alpha", 0.0) * balance_loss
             conf_loss = getattr(self.args, "group_conf_alpha", 0.0) * conf_loss
             sparse_loss = getattr(self.args, "group_sparse_alpha", 0.0) * sparse_loss
+            proto_compact_loss = getattr(self.args, "group_proto_compact_alpha", 0.0) * proto_compact_loss
+            proto_sep_loss = getattr(self.args, "group_proto_sep_alpha", 0.0) * proto_sep_loss
 
         td_error = (chosen_action_qvals - targets.detach())
         td_error = 0.5 * td_error.pow(2)
@@ -372,7 +404,11 @@ class GROUPLearner:
         masked_td_error = td_error * mask
         td_loss = masked_td_error.sum() / mask.sum()
 
-        loss = td_loss + lasso_loss + sd_loss + balance_loss + conf_loss + sparse_loss
+        if self.args.mixer == "group":
+            proto_compact_loss = self._zero(chosen_action_qvals)
+            proto_sep_loss = self._zero(chosen_action_qvals)
+
+        loss = td_loss + lasso_loss + sd_loss + balance_loss + conf_loss + sparse_loss + proto_compact_loss + proto_sep_loss
 
         # Optimise
         self.optimiser.zero_grad()
@@ -399,6 +435,8 @@ class GROUPLearner:
                 self.logger.log_stat("group_balance_loss", balance_loss.item(), t_env)
                 self.logger.log_stat("group_conf_loss", conf_loss.item(), t_env)
                 self.logger.log_stat("group_sparse_loss", sparse_loss.item(), t_env)
+                self.logger.log_stat("group_proto_compact_loss", proto_compact_loss.item(), t_env)
+                self.logger.log_stat("group_proto_sep_loss", proto_sep_loss.item(), t_env)
             
             self.log_stats_t = t_env
     

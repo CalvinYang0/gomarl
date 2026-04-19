@@ -112,7 +112,6 @@ def build_role_scatter_image(group_trace, map_name):
 
     point_list = []
     color_list = []
-    label_list = []
     prototypes = None
 
     for item in group_trace:
@@ -130,15 +129,26 @@ def build_role_scatter_image(group_trace, map_name):
         assignments = role_probs.argmax(axis=-1)
         point_list.append(role_features)
         color_list.append(assignments)
-        label_list.append(np.arange(role_features.shape[0]))
 
-    if not point_list or prototypes is None:
+    if not point_list:
         return None
 
     points = np.concatenate(point_list, axis=0)
     colors = np.concatenate(color_list, axis=0)
-    labels = np.concatenate(label_list, axis=0)
-    prototypes = np.asarray(prototypes, dtype=np.float32)
+    if prototypes is None:
+        proto_ids = sorted(np.unique(colors).tolist())
+        centroid_list = []
+        for group_id in proto_ids:
+            mask = colors == group_id
+            if mask.any():
+                centroid_list.append(points[mask].mean(axis=0))
+        if not centroid_list:
+            return None
+        prototypes = np.stack(centroid_list, axis=0)
+        proto_labels = ["centroid{}".format(group_id) for group_id in proto_ids]
+    else:
+        prototypes = np.asarray(prototypes, dtype=np.float32)
+        proto_labels = ["role{}".format(i) for i in range(prototypes.shape[0])]
 
     combined = np.concatenate([points, prototypes], axis=0)
     projected = _project_to_2d(combined)
@@ -161,7 +171,7 @@ def build_role_scatter_image(group_trace, map_name):
 
     for group_id, (x, y) in enumerate(proto_xy):
         ax.scatter([x], [y], s=240, marker="X", c=[cmap(group_id % 10)], edgecolors="black", linewidths=1.5, zorder=5)
-        ax.text(x, y, " role{}".format(group_id), fontsize=10, ha="left", va="center")
+        ax.text(x, y, " {}".format(proto_labels[group_id]), fontsize=10, ha="left", va="center")
 
     ax.set_title("{} | role scatter".format(map_name))
     ax.set_xlabel("PC1")
