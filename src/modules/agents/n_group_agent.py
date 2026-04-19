@@ -18,6 +18,12 @@ class GroupAgent(nn.Module):
         self.struct_stat_dim = self.base_struct_stat_dim
         self.group_direct_topk = max(1, min(args.n_agents - 1, getattr(args, "group_direct_topk", 3)))
         self.group_ema_alpha = getattr(args, "group_ema_alpha", 0.8)
+        self.graph_obs_dim = input_shape
+        if getattr(args, "obs_last_action", False):
+            self.graph_obs_dim -= args.n_actions
+        if getattr(args, "obs_agent_id", False):
+            self.graph_obs_dim -= args.n_agents
+        self.graph_obs_dim = max(0, self.graph_obs_dim)
 
         self.fc1 = nn.Linear(input_shape, args.rnn_hidden_dim)
         self.rnn = nn.GRUCell(args.rnn_hidden_dim, args.rnn_hidden_dim)
@@ -61,6 +67,7 @@ class GroupAgent(nn.Module):
                 "graph_better_struct_row_sparse",
                 "graph_better_struct_topk_signature",
                 "graph_better_struct_ego_subgraph",
+                "graph_input_fusion",
             ]:
                 use_proto_assignment = self.group_head_mode == "graph_better_struct_proto"
                 if self.group_head_mode == "graph_better_struct_hybrid":
@@ -71,11 +78,29 @@ class GroupAgent(nn.Module):
                     self.struct_stat_dim = self.group_direct_topk + self.group_direct_topk * self.group_direct_topk + 2
                 elif self.group_head_mode == "graph_better_struct_ego_subgraph":
                     self.struct_stat_dim = (self.group_direct_topk + 1) * (self.group_direct_topk + 1) + 2
+                elif self.group_head_mode == "graph_input_fusion":
+                    self.struct_stat_dim = args.n_agents + 2
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.attn_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 if self.group_head_mode == "graph_better_struct_repr":
                     self.struct_repr = nn.Sequential(
                         nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
+                    )
+                elif self.group_head_mode == "graph_input_fusion":
+                    self.graph_obs_proj = nn.Sequential(
+                        nn.Linear(self.graph_obs_dim, args.rnn_hidden_dim),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
+                    )
+                    self.graph_action_proj = nn.Sequential(
+                        nn.Linear(args.n_actions, args.rnn_hidden_dim),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
+                    )
+                    self.graph_input_fuse = nn.Sequential(
+                        nn.Linear(args.rnn_hidden_dim * 3, args.rnn_hidden_dim),
                         nn.ReLU(inplace=True),
                         nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
                     )
@@ -125,8 +150,8 @@ class GroupAgent(nn.Module):
         hard_assign = probs.argmax(dim=-1)
         return [self._groups_from_assignment(assignments) for assignments in hard_assign]
 
-    def _build_attention_graph(self, h):
-        source = self.struct_repr(h) if self.struct_repr is not None else h
+    def _build_attention_graph(self, h, graph_source=None):
+        source = graph_source if graph_source is not None else (self.struct_repr(h) if self.struct_repr is not None else h)
         b, a, _ = h.size()
         q = self.attn_q(source)
         k = self.attn_k(source)
@@ -146,6 +171,19 @@ class GroupAgent(nn.Module):
             attn = attn * mask.float()
             attn = 0.5 * (attn + attn.transpose(1, 2))
         return attn
+
+    def _build_graph_input_fusion_source(self, h, graph_context):
+        b, a, _ = h.size()
+        if graph_context is None:
+            obs = h.new_zeros(b, a, self.graph_obs_dim)
+            prev_action = h.new_zeros(b, a, self.action_dim)
+        else:
+            obs = graph_context["obs"]
+            prev_action = graph_context["prev_action"]
+        obs_feat = self.graph_obs_proj(obs.reshape(b * a, -1)).view(b, a, -1)
+        action_feat = self.graph_action_proj(prev_action.reshape(b * a, -1)).view(b, a, -1)
+        fused = th.cat([h, obs_feat, action_feat], dim=-1)
+        return self.graph_input_fuse(fused.reshape(b * a, -1)).view(b, a, -1)
 
     def _build_topk_signature_input(self, attn, row_probs, degree, entropy):
         b, a, _ = attn.size()
@@ -235,6 +273,8 @@ class GroupAgent(nn.Module):
             struct_input = th.cat([row_probs, struct_stats], dim=-1)
         elif self.group_head_mode == "graph_better_struct_row_sparse":
             struct_input = th.cat([row_probs, degree, entropy], dim=-1)
+        elif self.group_head_mode == "graph_input_fusion":
+            struct_input = th.cat([row_probs, degree, entropy], dim=-1)
         elif self.group_head_mode == "graph_better_struct_topk_signature":
             struct_input = self._build_topk_signature_input(attn, row_probs, degree, entropy)
         elif self.group_head_mode == "graph_better_struct_ego_subgraph":
@@ -244,8 +284,8 @@ class GroupAgent(nn.Module):
         struct_feat = self.struct_encoder(struct_input.reshape(b * a, -1)).view(b, a, -1)
         return struct_feat
 
-    def _build_graph_better_struct(self, h):
-        attn = self._build_attention_graph(h)
+    def _build_graph_better_struct(self, h, graph_source=None):
+        attn = self._build_attention_graph(h, graph_source=graph_source)
         struct_feat = self._build_graph_struct_features(attn)
         logits = self.group_assign(struct_feat) / max(self.group_assignment_tau, 1e-6)
         probs = th.softmax(logits, dim=-1)
@@ -276,7 +316,7 @@ class GroupAgent(nn.Module):
         zero_struct = h.new_zeros(b, a, self.args.hypernet_embed)
         return probs, zero_struct, zero_graph
 
-    def forward(self, inputs, hidden_state):
+    def forward(self, inputs, hidden_state, graph_context=None):
         b, a, e = inputs.size()
 
         x = F.relu(self.fc1(inputs.view(-1, e)), inplace=True)
@@ -317,8 +357,12 @@ class GroupAgent(nn.Module):
             "graph_better_struct_row_sparse",
             "graph_better_struct_topk_signature",
             "graph_better_struct_ego_subgraph",
+            "graph_input_fusion",
         ]:
-            group_probs, struct_feat, group_graphs = self._build_graph_better_struct(h)
+            graph_source = None
+            if self.group_head_mode == "graph_input_fusion":
+                graph_source = self._build_graph_input_fusion_source(h, graph_context)
+            group_probs, struct_feat, group_graphs = self._build_graph_better_struct(h, graph_source=graph_source)
             group_emb = th.matmul(group_probs, self.group_embeddings)
             group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
             fc2_w = self.hyper_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.action_dim)
