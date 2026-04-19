@@ -14,7 +14,8 @@ class GroupAgent(nn.Module):
         self.group_head_mode = getattr(args, "group_head_mode", "latent").replace("-", "_")
         self.group_num = getattr(args, "group_num", 3)
         self.group_assignment_tau = getattr(args, "group_assignment_tau", 1.0)
-        self.struct_stat_dim = 10
+        self.base_struct_stat_dim = 10
+        self.struct_stat_dim = self.base_struct_stat_dim
         self.group_ema_alpha = getattr(args, "group_ema_alpha", 0.8)
 
         self.fc1 = nn.Linear(input_shape, args.rnn_hidden_dim)
@@ -55,8 +56,11 @@ class GroupAgent(nn.Module):
                 "graph_better_struct_repr",
                 "graph_better_struct_slow",
                 "graph_better_struct_sparse",
+                "graph_better_struct_hybrid",
             ]:
                 use_proto_assignment = self.group_head_mode == "graph_better_struct_proto"
+                if self.group_head_mode == "graph_better_struct_hybrid":
+                    self.struct_stat_dim = self.base_struct_stat_dim + args.n_agents
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.attn_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 if self.group_head_mode == "graph_better_struct_repr":
@@ -168,7 +172,11 @@ class GroupAgent(nn.Module):
             ],
             dim=-1,
         )
-        struct_feat = self.struct_encoder(struct_stats.reshape(b * a, -1)).view(b, a, -1)
+        if self.group_head_mode == "graph_better_struct_hybrid":
+            struct_input = th.cat([row_probs, struct_stats], dim=-1)
+        else:
+            struct_input = struct_stats
+        struct_feat = self.struct_encoder(struct_input.reshape(b * a, -1)).view(b, a, -1)
         return struct_feat
 
     def _build_graph_better_struct(self, h):
@@ -235,7 +243,7 @@ class GroupAgent(nn.Module):
             q = th.matmul(h.reshape(b * a, 1, self.a_h_dim), fc2_w) + fc2_b
             q = q.view(b, a, -1)
             struct_feat = group_state
-        elif self.group_head_mode in ["graph_better_struct", "graph_better_struct_repr", "graph_better_struct_slow", "graph_better_struct_sparse"]:
+        elif self.group_head_mode in ["graph_better_struct", "graph_better_struct_repr", "graph_better_struct_slow", "graph_better_struct_sparse", "graph_better_struct_hybrid"]:
             group_probs, struct_feat, group_graphs = self._build_graph_better_struct(h)
             group_emb = th.matmul(group_probs, self.group_embeddings)
             group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
