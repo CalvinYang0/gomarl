@@ -110,8 +110,8 @@ def build_role_scatter_image(group_trace, map_name):
     if not group_trace:
         return None
 
-    point_list = []
-    color_list = []
+    feature_list = []
+    prob_list = []
     prototypes = None
 
     for item in group_trace:
@@ -126,15 +126,18 @@ def build_role_scatter_image(group_trace, map_name):
             prototypes = np.asarray(role_prototypes, dtype=np.float32)
         role_features = np.asarray(role_features, dtype=np.float32)
         role_probs = np.asarray(role_probs, dtype=np.float32)
-        assignments = role_probs.argmax(axis=-1)
-        point_list.append(role_features)
-        color_list.append(assignments)
+        feature_list.append(role_features)
+        prob_list.append(role_probs)
 
-    if not point_list:
+    if not feature_list:
         return None
 
-    points = np.concatenate(point_list, axis=0)
-    colors = np.concatenate(color_list, axis=0)
+    feature_stack = np.stack(feature_list, axis=0)
+    prob_stack = np.stack(prob_list, axis=0)
+    points = feature_stack.mean(axis=0)
+    mean_probs = prob_stack.mean(axis=0)
+    colors = mean_probs.argmax(axis=-1)
+
     if prototypes is None:
         proto_ids = sorted(np.unique(colors).tolist())
         centroid_list = []
@@ -168,6 +171,10 @@ def build_role_scatter_image(group_trace, map_name):
                 c=[cmap(group_id % 10)],
                 label="agents->role{}".format(group_id),
             )
+
+    if points.shape[0] <= 12:
+        for agent_id, (x, y) in enumerate(point_xy):
+            ax.text(x, y, " a{}".format(agent_id), fontsize=8, ha="left", va="bottom")
 
     for group_id, (x, y) in enumerate(proto_xy):
         ax.scatter([x], [y], s=240, marker="X", c=[cmap(group_id % 10)], edgecolors="black", linewidths=1.5, zorder=5)
