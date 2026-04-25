@@ -68,6 +68,8 @@ class GroupAgent(nn.Module):
                 "graph_better_struct_topk_signature",
                 "graph_better_struct_ego_subgraph",
                 "graph_input_fusion",
+                "graph_input_fusion_group_only",
+                "graph_input_fusion_head_only",
             ]:
                 use_proto_assignment = self.group_head_mode == "graph_better_struct_proto"
                 if self.group_head_mode == "graph_better_struct_hybrid":
@@ -78,7 +80,7 @@ class GroupAgent(nn.Module):
                     self.struct_stat_dim = self.group_direct_topk + self.group_direct_topk * self.group_direct_topk + 2
                 elif self.group_head_mode == "graph_better_struct_ego_subgraph":
                     self.struct_stat_dim = (self.group_direct_topk + 1) * (self.group_direct_topk + 1) + 2
-                elif self.group_head_mode == "graph_input_fusion":
+                elif self.group_head_mode in ["graph_input_fusion", "graph_input_fusion_group_only", "graph_input_fusion_head_only"]:
                     self.struct_stat_dim = args.n_agents + 2
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.attn_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
@@ -88,7 +90,7 @@ class GroupAgent(nn.Module):
                         nn.ReLU(inplace=True),
                         nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
                     )
-                elif self.group_head_mode == "graph_input_fusion":
+                elif self.group_head_mode in ["graph_input_fusion", "graph_input_fusion_group_only", "graph_input_fusion_head_only"]:
                     self.graph_obs_proj = nn.Sequential(
                         nn.Linear(self.graph_obs_dim, args.rnn_hidden_dim),
                         nn.ReLU(inplace=True),
@@ -273,7 +275,7 @@ class GroupAgent(nn.Module):
             struct_input = th.cat([row_probs, struct_stats], dim=-1)
         elif self.group_head_mode == "graph_better_struct_row_sparse":
             struct_input = th.cat([row_probs, degree, entropy], dim=-1)
-        elif self.group_head_mode == "graph_input_fusion":
+        elif self.group_head_mode in ["graph_input_fusion", "graph_input_fusion_group_only", "graph_input_fusion_head_only"]:
             struct_input = th.cat([row_probs, degree, entropy], dim=-1)
         elif self.group_head_mode == "graph_better_struct_topk_signature":
             struct_input = self._build_topk_signature_input(attn, row_probs, degree, entropy)
@@ -358,13 +360,21 @@ class GroupAgent(nn.Module):
             "graph_better_struct_topk_signature",
             "graph_better_struct_ego_subgraph",
             "graph_input_fusion",
+            "graph_input_fusion_group_only",
+            "graph_input_fusion_head_only",
         ]:
             graph_source = None
-            if self.group_head_mode == "graph_input_fusion":
+            if self.group_head_mode in ["graph_input_fusion", "graph_input_fusion_group_only", "graph_input_fusion_head_only"]:
                 graph_source = self._build_graph_input_fusion_source(h, graph_context)
             group_probs, struct_feat, group_graphs = self._build_graph_better_struct(h, graph_source=graph_source)
+            if self.group_head_mode == "graph_input_fusion_head_only":
+                group_probs = th.zeros_like(group_probs)
+                group_probs[..., 0] = 1.0
             group_emb = th.matmul(group_probs, self.group_embeddings)
-            group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
+            if self.group_head_mode == "graph_input_fusion_group_only":
+                group_state = self.group_decoder(group_emb.reshape(b * a, -1)).view(b, a, -1)
+            else:
+                group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
             fc2_w = self.hyper_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.action_dim)
             fc2_b = self.hyper_b(group_state.reshape(b * a, -1)).reshape(b * a, 1, self.action_dim)
             q = th.matmul(h.reshape(b * a, 1, self.a_h_dim), fc2_w) + fc2_b
