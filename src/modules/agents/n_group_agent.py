@@ -57,6 +57,31 @@ class GroupAgent(nn.Module):
                 if (fixed_group_ids < 0).any():
                     raise ValueError("Every agent must appear in `args.group` for fixed_group mode.")
                 self.register_buffer("fixed_group_ids", fixed_group_ids)
+                if self.group_head_mode == "graph_input_fusion_fixed_group":
+                    self.struct_stat_dim = args.n_agents + 2
+                    self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
+                    self.attn_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
+                    self.graph_obs_proj = nn.Sequential(
+                        nn.Linear(self.graph_obs_dim, args.rnn_hidden_dim),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
+                    )
+                    self.graph_action_proj = nn.Sequential(
+                        nn.Linear(args.n_actions, args.rnn_hidden_dim),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
+                    )
+                    self.graph_input_fuse = nn.Sequential(
+                        nn.Linear(args.rnn_hidden_dim * 3, args.rnn_hidden_dim),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
+                    )
+                    self.struct_encoder = nn.Sequential(
+                        nn.Linear(self.struct_stat_dim, args.hypernet_embed),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                        nn.Tanh(),
+                    )
             elif self.group_head_mode in [
                 "graph_better_struct",
                 "graph_better_struct_proto",
