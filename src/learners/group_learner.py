@@ -59,6 +59,7 @@ class GROUPLearner:
         if (
             group_head_mode != "fixed_group"
             and not group_head_mode.startswith("graph_better_struct")
+            and group_head_mode != "graph_input_fusion_node_embed"
             and group_head_mode != "graph_input_fusion_group_only"
         ):
             return self._zero(group_states)
@@ -78,7 +79,11 @@ class GROUPLearner:
     def _compute_struct_group_regularizers(self, group_probs, group_graphs, mask):
         zero = self._zero(group_probs)
         group_head_mode = getattr(self.args, "group_head_mode", "latent").replace("-", "_")
-        if not group_head_mode.startswith("graph_better_struct") and group_head_mode != "graph_input_fusion_group_only":
+        if (
+            not group_head_mode.startswith("graph_better_struct")
+            and group_head_mode != "graph_input_fusion_node_embed"
+            and group_head_mode != "graph_input_fusion_group_only"
+        ):
             return zero, zero, zero
 
         valid = mask.unsqueeze(-1).expand_as(group_probs[..., :1]).squeeze(-1)

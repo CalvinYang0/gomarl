@@ -68,6 +68,7 @@ class GroupAgent(nn.Module):
                 "graph_better_struct_topk_signature",
                 "graph_better_struct_ego_subgraph",
                 "graph_input_fusion",
+                "graph_input_fusion_node_embed",
                 "graph_input_fusion_fixed_group",
                 "graph_input_fusion_group_only",
                 "graph_input_fusion_head_only",
@@ -83,11 +84,14 @@ class GroupAgent(nn.Module):
                     self.struct_stat_dim = (self.group_direct_topk + 1) * (self.group_direct_topk + 1) + 2
                 elif self.group_head_mode in [
                     "graph_input_fusion",
+                    "graph_input_fusion_node_embed",
                     "graph_input_fusion_fixed_group",
                     "graph_input_fusion_group_only",
                     "graph_input_fusion_head_only",
                 ]:
                     self.struct_stat_dim = args.n_agents + 2
+                    if self.group_head_mode == "graph_input_fusion_node_embed":
+                        self.struct_stat_dim += args.rnn_hidden_dim
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.attn_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 if self.group_head_mode == "graph_better_struct_repr":
@@ -98,6 +102,7 @@ class GroupAgent(nn.Module):
                     )
                 elif self.group_head_mode in [
                     "graph_input_fusion",
+                    "graph_input_fusion_node_embed",
                     "graph_input_fusion_fixed_group",
                     "graph_input_fusion_group_only",
                     "graph_input_fusion_head_only",
@@ -247,7 +252,7 @@ class GroupAgent(nn.Module):
             signatures.append(th.stack(local_signatures, dim=0))
         return th.stack(signatures, dim=0)
 
-    def _build_graph_struct_features(self, attn):
+    def _build_graph_struct_features(self, attn, node_embed=None):
         b, a, _ = attn.size()
         degree = attn.sum(dim=-1, keepdim=True)
         row_probs = attn / degree.clamp(min=1e-8)
@@ -288,11 +293,14 @@ class GroupAgent(nn.Module):
             struct_input = th.cat([row_probs, degree, entropy], dim=-1)
         elif self.group_head_mode in [
             "graph_input_fusion",
+            "graph_input_fusion_node_embed",
             "graph_input_fusion_fixed_group",
             "graph_input_fusion_group_only",
             "graph_input_fusion_head_only",
         ]:
             struct_input = th.cat([row_probs, degree, entropy], dim=-1)
+            if self.group_head_mode == "graph_input_fusion_node_embed":
+                struct_input = th.cat([node_embed, struct_input], dim=-1)
         elif self.group_head_mode == "graph_better_struct_topk_signature":
             struct_input = self._build_topk_signature_input(attn, row_probs, degree, entropy)
         elif self.group_head_mode == "graph_better_struct_ego_subgraph":
@@ -302,9 +310,9 @@ class GroupAgent(nn.Module):
         struct_feat = self.struct_encoder(struct_input.reshape(b * a, -1)).view(b, a, -1)
         return struct_feat
 
-    def _build_graph_better_struct(self, h, graph_source=None):
+    def _build_graph_better_struct(self, h, graph_source=None, node_embed=None):
         attn = self._build_attention_graph(h, graph_source=graph_source)
-        struct_feat = self._build_graph_struct_features(attn)
+        struct_feat = self._build_graph_struct_features(attn, node_embed=node_embed)
         logits = self.group_assign(struct_feat) / max(self.group_assignment_tau, 1e-6)
         probs = th.softmax(logits, dim=-1)
         if self.group_head_mode == "graph_better_struct_slow":
@@ -391,13 +399,21 @@ class GroupAgent(nn.Module):
             "graph_better_struct_topk_signature",
             "graph_better_struct_ego_subgraph",
             "graph_input_fusion",
+            "graph_input_fusion_node_embed",
             "graph_input_fusion_group_only",
             "graph_input_fusion_head_only",
         ]:
             graph_source = None
-            if self.group_head_mode in ["graph_input_fusion", "graph_input_fusion_group_only", "graph_input_fusion_head_only"]:
+            node_embed = None
+            if self.group_head_mode in [
+                "graph_input_fusion",
+                "graph_input_fusion_node_embed",
+                "graph_input_fusion_group_only",
+                "graph_input_fusion_head_only",
+            ]:
                 graph_source = self._build_graph_input_fusion_source(h, graph_context)
-            group_probs, struct_feat, group_graphs = self._build_graph_better_struct(h, graph_source=graph_source)
+                node_embed = graph_source if self.group_head_mode == "graph_input_fusion_node_embed" else None
+            group_probs, struct_feat, group_graphs = self._build_graph_better_struct(h, graph_source=graph_source, node_embed=node_embed)
             if self.group_head_mode == "graph_input_fusion_head_only":
                 group_probs = th.zeros_like(group_probs)
                 group_probs[..., 0] = 1.0
