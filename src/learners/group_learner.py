@@ -60,6 +60,7 @@ class GROUPLearner:
             group_head_mode != "fixed_group"
             and not group_head_mode.startswith("graph_better_struct")
             and group_head_mode != "graph_input_fusion_node_embed"
+            and group_head_mode != "graph_input_fusion_node_embed_no_groupemb"
             and group_head_mode != "graph_input_fusion_group_only"
         ):
             return self._zero(group_states)
@@ -82,6 +83,7 @@ class GROUPLearner:
         if (
             not group_head_mode.startswith("graph_better_struct")
             and group_head_mode != "graph_input_fusion_node_embed"
+            and group_head_mode != "graph_input_fusion_node_embed_no_groupemb"
             and group_head_mode != "graph_input_fusion_group_only"
         ):
             return zero, zero, zero

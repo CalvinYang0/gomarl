@@ -94,6 +94,7 @@ class GroupAgent(nn.Module):
                 "graph_better_struct_ego_subgraph",
                 "graph_input_fusion",
                 "graph_input_fusion_node_embed",
+                "graph_input_fusion_node_embed_no_groupemb",
                 "graph_input_fusion_fixed_group",
                 "graph_input_fusion_group_only",
                 "graph_input_fusion_head_only",
@@ -110,12 +111,13 @@ class GroupAgent(nn.Module):
                 elif self.group_head_mode in [
                     "graph_input_fusion",
                     "graph_input_fusion_node_embed",
+                    "graph_input_fusion_node_embed_no_groupemb",
                     "graph_input_fusion_fixed_group",
                     "graph_input_fusion_group_only",
                     "graph_input_fusion_head_only",
                 ]:
                     self.struct_stat_dim = args.n_agents + 2
-                    if self.group_head_mode == "graph_input_fusion_node_embed":
+                    if self.group_head_mode in ["graph_input_fusion_node_embed", "graph_input_fusion_node_embed_no_groupemb"]:
                         self.struct_stat_dim += args.rnn_hidden_dim
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                 self.attn_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
@@ -128,6 +130,7 @@ class GroupAgent(nn.Module):
                 elif self.group_head_mode in [
                     "graph_input_fusion",
                     "graph_input_fusion_node_embed",
+                    "graph_input_fusion_node_embed_no_groupemb",
                     "graph_input_fusion_fixed_group",
                     "graph_input_fusion_group_only",
                     "graph_input_fusion_head_only",
@@ -319,12 +322,13 @@ class GroupAgent(nn.Module):
         elif self.group_head_mode in [
             "graph_input_fusion",
             "graph_input_fusion_node_embed",
+            "graph_input_fusion_node_embed_no_groupemb",
             "graph_input_fusion_fixed_group",
             "graph_input_fusion_group_only",
             "graph_input_fusion_head_only",
         ]:
             struct_input = th.cat([row_probs, degree, entropy], dim=-1)
-            if self.group_head_mode == "graph_input_fusion_node_embed":
+            if self.group_head_mode in ["graph_input_fusion_node_embed", "graph_input_fusion_node_embed_no_groupemb"]:
                 struct_input = th.cat([node_embed, struct_input], dim=-1)
         elif self.group_head_mode == "graph_better_struct_topk_signature":
             struct_input = self._build_topk_signature_input(attn, row_probs, degree, entropy)
@@ -425,6 +429,7 @@ class GroupAgent(nn.Module):
             "graph_better_struct_ego_subgraph",
             "graph_input_fusion",
             "graph_input_fusion_node_embed",
+            "graph_input_fusion_node_embed_no_groupemb",
             "graph_input_fusion_group_only",
             "graph_input_fusion_head_only",
         ]:
@@ -433,11 +438,16 @@ class GroupAgent(nn.Module):
             if self.group_head_mode in [
                 "graph_input_fusion",
                 "graph_input_fusion_node_embed",
+                "graph_input_fusion_node_embed_no_groupemb",
                 "graph_input_fusion_group_only",
                 "graph_input_fusion_head_only",
             ]:
                 graph_source = self._build_graph_input_fusion_source(h, graph_context)
-                node_embed = graph_source if self.group_head_mode == "graph_input_fusion_node_embed" else None
+                node_embed = (
+                    graph_source
+                    if self.group_head_mode in ["graph_input_fusion_node_embed", "graph_input_fusion_node_embed_no_groupemb"]
+                    else None
+                )
             group_probs, struct_feat, group_graphs = self._build_graph_better_struct(h, graph_source=graph_source, node_embed=node_embed)
             if self.group_head_mode == "graph_input_fusion_head_only":
                 group_probs = th.zeros_like(group_probs)
@@ -445,6 +455,8 @@ class GroupAgent(nn.Module):
             group_emb = th.matmul(group_probs, self.group_embeddings)
             if self.group_head_mode == "graph_input_fusion_group_only":
                 group_state = self.group_decoder(group_emb.reshape(b * a, -1)).view(b, a, -1)
+            elif self.group_head_mode == "graph_input_fusion_node_embed_no_groupemb":
+                group_state = self.group_decoder(struct_feat.reshape(b * a, -1)).view(b, a, -1)
             else:
                 group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
             fc2_w = self.hyper_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.action_dim)
