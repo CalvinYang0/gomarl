@@ -32,6 +32,7 @@ class NMAC(BasicMAC):
             agent_inputs, self.hidden_states, graph_context=graph_context
         )
         self.group_struct_features = self.agent.group_struct_features
+        self.group_node_embeddings = self.agent.group_node_embeddings
         self.group_role_prototypes = self.agent.group_role_prototypes
         self.current_groups = self.agent.current_groups
 

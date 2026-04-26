@@ -61,6 +61,8 @@ class GROUPLearner:
             and not group_head_mode.startswith("graph_better_struct")
             and group_head_mode != "graph_input_fusion_node_embed"
             and group_head_mode != "graph_input_fusion_node_embed_no_groupemb"
+            and group_head_mode != "graph_input_fusion_node_embed_sharp"
+            and group_head_mode != "graph_input_fusion_node_embed_threshold_group"
             and group_head_mode != "graph_input_fusion_group_only"
         ):
             return self._zero(group_states)
@@ -84,6 +86,8 @@ class GROUPLearner:
             not group_head_mode.startswith("graph_better_struct")
             and group_head_mode != "graph_input_fusion_node_embed"
             and group_head_mode != "graph_input_fusion_node_embed_no_groupemb"
+            and group_head_mode != "graph_input_fusion_node_embed_sharp"
+            and group_head_mode != "graph_input_fusion_node_embed_threshold_group"
             and group_head_mode != "graph_input_fusion_group_only"
         ):
             return zero, zero, zero
@@ -92,8 +96,11 @@ class GROUPLearner:
         if valid.sum() <= 0:
             return zero, zero, zero
 
-        mean_probs = (group_probs * valid.unsqueeze(-1)).sum(dim=(0, 1)) / valid.sum()
-        balance_loss = -th.log(mean_probs.clamp(min=1e-8)).mean()
+        if group_head_mode == "graph_input_fusion_node_embed_threshold_group":
+            balance_loss = zero
+        else:
+            mean_probs = (group_probs * valid.unsqueeze(-1)).sum(dim=(0, 1)) / valid.sum()
+            balance_loss = -th.log(mean_probs.clamp(min=1e-8)).mean()
 
         entropy = -(group_probs.clamp(min=1e-8) * group_probs.clamp(min=1e-8).log()).sum(dim=-1)
         conf_loss = (entropy * valid).sum() / valid.sum()
@@ -110,6 +117,34 @@ class GROUPLearner:
             sparse_loss = (row_entropy * valid_rows).sum() / valid_rows.sum()
 
         return balance_loss, conf_loss, sparse_loss
+
+    def _compute_threshold_group_regularizer(self, node_embeddings, group_probs, mask):
+        zero = self._zero(node_embeddings)
+        group_head_mode = getattr(self.args, "group_head_mode", "latent").replace("-", "_")
+        if group_head_mode != "graph_input_fusion_node_embed_threshold_group":
+            return zero
+
+        valid = mask.unsqueeze(-1).expand_as(group_probs[..., :1]).squeeze(-1)
+        if valid.sum() <= 0:
+            return zero
+
+        norm_embed = F.normalize(node_embeddings, p=2, dim=-1)
+        similarity = th.matmul(norm_embed, norm_embed.transpose(-1, -2))
+        same_prob = th.matmul(group_probs, group_probs.transpose(-1, -2))
+
+        off_diag = 1.0 - th.eye(self.args.n_agents, device=node_embeddings.device).view(1, 1, self.args.n_agents, self.args.n_agents)
+        valid_pairs = mask.unsqueeze(-1).expand_as(similarity) * off_diag
+        if valid_pairs.sum() <= 0:
+            return zero
+
+        pos_threshold = getattr(self.args, "group_similarity_pos_threshold", 0.7)
+        neg_threshold = getattr(self.args, "group_similarity_neg_threshold", 0.3)
+        pos_mask = (similarity > pos_threshold).float() * valid_pairs
+        neg_mask = (similarity < neg_threshold).float() * valid_pairs
+
+        pos_loss = ((1.0 - same_prob) * pos_mask).sum() / pos_mask.sum().clamp(min=1.0)
+        neg_loss = (same_prob * neg_mask).sum() / neg_mask.sum().clamp(min=1.0)
+        return pos_loss + neg_loss
 
     def _compute_proto_regularizers(self, struct_features, group_probs, mask):
         zero = self._zero(struct_features)
@@ -319,6 +354,7 @@ class GROUPLearner:
         mac_group_probs = []
         mac_group_graphs = []
         mac_struct_features = []
+        mac_node_embeddings = []
 
         self.mac.init_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
@@ -328,6 +364,7 @@ class GROUPLearner:
             mac_group_probs.append(self.mac.group_probs)
             mac_group_graphs.append(self.mac.group_graphs)
             mac_struct_features.append(self.mac.group_struct_features)
+            mac_node_embeddings.append(self.mac.group_node_embeddings)
             mac_out.append(agent_outs)
 
         mac_out = th.stack(mac_out, dim=1)
@@ -336,6 +373,7 @@ class GROUPLearner:
         mac_group_probs = th.stack(mac_group_probs, dim=1)
         mac_group_graphs = th.stack(mac_group_graphs, dim=1)
         mac_struct_features = th.stack(mac_struct_features, dim=1)
+        mac_node_embeddings = th.stack(mac_node_embeddings, dim=1)
         mac_hidden = mac_hidden.detach()
 
         # Pick the Q-Values for the actions taken by each agent
@@ -402,11 +440,15 @@ class GROUPLearner:
             proto_compact_loss, proto_sep_loss = self._compute_proto_regularizers(
                 mac_struct_features[:, :-1], mac_group_probs[:, :-1], mask
             )
+            similarity_group_loss = self._compute_threshold_group_regularizer(
+                mac_node_embeddings[:, :-1], mac_group_probs[:, :-1], mask
+            )
             balance_loss = getattr(self.args, "group_balance_alpha", 0.0) * balance_loss
             conf_loss = getattr(self.args, "group_conf_alpha", 0.0) * conf_loss
             sparse_loss = getattr(self.args, "group_sparse_alpha", 0.0) * sparse_loss
             proto_compact_loss = getattr(self.args, "group_proto_compact_alpha", 0.0) * proto_compact_loss
             proto_sep_loss = getattr(self.args, "group_proto_sep_alpha", 0.0) * proto_sep_loss
+            similarity_group_loss = getattr(self.args, "group_similarity_alpha", 0.0) * similarity_group_loss
 
         td_error = (chosen_action_qvals - targets.detach())
         td_error = 0.5 * td_error.pow(2)
@@ -418,8 +460,9 @@ class GROUPLearner:
         if self.args.mixer == "group":
             proto_compact_loss = self._zero(chosen_action_qvals)
             proto_sep_loss = self._zero(chosen_action_qvals)
+            similarity_group_loss = self._zero(chosen_action_qvals)
 
-        loss = td_loss + lasso_loss + sd_loss + balance_loss + conf_loss + sparse_loss + proto_compact_loss + proto_sep_loss
+        loss = td_loss + lasso_loss + sd_loss + balance_loss + conf_loss + sparse_loss + proto_compact_loss + proto_sep_loss + similarity_group_loss
 
         # Optimise
         self.optimiser.zero_grad()
@@ -448,6 +491,7 @@ class GROUPLearner:
                 self.logger.log_stat("group_sparse_loss", sparse_loss.item(), t_env)
                 self.logger.log_stat("group_proto_compact_loss", proto_compact_loss.item(), t_env)
                 self.logger.log_stat("group_proto_sep_loss", proto_sep_loss.item(), t_env)
+                self.logger.log_stat("group_similarity_loss", similarity_group_loss.item(), t_env)
             
             self.log_stats_t = t_env
     

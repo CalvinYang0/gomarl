@@ -20,6 +20,7 @@ class GroupAgent(nn.Module):
         self.struct_stat_dim = self.base_struct_stat_dim
         self.group_direct_topk = max(1, min(args.n_agents - 1, getattr(args, "group_direct_topk", 3)))
         self.group_ema_alpha = getattr(args, "group_ema_alpha", 0.8)
+        self.graph_attention_tau = getattr(args, "graph_attention_tau", 0.5)
         self.graph_obs_dim = input_shape
         if getattr(args, "obs_last_action", False):
             self.graph_obs_dim -= args.n_actions
@@ -98,6 +99,8 @@ class GroupAgent(nn.Module):
                 "graph_input_fusion_node_embed",
                 "graph_input_fusion_node_embed_no_groupemb",
                 "graph_input_fusion_node_embed_struct_only",
+                "graph_input_fusion_node_embed_sharp",
+                "graph_input_fusion_node_embed_threshold_group",
                 "graph_input_fusion_fixed_group",
                 "graph_input_fusion_group_only",
                 "graph_input_fusion_head_only",
@@ -115,6 +118,9 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion",
                     "graph_input_fusion_node_embed",
                     "graph_input_fusion_node_embed_no_groupemb",
+                    "graph_input_fusion_node_embed_struct_only",
+                    "graph_input_fusion_node_embed_sharp",
+                    "graph_input_fusion_node_embed_threshold_group",
                     "graph_input_fusion_fixed_group",
                     "graph_input_fusion_group_only",
                     "graph_input_fusion_head_only",
@@ -124,6 +130,8 @@ class GroupAgent(nn.Module):
                         "graph_input_fusion_node_embed",
                         "graph_input_fusion_node_embed_no_groupemb",
                         "graph_input_fusion_node_embed_struct_only",
+                        "graph_input_fusion_node_embed_sharp",
+                        "graph_input_fusion_node_embed_threshold_group",
                     ]:
                         self.struct_stat_dim += args.rnn_hidden_dim
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
@@ -139,6 +147,8 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed",
                     "graph_input_fusion_node_embed_no_groupemb",
                     "graph_input_fusion_node_embed_struct_only",
+                    "graph_input_fusion_node_embed_sharp",
+                    "graph_input_fusion_node_embed_threshold_group",
                     "graph_input_fusion_fixed_group",
                     "graph_input_fusion_group_only",
                     "graph_input_fusion_head_only",
@@ -186,6 +196,7 @@ class GroupAgent(nn.Module):
         self.current_groups = None
         self.group_struct_features = None
         self.group_role_prototypes = None
+        self.group_node_embeddings = None
 
     def init_hidden(self):
         self.cached_group_probs = None
@@ -206,13 +217,30 @@ class GroupAgent(nn.Module):
 
     def _build_attention_graph(self, h, graph_source=None):
         source = graph_source if graph_source is not None else (self.struct_repr(h) if self.struct_repr is not None else h)
+        sharp_mode = self.group_head_mode == "graph_input_fusion_node_embed_sharp"
+        if sharp_mode:
+            source = F.normalize(source, p=2, dim=-1)
         b, a, _ = h.size()
         q = self.attn_q(source)
         k = self.attn_k(source)
-        scores = th.matmul(q, k.transpose(1, 2)) / math.sqrt(self.a_h_dim)
+        if sharp_mode:
+            q = F.normalize(q, p=2, dim=-1)
+            k = F.normalize(k, p=2, dim=-1)
+            scores = th.matmul(q, k.transpose(1, 2))
+        else:
+            scores = th.matmul(q, k.transpose(1, 2)) / math.sqrt(self.a_h_dim)
         eye = th.eye(a, device=h.device, dtype=th.bool).unsqueeze(0)
         scores = scores.masked_fill(eye, -1e9)
-        attn = th.softmax(scores, dim=-1)
+        if sharp_mode:
+            valid_mask = (~eye).float()
+            score_no_diag = scores.masked_fill(eye, 0.0)
+            row_mean = (score_no_diag * valid_mask).sum(dim=-1, keepdim=True) / valid_mask.sum(dim=-1, keepdim=True).clamp(min=1.0)
+            row_var = ((score_no_diag - row_mean).pow(2) * valid_mask).sum(dim=-1, keepdim=True) / valid_mask.sum(dim=-1, keepdim=True).clamp(min=1.0)
+            scores = (scores - row_mean) / row_var.sqrt().clamp(min=1e-6)
+            scores = scores.masked_fill(eye, -1e9)
+            attn = th.softmax(scores / max(self.graph_attention_tau, 1e-6), dim=-1)
+        else:
+            attn = th.softmax(scores, dim=-1)
         attn = 0.5 * (attn + attn.transpose(1, 2))
         attn = attn.masked_fill(eye, 0.0)
         if self.group_head_mode == "graph_better_struct_sparse":
@@ -332,6 +360,8 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed",
             "graph_input_fusion_node_embed_no_groupemb",
             "graph_input_fusion_node_embed_struct_only",
+            "graph_input_fusion_node_embed_sharp",
+            "graph_input_fusion_node_embed_threshold_group",
             "graph_input_fusion_fixed_group",
             "graph_input_fusion_group_only",
             "graph_input_fusion_head_only",
@@ -341,6 +371,8 @@ class GroupAgent(nn.Module):
                 "graph_input_fusion_node_embed",
                 "graph_input_fusion_node_embed_no_groupemb",
                 "graph_input_fusion_node_embed_struct_only",
+                "graph_input_fusion_node_embed_sharp",
+                "graph_input_fusion_node_embed_threshold_group",
             ]:
                 struct_input = th.cat([node_embed, struct_input], dim=-1)
         elif self.group_head_mode == "graph_better_struct_topk_signature":
@@ -452,6 +484,8 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed",
             "graph_input_fusion_node_embed_no_groupemb",
             "graph_input_fusion_node_embed_struct_only",
+            "graph_input_fusion_node_embed_sharp",
+            "graph_input_fusion_node_embed_threshold_group",
             "graph_input_fusion_group_only",
             "graph_input_fusion_head_only",
         ]:
@@ -465,6 +499,8 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion",
                     "graph_input_fusion_node_embed",
                     "graph_input_fusion_node_embed_no_groupemb",
+                    "graph_input_fusion_node_embed_sharp",
+                    "graph_input_fusion_node_embed_threshold_group",
                     "graph_input_fusion_group_only",
                     "graph_input_fusion_head_only",
                 ]:
@@ -474,6 +510,8 @@ class GroupAgent(nn.Module):
                         if self.group_head_mode in [
                             "graph_input_fusion_node_embed",
                             "graph_input_fusion_node_embed_no_groupemb",
+                            "graph_input_fusion_node_embed_sharp",
+                            "graph_input_fusion_node_embed_threshold_group",
                         ]
                         else None
                     )
@@ -507,6 +545,7 @@ class GroupAgent(nn.Module):
         self.group_graphs = group_graphs
         self.group_struct_features = struct_feat
         self.group_role_prototypes = self.role_prototypes
+        self.group_node_embeddings = node_embed if "node_embed" in locals() and node_embed is not None else h.new_zeros(b, a, self.args.rnn_hidden_dim)
         self.current_groups = self._assignment_lists(self.group_probs.detach())
 
         return q, h, group_state, group_probs, group_graphs
