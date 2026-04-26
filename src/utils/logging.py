@@ -49,6 +49,9 @@ class Logger:
         self.wandb_module = wandb
 
         alg_name = config.get("name", "unknown_alg")
+        run_name = config.get("wandb_run_name", None)
+        if run_name in [None, ""]:
+            run_name = alg_name
         env_name = config.get("env", "unknown_env")
         env_args = config.get("env_args", {})
         if "map_name" in env_args:
@@ -73,6 +76,7 @@ class Logger:
             entity=entity,
             project=project_name,
             config=config,
+            name=run_name,
             group=group_name,
             mode=mode,
         )

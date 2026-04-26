@@ -22,6 +22,7 @@ use_wandb: True # Log results to W&B
 wandb_team: null # W&B team/entity name (null uses your default account)
 wandb_project: "gomarl" # W&B project name
 wandb_mode: "offline" # W&B mode: "offline" or "online"
+wandb_run_name: null # Optional explicit W&B run name (defaults to `name` when null)
 wandb_save_model: False # Save checkpoints into W&B run directory
 save_model: False # Save the models to disk
 save_model_interval: 2000000 # Save models after this many timesteps
