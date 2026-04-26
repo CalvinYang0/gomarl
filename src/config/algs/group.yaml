@@ -28,7 +28,7 @@ mixer: "group"                     # group | group_vdn
 mixing_embed_dim: 32
 hypernet_embed: 32
 grouping_hypernet_embed: 32
-group_head_mode: "latent"         # latent | plain | fixed_group | graph_better_struct | graph_better_struct_proto | graph_better_struct_repr | graph_better_struct_slow | graph_better_struct_sparse | graph_better_struct_hybrid | graph_better_struct_row_sparse | graph_better_struct_topk_signature | graph_better_struct_ego_subgraph | graph_input_fusion | graph_input_fusion_node_embed | graph_input_fusion_node_embed_no_groupemb | graph_input_fusion_fixed_group | graph_input_fusion_group_only | graph_input_fusion_head_only (hyphen aliases supported)
+group_head_mode: "latent"         # latent | plain | fixed_group | graph_better_struct | graph_better_struct_proto | graph_better_struct_repr | graph_better_struct_slow | graph_better_struct_sparse | graph_better_struct_hybrid | graph_better_struct_row_sparse | graph_better_struct_topk_signature | graph_better_struct_ego_subgraph | graph_input_fusion | graph_input_fusion_node_embed | graph_input_fusion_node_embed_no_groupemb | graph_input_fusion_node_embed_struct_only | graph_input_fusion_fixed_group | graph_input_fusion_group_only | graph_input_fusion_head_only (hyphen aliases supported)
 group_num: 3
 group_assignment_tau: 1.0
 group_balance_alpha: 0.01
