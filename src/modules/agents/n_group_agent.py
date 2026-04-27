@@ -12,8 +12,14 @@ class GroupAgent(nn.Module):
         self.a_h_dim = args.rnn_hidden_dim
         self.action_dim = args.n_actions
         self.group_head_mode = getattr(args, "group_head_mode", "latent").replace("-", "_")
+        self.no_group_head_compare_modes = {
+            "graph_input_fusion_hidden_head",
+            "graph_input_fusion_node_embed_head",
+            "graph_input_fusion_struct_feat_head",
+            "graph_input_fusion_node_embed_struct_feat_head",
+        }
         self.group_num = getattr(args, "group_num", 3)
-        if self.group_head_mode == "graph_input_fusion_node_embed_struct_only":
+        if self.group_head_mode == "graph_input_fusion_node_embed_struct_only" or self.group_head_mode in self.no_group_head_compare_modes:
             self.group_num = 1
         self.group_assignment_tau = getattr(args, "group_assignment_tau", 1.0)
         self.base_struct_stat_dim = 10
@@ -101,6 +107,10 @@ class GroupAgent(nn.Module):
                 "graph_input_fusion_node_embed_struct_only",
                 "graph_input_fusion_node_embed_sharp",
                 "graph_input_fusion_node_embed_threshold_group",
+                "graph_input_fusion_hidden_head",
+                "graph_input_fusion_node_embed_head",
+                "graph_input_fusion_struct_feat_head",
+                "graph_input_fusion_node_embed_struct_feat_head",
                 "graph_input_fusion_fixed_group",
                 "graph_input_fusion_group_only",
                 "graph_input_fusion_head_only",
@@ -121,6 +131,10 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_only",
                     "graph_input_fusion_node_embed_sharp",
                     "graph_input_fusion_node_embed_threshold_group",
+                    "graph_input_fusion_hidden_head",
+                    "graph_input_fusion_node_embed_head",
+                    "graph_input_fusion_struct_feat_head",
+                    "graph_input_fusion_node_embed_struct_feat_head",
                     "graph_input_fusion_fixed_group",
                     "graph_input_fusion_group_only",
                     "graph_input_fusion_head_only",
@@ -149,6 +163,10 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_only",
                     "graph_input_fusion_node_embed_sharp",
                     "graph_input_fusion_node_embed_threshold_group",
+                    "graph_input_fusion_hidden_head",
+                    "graph_input_fusion_node_embed_head",
+                    "graph_input_fusion_struct_feat_head",
+                    "graph_input_fusion_node_embed_struct_feat_head",
                     "graph_input_fusion_fixed_group",
                     "graph_input_fusion_group_only",
                     "graph_input_fusion_head_only",
@@ -168,13 +186,34 @@ class GroupAgent(nn.Module):
                         nn.ReLU(inplace=True),
                         nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
                     )
+                if self.group_head_mode == "graph_input_fusion_hidden_head":
+                    self.head_input_encoder = nn.Sequential(
+                        nn.Linear(args.rnn_hidden_dim, args.hypernet_embed),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                        nn.Tanh(),
+                    )
+                elif self.group_head_mode == "graph_input_fusion_node_embed_head":
+                    self.head_input_encoder = nn.Sequential(
+                        nn.Linear(args.rnn_hidden_dim, args.hypernet_embed),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                        nn.Tanh(),
+                    )
+                elif self.group_head_mode == "graph_input_fusion_node_embed_struct_feat_head":
+                    self.head_input_encoder = nn.Sequential(
+                        nn.Linear(args.rnn_hidden_dim + args.hypernet_embed, args.hypernet_embed),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                        nn.Tanh(),
+                    )
                 self.struct_encoder = nn.Sequential(
                     nn.Linear(self.struct_stat_dim, args.hypernet_embed),
                     nn.ReLU(inplace=True),
                     nn.Linear(args.hypernet_embed, args.hypernet_embed),
                     nn.Tanh(),
                 )
-                if not use_proto_assignment and self.group_head_mode != "graph_input_fusion_node_embed_struct_only":
+                if not use_proto_assignment and self.group_head_mode != "graph_input_fusion_node_embed_struct_only" and self.group_head_mode not in self.no_group_head_compare_modes:
                     self.group_assign = nn.Linear(args.hypernet_embed, self.group_num)
                 elif use_proto_assignment:
                     self.role_prototypes = nn.Parameter(th.randn(self.group_num, args.hypernet_embed) * 0.1)
@@ -362,6 +401,10 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_only",
             "graph_input_fusion_node_embed_sharp",
             "graph_input_fusion_node_embed_threshold_group",
+            "graph_input_fusion_hidden_head",
+            "graph_input_fusion_node_embed_head",
+            "graph_input_fusion_struct_feat_head",
+            "graph_input_fusion_node_embed_struct_feat_head",
             "graph_input_fusion_fixed_group",
             "graph_input_fusion_group_only",
             "graph_input_fusion_head_only",
@@ -431,6 +474,31 @@ class GroupAgent(nn.Module):
         group_probs = h.new_ones(b, a, 1)
         return group_probs, struct_feat, group_graphs
 
+    def _build_graph_input_fusion_no_group_head(self, h, graph_context):
+        b, a, _ = h.size()
+        group_probs = h.new_ones(b, a, 1)
+        zero_graph = h.new_zeros(b, a, a)
+        zero_struct = h.new_zeros(b, a, self.args.hypernet_embed)
+        node_embed = None
+
+        if self.group_head_mode == "graph_input_fusion_hidden_head":
+            head_feat = self.head_input_encoder(h.reshape(b * a, -1)).view(b, a, -1)
+            return group_probs, zero_struct, zero_graph, head_feat, node_embed
+
+        node_embed = self._build_graph_input_fusion_source(h, graph_context)
+        if self.group_head_mode == "graph_input_fusion_node_embed_head":
+            head_feat = self.head_input_encoder(node_embed.reshape(b * a, -1)).view(b, a, -1)
+            return group_probs, zero_struct, zero_graph, head_feat, node_embed
+
+        group_graphs = self._build_attention_graph(h, graph_source=node_embed)
+        struct_feat = self._build_graph_struct_features(group_graphs)
+        if self.group_head_mode == "graph_input_fusion_struct_feat_head":
+            head_feat = struct_feat
+        else:
+            fused = th.cat([node_embed, struct_feat], dim=-1)
+            head_feat = self.head_input_encoder(fused.reshape(b * a, -1)).view(b, a, -1)
+        return group_probs, struct_feat, group_graphs, head_feat, node_embed
+
     def forward(self, inputs, hidden_state, graph_context=None):
         b, a, e = inputs.size()
 
@@ -486,12 +554,19 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_only",
             "graph_input_fusion_node_embed_sharp",
             "graph_input_fusion_node_embed_threshold_group",
+            "graph_input_fusion_hidden_head",
+            "graph_input_fusion_node_embed_head",
+            "graph_input_fusion_struct_feat_head",
+            "graph_input_fusion_node_embed_struct_feat_head",
             "graph_input_fusion_group_only",
             "graph_input_fusion_head_only",
         ]:
             if self.group_head_mode == "graph_input_fusion_node_embed_struct_only":
                 group_probs, struct_feat, group_graphs = self._build_graph_input_fusion_node_embed_struct_only(h, graph_context)
                 group_state = self.group_decoder(struct_feat.reshape(b * a, -1)).view(b, a, -1)
+            elif self.group_head_mode in self.no_group_head_compare_modes:
+                group_probs, struct_feat, group_graphs, head_feat, node_embed = self._build_graph_input_fusion_no_group_head(h, graph_context)
+                group_state = self.group_decoder(head_feat.reshape(b * a, -1)).view(b, a, -1)
             else:
                 graph_source = None
                 node_embed = None
@@ -501,6 +576,10 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_no_groupemb",
                     "graph_input_fusion_node_embed_sharp",
                     "graph_input_fusion_node_embed_threshold_group",
+                    "graph_input_fusion_hidden_head",
+                    "graph_input_fusion_node_embed_head",
+                    "graph_input_fusion_struct_feat_head",
+                    "graph_input_fusion_node_embed_struct_feat_head",
                     "graph_input_fusion_group_only",
                     "graph_input_fusion_head_only",
                 ]:
