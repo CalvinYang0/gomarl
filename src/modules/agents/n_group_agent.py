@@ -185,6 +185,7 @@ class GroupAgent(nn.Module):
                         "graph_input_fusion_node_embed_struct_only",
                         "graph_input_fusion_node_embed_sharp",
                         "graph_input_fusion_node_embed_threshold_group",
+                        "graph_input_fusion_node_embed_struct_feat_full_model",
                     ]:
                         self.struct_stat_dim += args.rnn_hidden_dim
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
