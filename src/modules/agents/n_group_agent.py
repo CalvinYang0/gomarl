@@ -25,6 +25,7 @@ class GroupAgent(nn.Module):
         }
         self.no_group_decoupled_modes = {
             "graph_input_fusion_node_embed_struct_feat_decoupled_head",
+            "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
         }
         self.no_group_gcn_modes = {
             "graph_input_fusion_node_embed_gcn_full_head",
@@ -140,6 +141,7 @@ class GroupAgent(nn.Module):
                 "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                 "graph_input_fusion_node_embed_struct_feat_full_head",
                 "graph_input_fusion_node_embed_struct_feat_decoupled_head",
+                "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
                 "graph_input_fusion_node_embed_gcn_full_head",
                 "graph_input_fusion_node_embed_subgraph_full_head",
                 "graph_input_fusion_node_embed_struct_feat_full_model",
@@ -171,6 +173,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head",
                     "graph_input_fusion_node_embed_struct_feat_decoupled_head",
+                    "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
                     "graph_input_fusion_node_embed_gcn_full_head",
                     "graph_input_fusion_node_embed_subgraph_full_head",
                     "graph_input_fusion_node_embed_struct_feat_full_model",
@@ -211,6 +214,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head",
                     "graph_input_fusion_node_embed_struct_feat_decoupled_head",
+                    "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
                     "graph_input_fusion_node_embed_gcn_full_head",
                     "graph_input_fusion_node_embed_subgraph_full_head",
                     "graph_input_fusion_node_embed_struct_feat_full_model",
@@ -274,18 +278,34 @@ class GroupAgent(nn.Module):
                         self.hyper_bottleneck_w = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.rnn_hidden_dim)
                         self.hyper_bottleneck_b = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim)
                 elif self.group_head_mode in self.no_group_decoupled_modes:
-                    self.node_head_encoder = nn.Sequential(
-                        nn.Linear(args.rnn_hidden_dim, args.hypernet_embed),
-                        nn.ReLU(inplace=True),
-                        nn.Linear(args.hypernet_embed, args.hypernet_embed),
-                        nn.Tanh(),
-                    )
-                    self.graph_head_encoder = nn.Sequential(
-                        nn.Linear(args.hypernet_embed, args.hypernet_embed),
-                        nn.ReLU(inplace=True),
-                        nn.Linear(args.hypernet_embed, args.hypernet_embed),
-                        nn.Tanh(),
-                    )
+                    if self.group_head_mode == "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head":
+                        self.head_input_encoder = nn.Sequential(
+                            nn.Linear(args.rnn_hidden_dim + args.hypernet_embed, args.hypernet_embed),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                            nn.Tanh(),
+                        )
+                        self.node_head_encoder = nn.Sequential(
+                            nn.Linear(args.rnn_hidden_dim, args.hypernet_embed),
+                            nn.Tanh(),
+                        )
+                        self.graph_head_encoder = nn.Sequential(
+                            nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                            nn.Tanh(),
+                        )
+                    else:
+                        self.node_head_encoder = nn.Sequential(
+                            nn.Linear(args.rnn_hidden_dim, args.hypernet_embed),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                            nn.Tanh(),
+                        )
+                        self.graph_head_encoder = nn.Sequential(
+                            nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                            nn.Tanh(),
+                        )
                     self.hyper_bottleneck_w = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.rnn_hidden_dim)
                     self.hyper_bottleneck_b = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim)
                 elif self.group_head_mode in self.no_group_gcn_modes:
@@ -545,6 +565,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
             "graph_input_fusion_node_embed_struct_feat_full_head",
             "graph_input_fusion_node_embed_struct_feat_decoupled_head",
+            "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
             "graph_input_fusion_node_embed_struct_feat_full_model",
             "graph_input_fusion_fixed_group",
             "graph_input_fusion_group_only",
@@ -651,6 +672,11 @@ class GroupAgent(nn.Module):
         struct_feat = self._build_graph_struct_features(group_graphs)
         node_state = self.node_head_encoder(node_embed.reshape(b * a, -1)).view(b, a, -1)
         graph_state = self.graph_head_encoder(struct_feat.reshape(b * a, -1)).view(b, a, -1)
+        if self.group_head_mode == "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head":
+            fused = th.cat([node_embed, struct_feat], dim=-1)
+            shared_state = self.head_input_encoder(fused.reshape(b * a, -1)).view(b, a, -1)
+            node_state = shared_state + node_state
+            graph_state = shared_state + graph_state
         return group_probs, struct_feat, group_graphs, node_state, graph_state, node_embed
 
     def _build_graph_input_fusion_no_group_gcn(self, h, graph_context):
@@ -827,6 +853,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
             "graph_input_fusion_node_embed_struct_feat_full_head",
             "graph_input_fusion_node_embed_struct_feat_decoupled_head",
+            "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
             "graph_input_fusion_node_embed_gcn_full_head",
             "graph_input_fusion_node_embed_subgraph_full_head",
             "graph_input_fusion_node_embed_struct_feat_full_model",
@@ -875,6 +902,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head",
                     "graph_input_fusion_node_embed_struct_feat_decoupled_head",
+                    "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
                     "graph_input_fusion_node_embed_gcn_full_head",
                     "graph_input_fusion_node_embed_subgraph_full_head",
                     "graph_input_fusion_node_embed_struct_feat_full_model",
