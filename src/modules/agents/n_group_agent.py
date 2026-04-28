@@ -22,6 +22,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_feat_two_layer_head",
             "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
             "graph_input_fusion_node_embed_struct_feat_full_head",
+            "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
         }
         self.no_group_decoupled_modes = {
             "graph_input_fusion_node_embed_struct_feat_decoupled_head",
@@ -130,6 +131,8 @@ class GroupAgent(nn.Module):
                 "graph_input_fusion",
                 "graph_input_fusion_node_embed",
                 "graph_input_fusion_node_embed_no_groupemb",
+                "graph_input_fusion_node_embed_no_reg",
+                "graph_input_fusion_node_embed_no_groupemb_no_reg",
                 "graph_input_fusion_node_embed_struct_only",
                 "graph_input_fusion_node_embed_sharp",
                 "graph_input_fusion_node_embed_threshold_group",
@@ -162,6 +165,8 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion",
                     "graph_input_fusion_node_embed",
                     "graph_input_fusion_node_embed_no_groupemb",
+                    "graph_input_fusion_node_embed_no_reg",
+                    "graph_input_fusion_node_embed_no_groupemb_no_reg",
                     "graph_input_fusion_node_embed_struct_only",
                     "graph_input_fusion_node_embed_sharp",
                     "graph_input_fusion_node_embed_threshold_group",
@@ -185,10 +190,13 @@ class GroupAgent(nn.Module):
                     if self.group_head_mode in [
                         "graph_input_fusion_node_embed",
                         "graph_input_fusion_node_embed_no_groupemb",
+                        "graph_input_fusion_node_embed_no_reg",
+                        "graph_input_fusion_node_embed_no_groupemb_no_reg",
                         "graph_input_fusion_node_embed_struct_only",
                         "graph_input_fusion_node_embed_sharp",
                         "graph_input_fusion_node_embed_threshold_group",
                         "graph_input_fusion_node_embed_struct_feat_full_model",
+                        "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
                     ]:
                         self.struct_stat_dim += args.rnn_hidden_dim
                 self.attn_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
@@ -203,6 +211,8 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion",
                     "graph_input_fusion_node_embed",
                     "graph_input_fusion_node_embed_no_groupemb",
+                    "graph_input_fusion_node_embed_no_reg",
+                    "graph_input_fusion_node_embed_no_groupemb_no_reg",
                     "graph_input_fusion_node_embed_struct_only",
                     "graph_input_fusion_node_embed_sharp",
                     "graph_input_fusion_node_embed_threshold_group",
@@ -554,6 +564,8 @@ class GroupAgent(nn.Module):
             "graph_input_fusion",
             "graph_input_fusion_node_embed",
             "graph_input_fusion_node_embed_no_groupemb",
+            "graph_input_fusion_node_embed_no_reg",
+            "graph_input_fusion_node_embed_no_groupemb_no_reg",
             "graph_input_fusion_node_embed_struct_only",
             "graph_input_fusion_node_embed_sharp",
             "graph_input_fusion_node_embed_threshold_group",
@@ -564,6 +576,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_feat_two_layer_head",
             "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
             "graph_input_fusion_node_embed_struct_feat_full_head",
+            "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
             "graph_input_fusion_node_embed_struct_feat_decoupled_head",
             "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
             "graph_input_fusion_node_embed_struct_feat_full_model",
@@ -575,10 +588,13 @@ class GroupAgent(nn.Module):
             if self.group_head_mode in [
                 "graph_input_fusion_node_embed",
                 "graph_input_fusion_node_embed_no_groupemb",
+                "graph_input_fusion_node_embed_no_reg",
+                "graph_input_fusion_node_embed_no_groupemb_no_reg",
                 "graph_input_fusion_node_embed_struct_only",
                 "graph_input_fusion_node_embed_sharp",
                 "graph_input_fusion_node_embed_threshold_group",
                 "graph_input_fusion_node_embed_struct_feat_full_model",
+                "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
             ]:
                 struct_input = th.cat([node_embed, struct_input], dim=-1)
         elif self.group_head_mode == "graph_better_struct_topk_signature":
@@ -724,6 +740,7 @@ class GroupAgent(nn.Module):
             q = self.static_out_head(bottleneck).view(b * a, 1, self.action_dim)
         elif self.group_head_mode in {
             "graph_input_fusion_node_embed_struct_feat_full_head",
+            "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
             "graph_input_fusion_node_embed_gcn_full_head",
         }:
             bottleneck_w = self.hyper_bottleneck_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.a_h_dim)
@@ -842,6 +859,8 @@ class GroupAgent(nn.Module):
             "graph_input_fusion",
             "graph_input_fusion_node_embed",
             "graph_input_fusion_node_embed_no_groupemb",
+            "graph_input_fusion_node_embed_no_reg",
+            "graph_input_fusion_node_embed_no_groupemb_no_reg",
             "graph_input_fusion_node_embed_struct_only",
             "graph_input_fusion_node_embed_sharp",
             "graph_input_fusion_node_embed_threshold_group",
@@ -852,6 +871,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_feat_two_layer_head",
             "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
             "graph_input_fusion_node_embed_struct_feat_full_head",
+            "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
             "graph_input_fusion_node_embed_struct_feat_decoupled_head",
             "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
             "graph_input_fusion_node_embed_gcn_full_head",
@@ -892,6 +912,8 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion",
                     "graph_input_fusion_node_embed",
                     "graph_input_fusion_node_embed_no_groupemb",
+                    "graph_input_fusion_node_embed_no_reg",
+                    "graph_input_fusion_node_embed_no_groupemb_no_reg",
                     "graph_input_fusion_node_embed_sharp",
                     "graph_input_fusion_node_embed_threshold_group",
                     "graph_input_fusion_hidden_head",
@@ -901,6 +923,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_feat_two_layer_head",
                     "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head",
+                    "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
                     "graph_input_fusion_node_embed_struct_feat_decoupled_head",
                     "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
                     "graph_input_fusion_node_embed_gcn_full_head",
@@ -915,6 +938,8 @@ class GroupAgent(nn.Module):
                         if self.group_head_mode in [
                             "graph_input_fusion_node_embed",
                             "graph_input_fusion_node_embed_no_groupemb",
+                            "graph_input_fusion_node_embed_no_reg",
+                            "graph_input_fusion_node_embed_no_groupemb_no_reg",
                             "graph_input_fusion_node_embed_sharp",
                             "graph_input_fusion_node_embed_threshold_group",
                         ]
@@ -929,7 +954,10 @@ class GroupAgent(nn.Module):
                 group_emb = th.matmul(group_probs, self.group_embeddings)
                 if self.group_head_mode == "graph_input_fusion_group_only":
                     group_state = self.group_decoder(group_emb.reshape(b * a, -1)).view(b, a, -1)
-                elif self.group_head_mode == "graph_input_fusion_node_embed_no_groupemb":
+                elif self.group_head_mode in {
+                    "graph_input_fusion_node_embed_no_groupemb",
+                    "graph_input_fusion_node_embed_no_groupemb_no_reg",
+                }:
                     group_state = self.group_decoder(struct_feat.reshape(b * a, -1)).view(b, a, -1)
                 else:
                     group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
