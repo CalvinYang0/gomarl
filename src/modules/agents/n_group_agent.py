@@ -632,7 +632,7 @@ class GroupAgent(nn.Module):
             return group_probs, zero_struct, zero_graph, head_feat, node_embed
 
         group_graphs = self._build_attention_graph(h, graph_source=node_embed)
-        struct_feat = self._build_graph_struct_features(group_graphs)
+        struct_feat = self._build_graph_struct_features(group_graphs, node_embed=node_embed)
         if self.group_head_mode == "graph_input_fusion_struct_feat_head":
             head_feat = struct_feat
         elif self.group_head_mode in self.no_group_param_scope_modes or self.group_head_mode == "graph_input_fusion_node_embed_struct_feat_head":
