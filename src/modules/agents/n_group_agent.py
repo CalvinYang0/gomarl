@@ -23,6 +23,9 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
             "graph_input_fusion_node_embed_struct_feat_full_head",
         }
+        self.no_group_decoupled_modes = {
+            "graph_input_fusion_node_embed_struct_feat_decoupled_head",
+        }
         self.no_group_full_model_modes = {
             "graph_input_fusion_node_embed_struct_feat_full_model",
         }
@@ -31,6 +34,7 @@ class GroupAgent(nn.Module):
             self.group_head_mode == "graph_input_fusion_node_embed_struct_only"
             or self.group_head_mode in self.no_group_head_compare_modes
             or self.group_head_mode in self.no_group_param_scope_modes
+            or self.group_head_mode in self.no_group_decoupled_modes
             or self.group_head_mode in self.no_group_full_model_modes
         ):
             self.group_num = 1
@@ -127,6 +131,7 @@ class GroupAgent(nn.Module):
                 "graph_input_fusion_node_embed_struct_feat_two_layer_head",
                 "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                 "graph_input_fusion_node_embed_struct_feat_full_head",
+                "graph_input_fusion_node_embed_struct_feat_decoupled_head",
                 "graph_input_fusion_node_embed_struct_feat_full_model",
                 "graph_input_fusion_fixed_group",
                 "graph_input_fusion_group_only",
@@ -155,6 +160,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_feat_two_layer_head",
                     "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head",
+                    "graph_input_fusion_node_embed_struct_feat_decoupled_head",
                     "graph_input_fusion_node_embed_struct_feat_full_model",
                     "graph_input_fusion_fixed_group",
                     "graph_input_fusion_group_only",
@@ -191,6 +197,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_feat_two_layer_head",
                     "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head",
+                    "graph_input_fusion_node_embed_struct_feat_decoupled_head",
                     "graph_input_fusion_node_embed_struct_feat_full_model",
                     "graph_input_fusion_fixed_group",
                     "graph_input_fusion_group_only",
@@ -251,6 +258,21 @@ class GroupAgent(nn.Module):
                     elif self.group_head_mode == "graph_input_fusion_node_embed_struct_feat_full_head":
                         self.hyper_bottleneck_w = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.rnn_hidden_dim)
                         self.hyper_bottleneck_b = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim)
+                elif self.group_head_mode in self.no_group_decoupled_modes:
+                    self.node_head_encoder = nn.Sequential(
+                        nn.Linear(args.rnn_hidden_dim, args.hypernet_embed),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                        nn.Tanh(),
+                    )
+                    self.graph_head_encoder = nn.Sequential(
+                        nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                        nn.ReLU(inplace=True),
+                        nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                        nn.Tanh(),
+                    )
+                    self.hyper_bottleneck_w = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.rnn_hidden_dim)
+                    self.hyper_bottleneck_b = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim)
                 elif self.group_head_mode in self.no_group_full_model_modes:
                     self.head_input_encoder = nn.Sequential(
                         nn.Linear(args.rnn_hidden_dim + args.hypernet_embed, args.hypernet_embed),
@@ -277,6 +299,7 @@ class GroupAgent(nn.Module):
                     and self.group_head_mode != "graph_input_fusion_node_embed_struct_only"
                     and self.group_head_mode not in self.no_group_head_compare_modes
                     and self.group_head_mode not in self.no_group_param_scope_modes
+                    and self.group_head_mode not in self.no_group_decoupled_modes
                     and self.group_head_mode not in self.no_group_full_model_modes
                 ):
                     self.group_assign = nn.Linear(args.hypernet_embed, self.group_num)
@@ -473,6 +496,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_feat_two_layer_head",
             "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
             "graph_input_fusion_node_embed_struct_feat_full_head",
+            "graph_input_fusion_node_embed_struct_feat_decoupled_head",
             "graph_input_fusion_node_embed_struct_feat_full_model",
             "graph_input_fusion_fixed_group",
             "graph_input_fusion_group_only",
@@ -571,6 +595,16 @@ class GroupAgent(nn.Module):
             head_feat = struct_feat
         return group_probs, struct_feat, group_graphs, head_feat, node_embed
 
+    def _build_graph_input_fusion_no_group_decoupled(self, h, graph_context):
+        b, a, _ = h.size()
+        group_probs = h.new_ones(b, a, 1)
+        node_embed = self._build_graph_input_fusion_source(h, graph_context)
+        group_graphs = self._build_attention_graph(h, graph_source=node_embed)
+        struct_feat = self._build_graph_struct_features(group_graphs)
+        node_state = self.node_head_encoder(node_embed.reshape(b * a, -1)).view(b, a, -1)
+        graph_state = self.graph_head_encoder(struct_feat.reshape(b * a, -1)).view(b, a, -1)
+        return group_probs, struct_feat, group_graphs, node_state, graph_state, node_embed
+
     def _apply_no_group_dynamic_head(self, h, head_feat):
         b, a, _ = h.size()
         group_state = self.group_decoder(head_feat.reshape(b * a, -1)).view(b, a, -1)
@@ -598,6 +632,23 @@ class GroupAgent(nn.Module):
             fc2_w = self.hyper_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.action_dim)
             fc2_b = self.hyper_b(group_state.reshape(b * a, -1)).reshape(b * a, 1, self.action_dim)
             q = th.matmul(h.reshape(b * a, 1, self.a_h_dim), fc2_w) + fc2_b
+        return q.view(b, a, -1), group_state
+
+    def _apply_no_group_decoupled_head(self, h, node_state, graph_state):
+        b, a, _ = h.size()
+        node_flat = node_state.reshape(b * a, -1)
+        graph_flat = graph_state.reshape(b * a, -1)
+
+        bottleneck_w = self.hyper_bottleneck_w(node_flat).reshape(b * a, self.a_h_dim, self.a_h_dim)
+        bottleneck_b = self.hyper_bottleneck_b(node_flat).reshape(b * a, 1, self.a_h_dim)
+        bottleneck = th.matmul(h.reshape(b * a, 1, self.a_h_dim), bottleneck_w) + bottleneck_b
+        bottleneck = F.relu(bottleneck, inplace=True)
+
+        fc2_w = self.hyper_w(graph_flat).reshape(b * a, self.a_h_dim, self.action_dim)
+        fc2_b = self.hyper_b(graph_flat).reshape(b * a, 1, self.action_dim)
+        q = th.matmul(bottleneck, fc2_w) + fc2_b
+
+        group_state = 0.5 * (node_state + graph_state)
         return q.view(b, a, -1), group_state
 
     def _apply_no_group_full_model(self, inputs, h_prev, head_feat):
@@ -696,6 +747,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_feat_two_layer_head",
             "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
             "graph_input_fusion_node_embed_struct_feat_full_head",
+            "graph_input_fusion_node_embed_struct_feat_decoupled_head",
             "graph_input_fusion_node_embed_struct_feat_full_model",
             "graph_input_fusion_group_only",
             "graph_input_fusion_head_only",
@@ -706,6 +758,11 @@ class GroupAgent(nn.Module):
             elif self.group_head_mode in self.no_group_head_compare_modes or self.group_head_mode in self.no_group_param_scope_modes:
                 group_probs, struct_feat, group_graphs, head_feat, node_embed = self._build_graph_input_fusion_no_group_head(h, graph_context)
                 q, group_state = self._apply_no_group_dynamic_head(h, head_feat)
+            elif self.group_head_mode in self.no_group_decoupled_modes:
+                group_probs, struct_feat, group_graphs, node_state, graph_state, node_embed = (
+                    self._build_graph_input_fusion_no_group_decoupled(h, graph_context)
+                )
+                q, group_state = self._apply_no_group_decoupled_head(h, node_state, graph_state)
             elif self.group_head_mode in self.no_group_full_model_modes:
                 h_prev = hidden_state.view(b, a, -1)
                 group_probs, struct_feat, group_graphs, head_feat, node_embed = self._build_graph_input_fusion_no_group_head(h_prev, graph_context)
@@ -726,6 +783,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_feat_two_layer_head",
                     "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head",
+                    "graph_input_fusion_node_embed_struct_feat_decoupled_head",
                     "graph_input_fusion_node_embed_struct_feat_full_model",
                     "graph_input_fusion_group_only",
                     "graph_input_fusion_head_only",
@@ -754,7 +812,12 @@ class GroupAgent(nn.Module):
                     group_state = self.group_decoder(struct_feat.reshape(b * a, -1)).view(b, a, -1)
                 else:
                     group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
-            if self.group_head_mode not in self.no_group_head_compare_modes and self.group_head_mode not in self.no_group_param_scope_modes:
+            if (
+                self.group_head_mode not in self.no_group_head_compare_modes
+                and self.group_head_mode not in self.no_group_param_scope_modes
+                and self.group_head_mode not in self.no_group_decoupled_modes
+                and self.group_head_mode not in self.no_group_full_model_modes
+            ):
                 fc2_w = self.hyper_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.action_dim)
                 fc2_b = self.hyper_b(group_state.reshape(b * a, -1)).reshape(b * a, 1, self.action_dim)
                 q = th.matmul(h.reshape(b * a, 1, self.a_h_dim), fc2_w) + fc2_b
