@@ -143,6 +143,7 @@ class GroupAgent(nn.Module):
                 "graph_input_fusion_node_embed_struct_feat_two_layer_head",
                 "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                 "graph_input_fusion_node_embed_struct_feat_full_head",
+                "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
                 "graph_input_fusion_node_embed_struct_feat_decoupled_head",
                 "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
                 "graph_input_fusion_node_embed_gcn_full_head",
