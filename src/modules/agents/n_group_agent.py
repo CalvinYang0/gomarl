@@ -287,7 +287,10 @@ class GroupAgent(nn.Module):
                         self.hyper_bottleneck_w = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.rnn_hidden_dim)
                         self.hyper_bottleneck_b = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim)
                         self.static_out_head = nn.Linear(args.rnn_hidden_dim, args.n_actions)
-                    elif self.group_head_mode == "graph_input_fusion_node_embed_struct_feat_full_head":
+                    elif self.group_head_mode in {
+                        "graph_input_fusion_node_embed_struct_feat_full_head",
+                        "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
+                    }:
                         self.hyper_bottleneck_w = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.rnn_hidden_dim)
                         self.hyper_bottleneck_b = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim)
                 elif self.group_head_mode in self.no_group_decoupled_modes:
