@@ -23,6 +23,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
             "graph_input_fusion_node_embed_struct_feat_full_head",
             "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
+            "graph_input_fusion_node_embed_struct_feat_full_head_residual",
         }
         self.no_group_decoupled_modes = {
             "graph_input_fusion_node_embed_struct_feat_decoupled_head",
@@ -144,6 +145,7 @@ class GroupAgent(nn.Module):
                 "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                 "graph_input_fusion_node_embed_struct_feat_full_head",
                 "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
+                "graph_input_fusion_node_embed_struct_feat_full_head_residual",
                 "graph_input_fusion_node_embed_struct_feat_decoupled_head",
                 "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
                 "graph_input_fusion_node_embed_gcn_full_head",
@@ -179,6 +181,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
+                    "graph_input_fusion_node_embed_struct_feat_full_head_residual",
                     "graph_input_fusion_node_embed_struct_feat_decoupled_head",
                     "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
                     "graph_input_fusion_node_embed_gcn_full_head",
@@ -226,6 +229,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
+                    "graph_input_fusion_node_embed_struct_feat_full_head_residual",
                     "graph_input_fusion_node_embed_struct_feat_decoupled_head",
                     "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
                     "graph_input_fusion_node_embed_gcn_full_head",
@@ -290,9 +294,13 @@ class GroupAgent(nn.Module):
                     elif self.group_head_mode in {
                         "graph_input_fusion_node_embed_struct_feat_full_head",
                         "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
+                        "graph_input_fusion_node_embed_struct_feat_full_head_residual",
                     }:
                         self.hyper_bottleneck_w = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.rnn_hidden_dim)
                         self.hyper_bottleneck_b = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim)
+                        if self.group_head_mode == "graph_input_fusion_node_embed_struct_feat_full_head_residual":
+                            self.static_out_head = nn.Linear(args.rnn_hidden_dim, args.n_actions)
+                            self.dynamic_residual_scale = getattr(args, "dynamic_residual_scale", 0.3)
                 elif self.group_head_mode in self.no_group_decoupled_modes:
                     if self.group_head_mode == "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head":
                         self.head_input_encoder = nn.Sequential(
@@ -583,6 +591,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
             "graph_input_fusion_node_embed_struct_feat_full_head",
             "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
+            "graph_input_fusion_node_embed_struct_feat_full_head_residual",
             "graph_input_fusion_node_embed_struct_feat_decoupled_head",
             "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
             "graph_input_fusion_node_embed_struct_feat_full_model",
@@ -747,6 +756,7 @@ class GroupAgent(nn.Module):
         elif self.group_head_mode in {
             "graph_input_fusion_node_embed_struct_feat_full_head",
             "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
+            "graph_input_fusion_node_embed_struct_feat_full_head_residual",
             "graph_input_fusion_node_embed_gcn_full_head",
         }:
             bottleneck_w = self.hyper_bottleneck_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.a_h_dim)
@@ -755,7 +765,12 @@ class GroupAgent(nn.Module):
             bottleneck = F.relu(bottleneck, inplace=True)
             fc2_w = self.hyper_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.action_dim)
             fc2_b = self.hyper_b(group_state.reshape(b * a, -1)).reshape(b * a, 1, self.action_dim)
-            q = th.matmul(bottleneck, fc2_w) + fc2_b
+            q_dynamic = th.matmul(bottleneck, fc2_w) + fc2_b
+            if self.group_head_mode == "graph_input_fusion_node_embed_struct_feat_full_head_residual":
+                q_static = self.static_out_head(h.reshape(b * a, self.a_h_dim)).view(b * a, 1, self.action_dim)
+                q = q_static + self.dynamic_residual_scale * q_dynamic
+            else:
+                q = q_dynamic
         else:
             fc2_w = self.hyper_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.action_dim)
             fc2_b = self.hyper_b(group_state.reshape(b * a, -1)).reshape(b * a, 1, self.action_dim)
@@ -878,6 +893,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
             "graph_input_fusion_node_embed_struct_feat_full_head",
             "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
+            "graph_input_fusion_node_embed_struct_feat_full_head_residual",
             "graph_input_fusion_node_embed_struct_feat_decoupled_head",
             "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
             "graph_input_fusion_node_embed_gcn_full_head",
@@ -930,6 +946,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head",
                     "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
+                    "graph_input_fusion_node_embed_struct_feat_full_head_residual",
                     "graph_input_fusion_node_embed_struct_feat_decoupled_head",
                     "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
                     "graph_input_fusion_node_embed_gcn_full_head",
