@@ -29,11 +29,13 @@ class NMAC(BasicMAC):
         graph_context = self._build_graph_context(ep_batch, t)
 
         agent_outs, self.hidden_states, self.group_states, self.group_probs, self.group_graphs = self.agent(
-            agent_inputs, self.hidden_states, graph_context=graph_context
+            agent_inputs, self.hidden_states, graph_context=graph_context, test_mode=test_mode
         )
         self.group_struct_features = self.agent.group_struct_features
         self.group_node_embeddings = self.agent.group_node_embeddings
         self.group_role_prototypes = self.agent.group_role_prototypes
         self.current_groups = self.agent.current_groups
+        self.distill_teacher_q = self.agent.distill_teacher_q
+        self.distill_student_q = self.agent.distill_student_q
 
         return agent_outs

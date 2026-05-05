@@ -355,6 +355,8 @@ class GROUPLearner:
         mac_group_graphs = []
         mac_struct_features = []
         mac_node_embeddings = []
+        mac_distill_teacher_q = []
+        mac_distill_student_q = []
 
         self.mac.init_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
@@ -365,6 +367,14 @@ class GROUPLearner:
             mac_group_graphs.append(self.mac.group_graphs)
             mac_struct_features.append(self.mac.group_struct_features)
             mac_node_embeddings.append(self.mac.group_node_embeddings)
+            teacher_q = getattr(self.mac, "distill_teacher_q", None)
+            student_q = getattr(self.mac, "distill_student_q", None)
+            if teacher_q is None:
+                teacher_q = agent_outs.new_zeros(agent_outs.shape)
+            if student_q is None:
+                student_q = agent_outs
+            mac_distill_teacher_q.append(teacher_q)
+            mac_distill_student_q.append(student_q)
             mac_out.append(agent_outs)
 
         mac_out = th.stack(mac_out, dim=1)
@@ -374,6 +384,8 @@ class GROUPLearner:
         mac_group_graphs = th.stack(mac_group_graphs, dim=1)
         mac_struct_features = th.stack(mac_struct_features, dim=1)
         mac_node_embeddings = th.stack(mac_node_embeddings, dim=1)
+        mac_distill_teacher_q = th.stack(mac_distill_teacher_q, dim=1)
+        mac_distill_student_q = th.stack(mac_distill_student_q, dim=1)
         mac_hidden = mac_hidden.detach()
 
         # Pick the Q-Values for the actions taken by each agent
@@ -461,8 +473,25 @@ class GROUPLearner:
             proto_compact_loss = self._zero(chosen_action_qvals)
             proto_sep_loss = self._zero(chosen_action_qvals)
             similarity_group_loss = self._zero(chosen_action_qvals)
+        distill_loss = self._zero(chosen_action_qvals)
+        if getattr(self.args, "full_head_variant", "dynamic") == "distill":
+            distill_td = (mac_distill_student_q[:, :-1] - mac_distill_teacher_q[:, :-1].detach()).pow(2).mean(dim=-1)
+            distill_mask = mask[:, :, 0].expand_as(distill_td) if mask.dim() == 4 else mask.expand_as(distill_td)
+            distill_loss = (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
+            distill_loss = getattr(self.args, "full_head_distill_alpha", 0.0) * distill_loss
 
-        loss = td_loss + lasso_loss + sd_loss + balance_loss + conf_loss + sparse_loss + proto_compact_loss + proto_sep_loss + similarity_group_loss
+        loss = (
+            td_loss
+            + lasso_loss
+            + sd_loss
+            + balance_loss
+            + conf_loss
+            + sparse_loss
+            + proto_compact_loss
+            + proto_sep_loss
+            + similarity_group_loss
+            + distill_loss
+        )
 
         # Optimise
         self.optimiser.zero_grad()
@@ -485,6 +514,7 @@ class GROUPLearner:
             self.logger.log_stat("total_loss", loss.item(), t_env)
             self.logger.log_stat("lasso_loss", lasso_loss.item(), t_env)
             self.logger.log_stat("sd_loss", sd_loss.item(), t_env)
+            self.logger.log_stat("distill_loss", distill_loss.item(), t_env)
             if self.args.mixer == "group_vdn":
                 self.logger.log_stat("group_balance_loss", balance_loss.item(), t_env)
                 self.logger.log_stat("group_conf_loss", conf_loss.item(), t_env)
