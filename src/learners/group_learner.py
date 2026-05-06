@@ -357,6 +357,7 @@ class GROUPLearner:
         mac_node_embeddings = []
         mac_distill_teacher_q = []
         mac_distill_student_q = []
+        mac_belief_aux = []
 
         self.mac.init_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
@@ -375,6 +376,10 @@ class GROUPLearner:
                 student_q = agent_outs
             mac_distill_teacher_q.append(teacher_q)
             mac_distill_student_q.append(student_q)
+            belief_aux = getattr(self.mac, "belief_aux_loss", None)
+            if belief_aux is None:
+                belief_aux = agent_outs.new_tensor(0.0)
+            mac_belief_aux.append(belief_aux)
             mac_out.append(agent_outs)
 
         mac_out = th.stack(mac_out, dim=1)
@@ -386,6 +391,7 @@ class GROUPLearner:
         mac_node_embeddings = th.stack(mac_node_embeddings, dim=1)
         mac_distill_teacher_q = th.stack(mac_distill_teacher_q, dim=1)
         mac_distill_student_q = th.stack(mac_distill_student_q, dim=1)
+        mac_belief_aux = th.stack(mac_belief_aux, dim=0)
         mac_hidden = mac_hidden.detach()
 
         # Pick the Q-Values for the actions taken by each agent
@@ -474,11 +480,16 @@ class GROUPLearner:
             proto_sep_loss = self._zero(chosen_action_qvals)
             similarity_group_loss = self._zero(chosen_action_qvals)
         distill_loss = self._zero(chosen_action_qvals)
-        if getattr(self.args, "full_head_variant", "dynamic") == "distill":
+        full_head_variant = getattr(self.args, "full_head_variant", "dynamic").replace("-", "_")
+        if full_head_variant in {"distill", "ptde_strict", "pid_dropout", "belief_cond"}:
             distill_td = (mac_distill_student_q[:, :-1] - mac_distill_teacher_q[:, :-1].detach()).pow(2).mean(dim=-1)
             distill_mask = mask[:, :, 0].expand_as(distill_td) if mask.dim() == 4 else mask.expand_as(distill_td)
             distill_loss = (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
             distill_loss = getattr(self.args, "full_head_distill_alpha", 0.0) * distill_loss
+        belief_aux_loss = self._zero(chosen_action_qvals)
+        if full_head_variant == "belief_cond":
+            belief_aux_loss = mac_belief_aux[:-1].mean()
+            belief_aux_loss = getattr(self.args, "full_head_belief_kl_alpha", 0.0) * belief_aux_loss
 
         loss = (
             td_loss
@@ -491,6 +502,7 @@ class GROUPLearner:
             + proto_sep_loss
             + similarity_group_loss
             + distill_loss
+            + belief_aux_loss
         )
 
         # Optimise
@@ -515,6 +527,7 @@ class GROUPLearner:
             self.logger.log_stat("lasso_loss", lasso_loss.item(), t_env)
             self.logger.log_stat("sd_loss", sd_loss.item(), t_env)
             self.logger.log_stat("distill_loss", distill_loss.item(), t_env)
+            self.logger.log_stat("belief_aux_loss", belief_aux_loss.item(), t_env)
             if self.args.mixer == "group_vdn":
                 self.logger.log_stat("group_balance_loss", balance_loss.item(), t_env)
                 self.logger.log_stat("group_conf_loss", conf_loss.item(), t_env)

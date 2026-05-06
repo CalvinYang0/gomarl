@@ -83,11 +83,25 @@ class GroupAgent(nn.Module):
             "hetero": "hetero_enemy",
             "hetero_graph": "hetero_enemy",
             "heterogeneous": "hetero_enemy",
+            "ptde": "ptde_strict",
+            "belief": "belief_cond",
+            "pid": "pid_dropout",
         }
         self.full_head_variant = legacy_variant_map.get(self.full_head_variant, self.full_head_variant)
+        self.full_head_distill_variants = {
+            "distill",
+            "ptde_strict",
+            "pid_dropout",
+            "belief_cond",
+        }
         self.full_head_param_ema_beta = getattr(args, "full_head_param_ema_beta", 0.99)
         self.full_head_use_ema_in_test = getattr(args, "full_head_use_ema_in_test", True)
         self.rf_fan_mode = getattr(args, "full_head_rf_fan_mode", "fan_in")
+        self.full_head_pid_start = float(getattr(args, "full_head_pid_start", 0.0))
+        self.full_head_pid_end = float(getattr(args, "full_head_pid_end", 0.5))
+        self.full_head_pid_anneal_steps = max(1, int(getattr(args, "full_head_pid_anneal_steps", 2000000)))
+        self.pid_step_count = 0
+        self.full_head_belief_latent_dim = max(4, int(getattr(args, "full_head_belief_latent_dim", args.hypernet_embed)))
         self.full_head_relation_num = max(2, int(getattr(args, "full_head_relation_num", 4)))
         hetero_enemy_nodes = int(getattr(args, "full_head_hetero_enemy_nodes", 0))
         if hetero_enemy_nodes <= 0:
@@ -366,6 +380,17 @@ class GroupAgent(nn.Module):
                             nn.Linear(args.hypernet_embed, args.hypernet_embed),
                             nn.Tanh(),
                         )
+                        self.belief_stat_encoder = nn.Sequential(
+                            nn.Linear(args.rnn_hidden_dim * 2, args.hypernet_embed),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(args.hypernet_embed, 2 * self.full_head_belief_latent_dim),
+                        )
+                        self.belief_head_encoder = nn.Sequential(
+                            nn.Linear(args.hypernet_embed + self.full_head_belief_latent_dim, args.hypernet_embed),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                            nn.Tanh(),
+                        )
                         self.full_head_gcn_encoder = nn.Sequential(
                             nn.Linear(args.rnn_hidden_dim * 2, args.hypernet_embed),
                             nn.ReLU(inplace=True),
@@ -571,6 +596,7 @@ class GroupAgent(nn.Module):
         self.temporal_graph_state = None
         self.distill_teacher_q = None
         self.distill_student_q = None
+        self.belief_aux_loss = None
         self.episode_head_feat_sum = None
         self.episode_head_feat_count = 0
         self.episode_param_sum_wb = None
@@ -606,6 +632,7 @@ class GroupAgent(nn.Module):
         self.temporal_graph_state = None
         self.distill_teacher_q = None
         self.distill_student_q = None
+        self.belief_aux_loss = None
         self.episode_head_feat_sum = None
         self.episode_head_feat_count = 0
         self.episode_param_sum_wb = None
@@ -880,7 +907,7 @@ class GroupAgent(nn.Module):
             head_feat = self.head_input_encoder(node_embed.reshape(b * a, -1)).view(b, a, -1)
             return group_probs, zero_struct, zero_graph, head_feat, node_embed
 
-        if self.full_head_variant == "distill" and test_mode:
+        if self.full_head_variant in self.full_head_distill_variants and test_mode:
             student_head_feat = self.distill_student_encoder(node_embed.reshape(b * a, -1)).view(b, a, -1)
             return group_probs, zero_struct, zero_graph, student_head_feat, node_embed
 
@@ -1125,6 +1152,22 @@ class GroupAgent(nn.Module):
         q = th.matmul(bottleneck, fc2_w) + fc2_b
         return q.view(b, a, -1), bottleneck_w, bottleneck_b, fc2_w, fc2_b
 
+    def _get_pid_dropout_rate(self, test_mode=False):
+        if test_mode or self.full_head_variant != "pid_dropout":
+            return 0.0
+        progress = min(1.0, float(self.pid_step_count) / float(self.full_head_pid_anneal_steps))
+        return self.full_head_pid_start + (self.full_head_pid_end - self.full_head_pid_start) * progress
+
+    def _apply_pid_feature_dropout(self, feat, test_mode=False):
+        drop_rate = self._get_pid_dropout_rate(test_mode=test_mode)
+        if drop_rate <= 0.0:
+            return feat
+        keep_rate = 1.0 - drop_rate
+        if keep_rate <= 1e-8:
+            return th.zeros_like(feat)
+        mask = (th.rand_like(feat) < keep_rate).float()
+        return feat * mask / keep_rate
+
     def _update_head_param_ema_from_agent_params(self, wb_agent, bb_agent, wo_agent, bo_agent):
         if self.head_param_ema_initialized.item() < 0.5:
             self.head_param_ema_wb.copy_(wb_agent)
@@ -1213,6 +1256,7 @@ class GroupAgent(nn.Module):
         b, a, _ = h.size()
         self.distill_teacher_q = None
         self.distill_student_q = None
+        self.belief_aux_loss = None
         group_state = self.group_decoder(head_feat.reshape(b * a, -1)).view(b, a, -1)
 
         if self.group_head_mode == "graph_input_fusion_node_embed_struct_feat_two_layer_head":
@@ -1296,17 +1340,42 @@ class GroupAgent(nn.Module):
                         )
                     else:
                         q = q_dynamic
-                elif self.full_head_variant == "distill":
+                elif self.full_head_variant in self.full_head_distill_variants:
                     student_source = node_embed if node_embed is not None else h
                     student_head_feat = self.distill_student_encoder(student_source.reshape(b * a, -1)).view(b, a, -1)
-                    mean_student_head_feat = self._update_episode_head_feat_mean(student_head_feat)
-                    mean_student_group_state = self.group_decoder(mean_student_head_feat.reshape(b * a, -1)).view(b, a, -1)
-                    q_student, _, _, _, _ = self._build_dynamic_full_head_q(h, mean_student_group_state, head_input=dynamic_input)
+                    if self.full_head_variant == "belief_cond":
+                        belief_input = th.cat([student_source, h], dim=-1)
+                        belief_stats = self.belief_stat_encoder(belief_input.reshape(b * a, -1)).view(
+                            b, a, 2 * self.full_head_belief_latent_dim
+                        )
+                        belief_mu, belief_logvar = th.chunk(belief_stats, 2, dim=-1)
+                        belief_logvar = belief_logvar.clamp(min=-8.0, max=4.0)
+                        belief_std = th.exp(0.5 * belief_logvar)
+                        if test_mode:
+                            belief_latent = belief_mu
+                        else:
+                            belief_latent = belief_mu + th.randn_like(belief_std) * belief_std
+                        belief_feat = th.cat([student_head_feat, belief_latent], dim=-1)
+                        student_head_feat = self.belief_head_encoder(belief_feat.reshape(b * a, -1)).view(b, a, -1)
+                        belief_kl = 0.5 * (
+                            belief_mu.pow(2) + belief_logvar.exp() - 1.0 - belief_logvar
+                        ).mean()
+                        self.belief_aux_loss = belief_kl if not test_mode else h.new_tensor(0.0)
+
+                    student_group_state = self.group_decoder(student_head_feat.reshape(b * a, -1)).view(b, a, -1)
+                    q_student, _, _, _, _ = self._build_dynamic_full_head_q(h, student_group_state, head_input=dynamic_input)
                     self.distill_student_q = q_student
                     if not test_mode:
-                        q_teacher, _, _, _, _ = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
+                        teacher_head_feat = head_feat
+                        if self.full_head_variant == "pid_dropout":
+                            teacher_head_feat = self._apply_pid_feature_dropout(teacher_head_feat, test_mode=False)
+                            self.pid_step_count += 1
+                        teacher_group_state = self.group_decoder(teacher_head_feat.reshape(b * a, -1)).view(b, a, -1)
+                        q_teacher, _, _, _, _ = self._build_dynamic_full_head_q(
+                            h, teacher_group_state, head_input=dynamic_input
+                        )
                         self.distill_teacher_q = q_teacher.detach()
-                    group_state = mean_student_group_state
+                    group_state = student_group_state
                     q = q_student
                 else:
                     q, _, _, _, _ = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
