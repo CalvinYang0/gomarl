@@ -100,6 +100,10 @@ class GroupAgent(nn.Module):
             "node_only_head": "no_struct",
             "no_struct_feat": "no_struct",
             "no_graph_struct": "no_struct",
+            "teacher_q_distill": "teacher_td_qdistill",
+            "teacher_feat_distill": "teacher_td_featdistill",
+            "teacher_only_qdistill": "teacher_td_qdistill",
+            "teacher_only_featdistill": "teacher_td_featdistill",
         }
         self.full_head_variant = legacy_variant_map.get(self.full_head_variant, self.full_head_variant)
         self.full_head_distill_variants = {
@@ -111,12 +115,20 @@ class GroupAgent(nn.Module):
             "pid_dropout",
             "belief_cond",
         }
+        self.full_head_teacher_only_distill_variants = {
+            "teacher_td_qdistill",
+            "teacher_td_featdistill",
+        }
         self.full_head_q_distill_variants = {
             "distill",
             "ptde_strict",
             "distill_q_teacher_td",
             "pid_dropout",
             "belief_cond",
+            "teacher_td_qdistill",
+        }
+        self.full_head_feat_distill_variants = {
+            "teacher_td_featdistill",
         }
         self.full_head_head_distill_variants = {
             "distill_head",
@@ -392,6 +404,42 @@ class GroupAgent(nn.Module):
                             nn.Linear(args.hypernet_embed, args.hypernet_embed),
                             nn.Tanh(),
                         )
+                        if self.full_head_variant in self.full_head_teacher_only_distill_variants:
+                            self.teacher_group_decoder = nn.Sequential(
+                                nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                                nn.ReLU(inplace=True),
+                                nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                                nn.Tanh(),
+                            )
+                            self.teacher_hyper_bottleneck_w = nn.Linear(
+                                args.hypernet_embed, args.rnn_hidden_dim * args.rnn_hidden_dim
+                            )
+                            self.teacher_hyper_bottleneck_b = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim)
+                            self.teacher_hyper_b = nn.Sequential(nn.Linear(args.hypernet_embed, args.n_actions))
+                            self.teacher_hyper_w = nn.Sequential(
+                                nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.n_actions)
+                            )
+                            self.student_group_decoder = nn.Sequential(
+                                nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                                nn.ReLU(inplace=True),
+                                nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                                nn.Tanh(),
+                            )
+                            self.student_hyper_bottleneck_w = nn.Linear(
+                                args.hypernet_embed, args.rnn_hidden_dim * args.rnn_hidden_dim
+                            )
+                            self.student_hyper_bottleneck_b = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim)
+                            self.student_hyper_b = nn.Sequential(nn.Linear(args.hypernet_embed, args.n_actions))
+                            self.student_hyper_w = nn.Sequential(
+                                nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.n_actions)
+                            )
+                            if self.full_head_variant == "teacher_td_featdistill":
+                                self.student_feat_adapter = nn.Sequential(
+                                    nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                                    nn.ReLU(inplace=True),
+                                    nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                                    nn.Tanh(),
+                                )
                         self.hyper_bottleneck_w = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.rnn_hidden_dim)
                         self.hyper_bottleneck_b = nn.Linear(args.hypernet_embed, args.rnn_hidden_dim)
                         self.struct_only_head_encoder = nn.Sequential(
@@ -659,6 +707,8 @@ class GroupAgent(nn.Module):
         self.distill_teacher_group_state = None
         self.distill_teacher_head_params = None
         self.distill_student_head_params = None
+        self.distill_teacher_feat = None
+        self.distill_student_feat = None
         self.belief_aux_loss = None
         self.episode_head_feat_sum = None
         self.episode_head_feat_count = 0
@@ -1240,15 +1290,35 @@ class GroupAgent(nn.Module):
         return mean_feat
 
     def _build_dynamic_full_head_q(self, h, group_state, head_input=None):
+        return self._build_dynamic_full_head_q_with_modules(
+            h,
+            group_state,
+            self.hyper_bottleneck_w,
+            self.hyper_bottleneck_b,
+            self.hyper_w,
+            self.hyper_b,
+            head_input=head_input,
+        )
+
+    def _build_dynamic_full_head_q_with_modules(
+        self,
+        h,
+        group_state,
+        hyper_bottleneck_w,
+        hyper_bottleneck_b,
+        hyper_w,
+        hyper_b,
+        head_input=None,
+    ):
         b, a, _ = h.size()
         head_source = h if head_input is None else head_input
         state_flat = group_state.reshape(b * a, -1)
-        bottleneck_w = self.hyper_bottleneck_w(state_flat).reshape(b * a, self.a_h_dim, self.a_h_dim)
-        bottleneck_b = self.hyper_bottleneck_b(state_flat).reshape(b * a, 1, self.a_h_dim)
+        bottleneck_w = hyper_bottleneck_w(state_flat).reshape(b * a, self.a_h_dim, self.a_h_dim)
+        bottleneck_b = hyper_bottleneck_b(state_flat).reshape(b * a, 1, self.a_h_dim)
         bottleneck = th.matmul(head_source.reshape(b * a, 1, self.a_h_dim), bottleneck_w) + bottleneck_b
         bottleneck = F.relu(bottleneck, inplace=True)
-        fc2_w = self.hyper_w(state_flat).reshape(b * a, self.a_h_dim, self.action_dim)
-        fc2_b = self.hyper_b(state_flat).reshape(b * a, 1, self.action_dim)
+        fc2_w = hyper_w(state_flat).reshape(b * a, self.a_h_dim, self.action_dim)
+        fc2_b = hyper_b(state_flat).reshape(b * a, 1, self.action_dim)
         q = th.matmul(bottleneck, fc2_w) + fc2_b
         return q.view(b, a, -1), bottleneck_w, bottleneck_b, fc2_w, fc2_b
 
@@ -1352,6 +1422,53 @@ class GroupAgent(nn.Module):
         q, _, _, _, _ = self._build_dynamic_full_head_q(h, group_state)
         return q
 
+    def _apply_teacher_only_distill_head(self, h, head_feat, node_embed, dynamic_input, test_mode=False):
+        b, a, _ = h.size()
+        teacher_head_feat = head_feat
+        teacher_group_state = self.teacher_group_decoder(teacher_head_feat.reshape(b * a, -1)).view(b, a, -1)
+        q_teacher, teacher_wb, teacher_bb, teacher_wo, teacher_bo = self._build_dynamic_full_head_q_with_modules(
+            h,
+            teacher_group_state,
+            self.teacher_hyper_bottleneck_w,
+            self.teacher_hyper_bottleneck_b,
+            self.teacher_hyper_w,
+            self.teacher_hyper_b,
+            head_input=dynamic_input,
+        )
+
+        student_source = node_embed if node_embed is not None else h
+        student_base_feat = self.distill_student_encoder(student_source.reshape(b * a, -1)).view(b, a, -1)
+        student_head_feat = student_base_feat
+        if self.full_head_variant == "teacher_td_featdistill":
+            student_head_feat = self.student_feat_adapter(student_base_feat.reshape(b * a, -1)).view(b, a, -1)
+            self.distill_teacher_feat = teacher_head_feat
+            self.distill_student_feat = student_head_feat
+
+        student_group_state = self.student_group_decoder(student_head_feat.reshape(b * a, -1)).view(b, a, -1)
+        q_student, student_wb, student_bb, student_wo, student_bo = self._build_dynamic_full_head_q_with_modules(
+            h,
+            student_group_state,
+            self.student_hyper_bottleneck_w,
+            self.student_hyper_bottleneck_b,
+            self.student_hyper_w,
+            self.student_hyper_b,
+            head_input=dynamic_input,
+        )
+
+        self.distill_teacher_q = q_teacher
+        self.distill_student_q = q_student
+        self.distill_teacher_group_state = teacher_group_state
+        self.distill_teacher_head_params = self._pack_full_head_params(
+            teacher_wb, teacher_bb, teacher_wo, teacher_bo, b, a
+        )
+        self.distill_student_head_params = self._pack_full_head_params(
+            student_wb, student_bb, student_wo, student_bo, b, a
+        )
+
+        if test_mode:
+            return q_student, student_group_state
+        return q_teacher, teacher_group_state
+
     def _apply_no_group_dynamic_head(self, h, head_feat, struct_feat=None, node_embed=None, graph_context=None, test_mode=False):
         b, a, _ = h.size()
         self.distill_teacher_q = None
@@ -1359,6 +1476,8 @@ class GroupAgent(nn.Module):
         self.distill_teacher_group_state = None
         self.distill_teacher_head_params = None
         self.distill_student_head_params = None
+        self.distill_teacher_feat = None
+        self.distill_student_feat = None
         self.belief_aux_loss = None
         group_state = self.group_decoder(head_feat.reshape(b * a, -1)).view(b, a, -1)
 
@@ -1405,6 +1524,14 @@ class GroupAgent(nn.Module):
             else:
                 if self.full_head_variant in {"dynamic", "rf", "grad_decouple", "id_cond", "tri_branch", "no_struct"}:
                     q, _, _, _, _ = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
+                elif self.full_head_variant in self.full_head_teacher_only_distill_variants:
+                    q, group_state = self._apply_teacher_only_distill_head(
+                        h,
+                        head_feat,
+                        node_embed=node_embed,
+                        dynamic_input=dynamic_input,
+                        test_mode=test_mode,
+                    )
                 elif self.full_head_variant == "ema_step":
                     q_dynamic, wb, bb, wo, bo = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
                     if not test_mode:

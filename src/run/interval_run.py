@@ -85,6 +85,20 @@ def evaluate_sequential(args, runner):
 
 def run_sequential(args, logger):
 
+    def _save_checkpoint(save_path, log_prefix):
+        os.makedirs(save_path, exist_ok=True)
+        logger.console_logger.info("{} {}".format(log_prefix, save_path))
+        learner.save_models(save_path)
+
+        if args.use_wandb and args.wandb_save_model:
+            wandb_save_dir = os.path.join(logger.wandb.dir, "models", args.unique_token, os.path.basename(save_path))
+            os.makedirs(wandb_save_dir, exist_ok=True)
+            for file_name in os.listdir(save_path):
+                shutil.copyfile(
+                    os.path.join(save_path, file_name),
+                    os.path.join(wandb_save_dir, file_name),
+                )
+
     runner = r_REGISTRY[args.runner](args=args, logger=logger)
 
     env_info = runner.get_env_info()
@@ -210,19 +224,7 @@ def run_sequential(args, logger):
         if args.save_model and (runner.t_env - model_save_time >= args.save_model_interval or model_save_time == 0):
             model_save_time = runner.t_env
             save_path = os.path.join(args.local_results_path, "models", args.unique_token, str(runner.t_env))
-            os.makedirs(save_path, exist_ok=True)
-            logger.console_logger.info("Saving models to {}".format(save_path))
-
-            learner.save_models(save_path)
-
-            if args.use_wandb and args.wandb_save_model:
-                wandb_save_dir = os.path.join(logger.wandb.dir, "models", args.unique_token, str(runner.t_env))
-                os.makedirs(wandb_save_dir, exist_ok=True)
-                for file_name in os.listdir(save_path):
-                    shutil.copyfile(
-                        os.path.join(save_path, file_name),
-                        os.path.join(wandb_save_dir, file_name),
-                    )
+            _save_checkpoint(save_path, "Saving models to")
 
         if uses_dynamic_grouping(args) and (runner.t_env - last_change_group_T) / args.change_group_interval >= 1.0:
             group_adjustment_mode = getattr(args, "group_adjustment_mode", "contribution")
@@ -253,6 +255,9 @@ def run_sequential(args, logger):
             last_log_T = runner.t_env
 
     runner.close_env()
+    if getattr(args, "save_model_at_end", False):
+        final_save_path = os.path.join(args.local_results_path, "models", args.unique_token, "final")
+        _save_checkpoint(final_save_path, "Saving final models to")
     logger.console_logger.info("Finished Training")
 
 

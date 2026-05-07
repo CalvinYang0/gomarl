@@ -360,6 +360,8 @@ class GROUPLearner:
         mac_distill_teacher_group_state = []
         mac_distill_teacher_head_params = []
         mac_distill_student_head_params = []
+        mac_distill_teacher_feat = []
+        mac_distill_student_feat = []
         mac_belief_aux = []
 
         self.mac.init_hidden(batch.batch_size)
@@ -391,6 +393,14 @@ class GROUPLearner:
                 student_head_params = teacher_head_params
             mac_distill_teacher_head_params.append(teacher_head_params)
             mac_distill_student_head_params.append(student_head_params)
+            teacher_feat = getattr(self.mac, "distill_teacher_feat", None)
+            student_feat = getattr(self.mac, "distill_student_feat", None)
+            if teacher_feat is None:
+                teacher_feat = self.mac.group_states
+            if student_feat is None:
+                student_feat = teacher_feat
+            mac_distill_teacher_feat.append(teacher_feat)
+            mac_distill_student_feat.append(student_feat)
             belief_aux = getattr(self.mac, "belief_aux_loss", None)
             if belief_aux is None:
                 belief_aux = agent_outs.new_tensor(0.0)
@@ -409,6 +419,8 @@ class GROUPLearner:
         mac_distill_teacher_group_state = th.stack(mac_distill_teacher_group_state, dim=1)
         mac_distill_teacher_head_params = th.stack(mac_distill_teacher_head_params, dim=1)
         mac_distill_student_head_params = th.stack(mac_distill_student_head_params, dim=1)
+        mac_distill_teacher_feat = th.stack(mac_distill_teacher_feat, dim=1)
+        mac_distill_student_feat = th.stack(mac_distill_student_feat, dim=1)
         mac_belief_aux = th.stack(mac_belief_aux, dim=0)
         mac_hidden = mac_hidden.detach()
 
@@ -464,6 +476,8 @@ class GROUPLearner:
             "distill_head_teacher_td",
             "belief_cond",
             "pid_dropout",
+            "teacher_td_qdistill",
+            "teacher_td_featdistill",
         }
         q_distill_variants = {
             "distill",
@@ -471,6 +485,10 @@ class GROUPLearner:
             "distill_q_teacher_td",
             "pid_dropout",
             "belief_cond",
+            "teacher_td_qdistill",
+        }
+        feat_distill_variants = {
+            "teacher_td_featdistill",
         }
         head_distill_variants = {
             "distill_head",
@@ -552,6 +570,13 @@ class GROUPLearner:
         distill_loss = self._zero(chosen_action_qvals)
         if full_head_variant in q_distill_variants:
             distill_td = (mac_distill_student_q[:, :-1] - mac_distill_teacher_q[:, :-1].detach()).pow(2).mean(dim=-1)
+            distill_mask = mask[:, :, 0].expand_as(distill_td) if mask.dim() == 4 else mask.expand_as(distill_td)
+            distill_loss = (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
+            distill_loss = getattr(self.args, "full_head_distill_alpha", 0.0) * distill_loss
+        elif full_head_variant in feat_distill_variants:
+            distill_td = (
+                mac_distill_student_feat[:, :-1] - mac_distill_teacher_feat[:, :-1].detach()
+            ).pow(2).mean(dim=-1)
             distill_mask = mask[:, :, 0].expand_as(distill_td) if mask.dim() == 4 else mask.expand_as(distill_td)
             distill_loss = (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
             distill_loss = getattr(self.args, "full_head_distill_alpha", 0.0) * distill_loss

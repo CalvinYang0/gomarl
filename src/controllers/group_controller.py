@@ -40,6 +40,8 @@ class NMAC(BasicMAC):
         self.distill_teacher_group_state = self.agent.distill_teacher_group_state
         self.distill_teacher_head_params = self.agent.distill_teacher_head_params
         self.distill_student_head_params = self.agent.distill_student_head_params
+        self.distill_teacher_feat = self.agent.distill_teacher_feat
+        self.distill_student_feat = self.agent.distill_student_feat
         self.belief_aux_loss = self.agent.belief_aux_loss
 
         return agent_outs
