@@ -74,6 +74,10 @@ class GroupAgent(nn.Module):
             "grad_separate": "grad_decouple",
             "rf_strategy": "rf",
             "with_id": "id_cond",
+            "three_branch": "tri_branch",
+            "three_branch_mlp": "tri_branch",
+            "triple_branch": "tri_branch",
+            "tri_mlp": "tri_branch",
             "tgn": "temporal_gnn",
             "temporal": "temporal_gnn",
             "edge": "edge_gnn",
@@ -400,6 +404,34 @@ class GroupAgent(nn.Module):
                         )
                         self.id_cond_head_encoder = nn.Sequential(
                             nn.Linear(args.hypernet_embed + args.n_agents, args.hypernet_embed),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                            nn.Tanh(),
+                        )
+                        self.tri_obs_head_encoder = (
+                            nn.Sequential(
+                                nn.Linear(self.graph_obs_dim, args.hypernet_embed),
+                                nn.ReLU(inplace=True),
+                                nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                                nn.Tanh(),
+                            )
+                            if self.graph_obs_dim > 0
+                            else None
+                        )
+                        self.tri_action_head_encoder = nn.Sequential(
+                            nn.Linear(args.n_actions, args.hypernet_embed),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                            nn.Tanh(),
+                        )
+                        self.tri_graph_head_encoder = nn.Sequential(
+                            nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(args.hypernet_embed, args.hypernet_embed),
+                            nn.Tanh(),
+                        )
+                        self.tri_branch_fuse_encoder = nn.Sequential(
+                            nn.Linear(args.hypernet_embed * 3, args.hypernet_embed),
                             nn.ReLU(inplace=True),
                             nn.Linear(args.hypernet_embed, args.hypernet_embed),
                             nn.Tanh(),
@@ -1030,6 +1062,25 @@ class GroupAgent(nn.Module):
         obs_action = th.cat([obs, prev_action], dim=-1)
         return self.obs_action_exec_encoder(obs_action.reshape(b * a, -1)).view(b, a, -1)
 
+    def _build_tri_branch_head_feat(self, h, struct_feat, graph_context):
+        b, a, _ = h.size()
+        if graph_context is None:
+            obs = h.new_zeros(b, a, self.graph_obs_dim)
+            prev_action = h.new_zeros(b, a, self.action_dim)
+        else:
+            obs = graph_context["obs"]
+            prev_action = graph_context["prev_action"]
+
+        if self.tri_obs_head_encoder is None:
+            obs_branch = h.new_zeros(b, a, self.args.hypernet_embed)
+        else:
+            obs_branch = self.tri_obs_head_encoder(obs.reshape(b * a, -1)).view(b, a, -1)
+        action_branch = self.tri_action_head_encoder(prev_action.reshape(b * a, -1)).view(b, a, -1)
+        graph_branch = self.tri_graph_head_encoder(struct_feat.reshape(b * a, -1)).view(b, a, -1)
+
+        fused = th.cat([obs_branch, action_branch, graph_branch], dim=-1)
+        return self.tri_branch_fuse_encoder(fused.reshape(b * a, -1)).view(b, a, -1)
+
     def _build_full_head_graph_variant_struct(self, node_embed, group_graphs, graph_context=None):
         b, a, _ = node_embed.size()
         eye = th.eye(a, device=node_embed.device, dtype=th.bool).unsqueeze(0)
@@ -1330,6 +1381,10 @@ class GroupAgent(nn.Module):
                 struct_head_feat = self.struct_only_head_encoder(struct_source.reshape(b * a, -1)).view(b, a, -1)
                 group_state = self.group_decoder(struct_head_feat.reshape(b * a, -1)).view(b, a, -1)
                 dynamic_input = self._build_obs_action_exec_input(h, graph_context)
+            elif self.full_head_variant == "tri_branch" and hasattr(self, "tri_branch_fuse_encoder"):
+                struct_source = struct_feat if struct_feat is not None else head_feat
+                tri_head_feat = self._build_tri_branch_head_feat(h, struct_source, graph_context)
+                group_state = self.group_decoder(tri_head_feat.reshape(b * a, -1)).view(b, a, -1)
             elif self.full_head_variant == "id_cond" and hasattr(self, "id_cond_head_encoder"):
                 agent_ids = self.agent_id_onehot.to(h.device).unsqueeze(0).expand(b, -1, -1)
                 id_cond_feat = th.cat([head_feat, agent_ids], dim=-1)
@@ -1340,7 +1395,7 @@ class GroupAgent(nn.Module):
                 q_static = self.static_out_head(h.reshape(b * a, self.a_h_dim)).view(b * a, 1, self.action_dim)
                 q = q_static + self.dynamic_residual_scale * q_dynamic
             else:
-                if self.full_head_variant in {"dynamic", "rf", "grad_decouple", "id_cond"}:
+                if self.full_head_variant in {"dynamic", "rf", "grad_decouple", "id_cond", "tri_branch"}:
                     q, _, _, _, _ = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
                 elif self.full_head_variant == "ema_step":
                     q_dynamic, wb, bb, wo, bo = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
