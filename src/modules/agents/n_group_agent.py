@@ -96,6 +96,10 @@ class GroupAgent(nn.Module):
             "head_teacher_td": "distill_head_teacher_td",
             "belief": "belief_cond",
             "pid": "pid_dropout",
+            "node_only": "no_struct",
+            "node_only_head": "no_struct",
+            "no_struct_feat": "no_struct",
+            "no_graph_struct": "no_struct",
         }
         self.full_head_variant = legacy_variant_map.get(self.full_head_variant, self.full_head_variant)
         self.full_head_distill_variants = {
@@ -980,6 +984,10 @@ class GroupAgent(nn.Module):
             head_feat = self.head_input_encoder(node_embed.reshape(b * a, -1)).view(b, a, -1)
             return group_probs, zero_struct, zero_graph, head_feat, node_embed
 
+        if self.full_head_variant == "no_struct":
+            head_feat = self.distill_student_encoder(node_embed.reshape(b * a, -1)).view(b, a, -1)
+            return group_probs, zero_struct, zero_graph, head_feat, node_embed
+
         if self.full_head_variant in self.full_head_distill_variants and test_mode:
             student_head_feat = self.distill_student_encoder(node_embed.reshape(b * a, -1)).view(b, a, -1)
             return group_probs, zero_struct, zero_graph, student_head_feat, node_embed
@@ -1395,7 +1403,7 @@ class GroupAgent(nn.Module):
                 q_static = self.static_out_head(h.reshape(b * a, self.a_h_dim)).view(b * a, 1, self.action_dim)
                 q = q_static + self.dynamic_residual_scale * q_dynamic
             else:
-                if self.full_head_variant in {"dynamic", "rf", "grad_decouple", "id_cond", "tri_branch"}:
+                if self.full_head_variant in {"dynamic", "rf", "grad_decouple", "id_cond", "tri_branch", "no_struct"}:
                     q, _, _, _, _ = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
                 elif self.full_head_variant == "ema_step":
                     q_dynamic, wb, bb, wo, bo = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
