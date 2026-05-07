@@ -357,6 +357,9 @@ class GROUPLearner:
         mac_node_embeddings = []
         mac_distill_teacher_q = []
         mac_distill_student_q = []
+        mac_distill_teacher_group_state = []
+        mac_distill_teacher_head_params = []
+        mac_distill_student_head_params = []
         mac_belief_aux = []
 
         self.mac.init_hidden(batch.batch_size)
@@ -376,6 +379,18 @@ class GROUPLearner:
                 student_q = agent_outs
             mac_distill_teacher_q.append(teacher_q)
             mac_distill_student_q.append(student_q)
+            teacher_group_state = getattr(self.mac, "distill_teacher_group_state", None)
+            if teacher_group_state is None:
+                teacher_group_state = self.mac.group_states
+            mac_distill_teacher_group_state.append(teacher_group_state)
+            teacher_head_params = getattr(self.mac, "distill_teacher_head_params", None)
+            student_head_params = getattr(self.mac, "distill_student_head_params", None)
+            if teacher_head_params is None:
+                teacher_head_params = agent_outs.new_zeros(agent_outs.size(0), self.args.n_agents, 1)
+            if student_head_params is None:
+                student_head_params = teacher_head_params
+            mac_distill_teacher_head_params.append(teacher_head_params)
+            mac_distill_student_head_params.append(student_head_params)
             belief_aux = getattr(self.mac, "belief_aux_loss", None)
             if belief_aux is None:
                 belief_aux = agent_outs.new_tensor(0.0)
@@ -391,6 +406,9 @@ class GROUPLearner:
         mac_node_embeddings = th.stack(mac_node_embeddings, dim=1)
         mac_distill_teacher_q = th.stack(mac_distill_teacher_q, dim=1)
         mac_distill_student_q = th.stack(mac_distill_student_q, dim=1)
+        mac_distill_teacher_group_state = th.stack(mac_distill_teacher_group_state, dim=1)
+        mac_distill_teacher_head_params = th.stack(mac_distill_teacher_head_params, dim=1)
+        mac_distill_student_head_params = th.stack(mac_distill_student_head_params, dim=1)
         mac_belief_aux = th.stack(mac_belief_aux, dim=0)
         mac_hidden = mac_hidden.detach()
 
@@ -399,6 +417,14 @@ class GROUPLearner:
 
         # Mixer
         chosen_action_qvals, w1_avg_list, sd_loss = self.mixer(chosen_action_qvals, batch["state"][:, :-1], mac_hidden[:, :-1], mac_group_state[:, :-1], "eval")
+        chosen_teacher_qvals = th.gather(mac_distill_teacher_q[:, :-1], dim=3, index=actions).squeeze(3)
+        mixed_teacher_qvals, _, _ = self.mixer(
+            chosen_teacher_qvals,
+            batch["state"][:, :-1],
+            mac_hidden[:, :-1],
+            mac_distill_teacher_group_state[:, :-1],
+            "eval",
+        )
 
         # Calculate the Q-Values necessary for the target
         with th.no_grad():
@@ -430,43 +456,81 @@ class GROUPLearner:
             targets = build_td_lambda_targets(rewards, terminated, mask, target_max_qvals, 
                                             self.args.n_agents, self.args.gamma, self.args.td_lambda)
         
+        full_head_variant = getattr(self.args, "full_head_variant", "dynamic").replace("-", "_")
+        ptde_loss_only = full_head_variant in {
+            "ptde_strict",
+            "distill_q_teacher_td",
+            "distill_head",
+            "distill_head_teacher_td",
+            "belief_cond",
+            "pid_dropout",
+        }
+        q_distill_variants = {
+            "distill",
+            "ptde_strict",
+            "distill_q_teacher_td",
+            "pid_dropout",
+            "belief_cond",
+        }
+        head_distill_variants = {
+            "distill_head",
+            "distill_head_teacher_td",
+        }
+        teacher_td_variants = {
+            "distill_q_teacher_td",
+            "distill_head_teacher_td",
+        }
+        
         # lasso_alpha
-        lasso_alpha = []
-        for i in range(len(w1_avg_list)):
-            lasso_alpha_time = self.args.lasso_alpha_start * (self.args.lasso_alpha_anneal ** (t_env//self.args.lasso_alpha_anneal_time))
-            lasso_alpha.append(lasso_alpha_time)
-
-        # lasso loss
-        lasso_loss = th.tensor(0.0, device=chosen_action_qvals.device)
-        for i in range(len(w1_avg_list)):
-            group_w1_sum = th.sum(w1_avg_list[i])
-            lasso_loss += group_w1_sum * lasso_alpha[i]
-
-        if self.args.mixer == "group":
-            sd_loss = sd_loss * mask
-            sd_loss = self.args.sd_alpha * sd_loss.sum() / mask.sum()
+        if ptde_loss_only:
+            lasso_loss = self._zero(chosen_action_qvals)
+            sd_loss = self._zero(chosen_action_qvals)
             balance_loss = self._zero(chosen_action_qvals)
             conf_loss = self._zero(chosen_action_qvals)
             sparse_loss = self._zero(chosen_action_qvals)
+            proto_compact_loss = self._zero(chosen_action_qvals)
+            proto_sep_loss = self._zero(chosen_action_qvals)
+            similarity_group_loss = self._zero(chosen_action_qvals)
         else:
-            sd_loss = self.args.sd_alpha * self._compute_group_repulsion_loss(
-                mac_group_state[:, :-1], mac_group_probs[:, :-1], mask
-            )
-            balance_loss, conf_loss, sparse_loss = self._compute_struct_group_regularizers(
-                mac_group_probs[:, :-1], mac_group_graphs[:, :-1], mask
-            )
-            proto_compact_loss, proto_sep_loss = self._compute_proto_regularizers(
-                mac_struct_features[:, :-1], mac_group_probs[:, :-1], mask
-            )
-            similarity_group_loss = self._compute_threshold_group_regularizer(
-                mac_node_embeddings[:, :-1], mac_group_probs[:, :-1], mask
-            )
-            balance_loss = getattr(self.args, "group_balance_alpha", 0.0) * balance_loss
-            conf_loss = getattr(self.args, "group_conf_alpha", 0.0) * conf_loss
-            sparse_loss = getattr(self.args, "group_sparse_alpha", 0.0) * sparse_loss
-            proto_compact_loss = getattr(self.args, "group_proto_compact_alpha", 0.0) * proto_compact_loss
-            proto_sep_loss = getattr(self.args, "group_proto_sep_alpha", 0.0) * proto_sep_loss
-            similarity_group_loss = getattr(self.args, "group_similarity_alpha", 0.0) * similarity_group_loss
+            lasso_alpha = []
+            for i in range(len(w1_avg_list)):
+                lasso_alpha_time = self.args.lasso_alpha_start * (self.args.lasso_alpha_anneal ** (t_env//self.args.lasso_alpha_anneal_time))
+                lasso_alpha.append(lasso_alpha_time)
+
+            # lasso loss
+            lasso_loss = th.tensor(0.0, device=chosen_action_qvals.device)
+            for i in range(len(w1_avg_list)):
+                group_w1_sum = th.sum(w1_avg_list[i])
+                lasso_loss += group_w1_sum * lasso_alpha[i]
+
+            if self.args.mixer == "group":
+                sd_loss = sd_loss * mask
+                sd_loss = self.args.sd_alpha * sd_loss.sum() / mask.sum()
+                balance_loss = self._zero(chosen_action_qvals)
+                conf_loss = self._zero(chosen_action_qvals)
+                sparse_loss = self._zero(chosen_action_qvals)
+                proto_compact_loss = self._zero(chosen_action_qvals)
+                proto_sep_loss = self._zero(chosen_action_qvals)
+                similarity_group_loss = self._zero(chosen_action_qvals)
+            else:
+                sd_loss = self.args.sd_alpha * self._compute_group_repulsion_loss(
+                    mac_group_state[:, :-1], mac_group_probs[:, :-1], mask
+                )
+                balance_loss, conf_loss, sparse_loss = self._compute_struct_group_regularizers(
+                    mac_group_probs[:, :-1], mac_group_graphs[:, :-1], mask
+                )
+                proto_compact_loss, proto_sep_loss = self._compute_proto_regularizers(
+                    mac_struct_features[:, :-1], mac_group_probs[:, :-1], mask
+                )
+                similarity_group_loss = self._compute_threshold_group_regularizer(
+                    mac_node_embeddings[:, :-1], mac_group_probs[:, :-1], mask
+                )
+                balance_loss = getattr(self.args, "group_balance_alpha", 0.0) * balance_loss
+                conf_loss = getattr(self.args, "group_conf_alpha", 0.0) * conf_loss
+                sparse_loss = getattr(self.args, "group_sparse_alpha", 0.0) * sparse_loss
+                proto_compact_loss = getattr(self.args, "group_proto_compact_alpha", 0.0) * proto_compact_loss
+                proto_sep_loss = getattr(self.args, "group_proto_sep_alpha", 0.0) * proto_sep_loss
+                similarity_group_loss = getattr(self.args, "group_similarity_alpha", 0.0) * similarity_group_loss
 
         td_error = (chosen_action_qvals - targets.detach())
         td_error = 0.5 * td_error.pow(2)
@@ -474,15 +538,27 @@ class GROUPLearner:
         mask = mask.expand_as(td_error)
         masked_td_error = td_error * mask
         td_loss = masked_td_error.sum() / mask.sum()
+        teacher_td_loss = self._zero(chosen_action_qvals)
+        if full_head_variant in teacher_td_variants:
+            teacher_td_error = 0.5 * (mixed_teacher_qvals - targets.detach()).pow(2)
+            teacher_td_mask = mask.expand_as(teacher_td_error)
+            teacher_td_loss = (teacher_td_error * teacher_td_mask).sum() / teacher_td_mask.sum().clamp(min=1.0)
+            teacher_td_loss = getattr(self.args, "full_head_teacher_td_alpha", 1.0) * teacher_td_loss
 
-        if self.args.mixer == "group":
+        if self.args.mixer == "group" and not ptde_loss_only:
             proto_compact_loss = self._zero(chosen_action_qvals)
             proto_sep_loss = self._zero(chosen_action_qvals)
             similarity_group_loss = self._zero(chosen_action_qvals)
         distill_loss = self._zero(chosen_action_qvals)
-        full_head_variant = getattr(self.args, "full_head_variant", "dynamic").replace("-", "_")
-        if full_head_variant in {"distill", "ptde_strict", "pid_dropout", "belief_cond"}:
+        if full_head_variant in q_distill_variants:
             distill_td = (mac_distill_student_q[:, :-1] - mac_distill_teacher_q[:, :-1].detach()).pow(2).mean(dim=-1)
+            distill_mask = mask[:, :, 0].expand_as(distill_td) if mask.dim() == 4 else mask.expand_as(distill_td)
+            distill_loss = (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
+            distill_loss = getattr(self.args, "full_head_distill_alpha", 0.0) * distill_loss
+        elif full_head_variant in head_distill_variants:
+            distill_td = (
+                mac_distill_student_head_params[:, :-1] - mac_distill_teacher_head_params[:, :-1].detach()
+            ).pow(2).mean(dim=-1)
             distill_mask = mask[:, :, 0].expand_as(distill_td) if mask.dim() == 4 else mask.expand_as(distill_td)
             distill_loss = (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
             distill_loss = getattr(self.args, "full_head_distill_alpha", 0.0) * distill_loss
@@ -501,6 +577,7 @@ class GROUPLearner:
             + proto_compact_loss
             + proto_sep_loss
             + similarity_group_loss
+            + teacher_td_loss
             + distill_loss
             + belief_aux_loss
         )
@@ -526,6 +603,7 @@ class GROUPLearner:
             self.logger.log_stat("total_loss", loss.item(), t_env)
             self.logger.log_stat("lasso_loss", lasso_loss.item(), t_env)
             self.logger.log_stat("sd_loss", sd_loss.item(), t_env)
+            self.logger.log_stat("teacher_td_loss", teacher_td_loss.item(), t_env)
             self.logger.log_stat("distill_loss", distill_loss.item(), t_env)
             self.logger.log_stat("belief_aux_loss", belief_aux_loss.item(), t_env)
             if self.args.mixer == "group_vdn":

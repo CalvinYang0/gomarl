@@ -84,6 +84,12 @@ class GroupAgent(nn.Module):
             "hetero_graph": "hetero_enemy",
             "heterogeneous": "hetero_enemy",
             "ptde": "ptde_strict",
+            "ptde_q_teacher_td": "distill_q_teacher_td",
+            "ptde_head": "distill_head",
+            "ptde_head_teacher_td": "distill_head_teacher_td",
+            "q_teacher_td": "distill_q_teacher_td",
+            "head_distill": "distill_head",
+            "head_teacher_td": "distill_head_teacher_td",
             "belief": "belief_cond",
             "pid": "pid_dropout",
         }
@@ -91,8 +97,26 @@ class GroupAgent(nn.Module):
         self.full_head_distill_variants = {
             "distill",
             "ptde_strict",
+            "distill_q_teacher_td",
+            "distill_head",
+            "distill_head_teacher_td",
             "pid_dropout",
             "belief_cond",
+        }
+        self.full_head_q_distill_variants = {
+            "distill",
+            "ptde_strict",
+            "distill_q_teacher_td",
+            "pid_dropout",
+            "belief_cond",
+        }
+        self.full_head_head_distill_variants = {
+            "distill_head",
+            "distill_head_teacher_td",
+        }
+        self.full_head_teacher_td_variants = {
+            "distill_q_teacher_td",
+            "distill_head_teacher_td",
         }
         self.full_head_param_ema_beta = getattr(args, "full_head_param_ema_beta", 0.99)
         self.full_head_use_ema_in_test = getattr(args, "full_head_use_ema_in_test", True)
@@ -596,6 +620,9 @@ class GroupAgent(nn.Module):
         self.temporal_graph_state = None
         self.distill_teacher_q = None
         self.distill_student_q = None
+        self.distill_teacher_group_state = None
+        self.distill_teacher_head_params = None
+        self.distill_student_head_params = None
         self.belief_aux_loss = None
         self.episode_head_feat_sum = None
         self.episode_head_feat_count = 0
@@ -632,6 +659,9 @@ class GroupAgent(nn.Module):
         self.temporal_graph_state = None
         self.distill_teacher_q = None
         self.distill_student_q = None
+        self.distill_teacher_group_state = None
+        self.distill_teacher_head_params = None
+        self.distill_student_head_params = None
         self.belief_aux_loss = None
         self.episode_head_feat_sum = None
         self.episode_head_feat_count = 0
@@ -706,6 +736,17 @@ class GroupAgent(nn.Module):
         action_feat = self.graph_action_proj(prev_action.reshape(b * a, -1)).view(b, a, -1)
         fused = th.cat([h, obs_feat, action_feat], dim=-1)
         return self.graph_input_fuse(fused.reshape(b * a, -1)).view(b, a, -1)
+
+    def _pack_full_head_params(self, wb, bb, wo, bo, b, a):
+        return th.cat(
+            [
+                wb.reshape(b, a, -1),
+                bb.reshape(b, a, -1),
+                wo.reshape(b, a, -1),
+                bo.reshape(b, a, -1),
+            ],
+            dim=-1,
+        )
 
     def _build_topk_signature_input(self, attn, row_probs, degree, entropy):
         b, a, _ = attn.size()
@@ -1256,6 +1297,9 @@ class GroupAgent(nn.Module):
         b, a, _ = h.size()
         self.distill_teacher_q = None
         self.distill_student_q = None
+        self.distill_teacher_group_state = None
+        self.distill_teacher_head_params = None
+        self.distill_student_head_params = None
         self.belief_aux_loss = None
         group_state = self.group_decoder(head_feat.reshape(b * a, -1)).view(b, a, -1)
 
@@ -1363,18 +1407,27 @@ class GroupAgent(nn.Module):
                         self.belief_aux_loss = belief_kl if not test_mode else h.new_tensor(0.0)
 
                     student_group_state = self.group_decoder(student_head_feat.reshape(b * a, -1)).view(b, a, -1)
-                    q_student, _, _, _, _ = self._build_dynamic_full_head_q(h, student_group_state, head_input=dynamic_input)
+                    q_student, student_wb, student_bb, student_wo, student_bo = self._build_dynamic_full_head_q(
+                        h, student_group_state, head_input=dynamic_input
+                    )
                     self.distill_student_q = q_student
+                    self.distill_student_head_params = self._pack_full_head_params(
+                        student_wb, student_bb, student_wo, student_bo, b, a
+                    )
                     if not test_mode:
                         teacher_head_feat = head_feat
                         if self.full_head_variant == "pid_dropout":
                             teacher_head_feat = self._apply_pid_feature_dropout(teacher_head_feat, test_mode=False)
                             self.pid_step_count += 1
                         teacher_group_state = self.group_decoder(teacher_head_feat.reshape(b * a, -1)).view(b, a, -1)
-                        q_teacher, _, _, _, _ = self._build_dynamic_full_head_q(
+                        q_teacher, teacher_wb, teacher_bb, teacher_wo, teacher_bo = self._build_dynamic_full_head_q(
                             h, teacher_group_state, head_input=dynamic_input
                         )
-                        self.distill_teacher_q = q_teacher.detach()
+                        self.distill_teacher_q = q_teacher
+                        self.distill_teacher_group_state = teacher_group_state
+                        self.distill_teacher_head_params = self._pack_full_head_params(
+                            teacher_wb, teacher_bb, teacher_wo, teacher_bo, b, a
+                        )
                     group_state = student_group_state
                     q = q_student
                 else:
