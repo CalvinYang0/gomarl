@@ -67,6 +67,7 @@ class GroupAgent(nn.Module):
             getattr(args, "full_head_local_ctde", False) and self.group_head_mode in self.full_head_local_ctde_modes
         )
         self.full_head_variant = getattr(args, "full_head_variant", "dynamic").replace("-", "_")
+        self.full_head_train_stage = getattr(args, "full_head_train_stage", "joint").replace("-", "_")
         legacy_variant_map = {
             "episode_mean": "ema_ep_struct_mean",
             "episode_mean_param_avg": "ema_ep_struct_mean",
@@ -1431,17 +1432,56 @@ class GroupAgent(nn.Module):
 
     def _apply_teacher_only_distill_head(self, h, head_feat, node_embed, dynamic_input, test_mode=False):
         b, a, _ = h.size()
+        teacher_stage = (not test_mode) and self.full_head_train_stage == "teacher"
+        student_stage = (not test_mode) and self.full_head_train_stage == "student"
         teacher_head_feat = head_feat
-        teacher_group_state = self.teacher_group_decoder(teacher_head_feat.reshape(b * a, -1)).view(b, a, -1)
-        q_teacher, teacher_wb, teacher_bb, teacher_wo, teacher_bo = self._build_dynamic_full_head_q_with_modules(
-            h,
-            teacher_group_state,
-            self.teacher_hyper_bottleneck_w,
-            self.teacher_hyper_bottleneck_b,
-            self.teacher_hyper_w,
-            self.teacher_hyper_b,
-            head_input=dynamic_input,
-        )
+
+        if teacher_stage:
+            teacher_group_state = self.teacher_group_decoder(teacher_head_feat.reshape(b * a, -1)).view(b, a, -1)
+            q_teacher, teacher_wb, teacher_bb, teacher_wo, teacher_bo = self._build_dynamic_full_head_q_with_modules(
+                h,
+                teacher_group_state,
+                self.teacher_hyper_bottleneck_w,
+                self.teacher_hyper_bottleneck_b,
+                self.teacher_hyper_w,
+                self.teacher_hyper_b,
+                head_input=dynamic_input,
+            )
+            self.distill_teacher_q = q_teacher
+            self.distill_student_q = None
+            self.distill_teacher_group_state = teacher_group_state
+            self.distill_teacher_head_params = self._pack_full_head_params(
+                teacher_wb, teacher_bb, teacher_wo, teacher_bo, b, a
+            )
+            self.distill_student_head_params = None
+            self.distill_teacher_feat = None
+            self.distill_student_feat = None
+            return q_teacher, teacher_group_state
+
+        if student_stage:
+            with th.no_grad():
+                teacher_head_feat = head_feat.detach()
+                teacher_group_state = self.teacher_group_decoder(teacher_head_feat.reshape(b * a, -1)).view(b, a, -1)
+                q_teacher, teacher_wb, teacher_bb, teacher_wo, teacher_bo = self._build_dynamic_full_head_q_with_modules(
+                    h.detach(),
+                    teacher_group_state,
+                    self.teacher_hyper_bottleneck_w,
+                    self.teacher_hyper_bottleneck_b,
+                    self.teacher_hyper_w,
+                    self.teacher_hyper_b,
+                    head_input=dynamic_input.detach() if dynamic_input is not None else None,
+                )
+        else:
+            teacher_group_state = self.teacher_group_decoder(teacher_head_feat.reshape(b * a, -1)).view(b, a, -1)
+            q_teacher, teacher_wb, teacher_bb, teacher_wo, teacher_bo = self._build_dynamic_full_head_q_with_modules(
+                h,
+                teacher_group_state,
+                self.teacher_hyper_bottleneck_w,
+                self.teacher_hyper_bottleneck_b,
+                self.teacher_hyper_w,
+                self.teacher_hyper_b,
+                head_input=dynamic_input,
+            )
 
         student_source = node_embed if node_embed is not None else h
         student_head_input = dynamic_input
@@ -1477,7 +1517,7 @@ class GroupAgent(nn.Module):
             student_wb, student_bb, student_wo, student_bo, b, a
         )
 
-        if test_mode:
+        if test_mode or student_stage:
             return q_student, student_group_state
         return q_teacher, teacher_group_state
 

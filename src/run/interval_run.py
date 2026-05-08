@@ -23,6 +23,10 @@ def get_agent_own_state_size(env_args):
     sc_env = StarCraft2Env(**env_args)
     return  4 + sc_env.shield_bits_ally + sc_env.unit_type_bits
 
+
+def _is_checkpoint_dir(path):
+    return os.path.isfile(os.path.join(path, "agent.th"))
+
 def run(_run, _config, _log):
 
     _config = args_sanity_check(_config, _log)
@@ -38,7 +42,9 @@ def run(_run, _config, _log):
                                        width=1)
     _log.info("\n\n" + experiment_params + "\n")
 
-    unique_token = "{}__{}".format(args.name, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+    unique_token = getattr(args, "unique_token_override", None) or "{}__{}".format(
+        args.name, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    )
     args.unique_token = unique_token
     if args.use_tensorboard:
         tb_logs_direc = os.path.join(dirname(dirname(dirname(abspath(__file__)))), "results", "tb_logs")
@@ -142,28 +148,39 @@ def run_sequential(args, logger):
 
     if args.checkpoint_path != "":
 
-        timesteps = []
-        timestep_to_load = 0
-
         if not os.path.isdir(args.checkpoint_path):
             logger.console_logger.info("Checkpoint directiory {} doesn't exist".format(args.checkpoint_path))
             return
 
-        for name in os.listdir(args.checkpoint_path):
-            full_name = os.path.join(args.checkpoint_path, name)
-            if os.path.isdir(full_name) and name.isdigit():
-                timesteps.append(int(name))
-
-        if args.load_step == 0:
-            timestep_to_load = max(timesteps)
+        if _is_checkpoint_dir(args.checkpoint_path):
+            model_path = args.checkpoint_path
+            timestep_to_load = 0
         else:
-            timestep_to_load = min(timesteps, key=lambda x: abs(x - args.load_step))
+            timesteps = []
+            timestep_to_load = 0
 
-        model_path = os.path.join(args.checkpoint_path, str(timestep_to_load))
+            for name in os.listdir(args.checkpoint_path):
+                full_name = os.path.join(args.checkpoint_path, name)
+                if os.path.isdir(full_name) and name.isdigit():
+                    timesteps.append(int(name))
+
+            if len(timesteps) == 0:
+                logger.console_logger.info(
+                    "No checkpoint directories found under {}".format(args.checkpoint_path)
+                )
+                return
+
+            if args.load_step == 0:
+                timestep_to_load = max(timesteps)
+            else:
+                timestep_to_load = min(timesteps, key=lambda x: abs(x - args.load_step))
+
+            model_path = os.path.join(args.checkpoint_path, str(timestep_to_load))
 
         logger.console_logger.info("Loading model from {}".format(model_path))
         learner.load_models(model_path)
-        runner.t_env = timestep_to_load
+        if timestep_to_load > 0:
+            runner.t_env = timestep_to_load
 
         if args.evaluate or args.save_replay:
             evaluate_sequential(args, runner)

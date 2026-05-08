@@ -427,48 +427,8 @@ class GROUPLearner:
         # Pick the Q-Values for the actions taken by each agent
         chosen_action_qvals = th.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)
 
-        # Mixer
-        chosen_action_qvals, w1_avg_list, sd_loss = self.mixer(chosen_action_qvals, batch["state"][:, :-1], mac_hidden[:, :-1], mac_group_state[:, :-1], "eval")
-        chosen_teacher_qvals = th.gather(mac_distill_teacher_q[:, :-1], dim=3, index=actions).squeeze(3)
-        mixed_teacher_qvals, _, _ = self.mixer(
-            chosen_teacher_qvals,
-            batch["state"][:, :-1],
-            mac_hidden[:, :-1],
-            mac_distill_teacher_group_state[:, :-1],
-            "eval",
-        )
-
-        # Calculate the Q-Values necessary for the target
-        with th.no_grad():
-            target_mac_out = []
-            target_mac_hidden = []
-            target_mac_group_state = []
-
-            self.target_mac.init_hidden(batch.batch_size)
-            for t in range(batch.max_seq_length):
-                target_agent_outs = self.target_mac.forward(batch, t=t)
-                target_mac_hidden.append(self.target_mac.hidden_states)
-                target_mac_group_state.append(self.target_mac.group_states)
-                target_mac_out.append(target_agent_outs)
-
-            # We don't need the first timesteps Q-Value estimate for calculating targets
-            target_mac_out = th.stack(target_mac_out, dim=1)
-            target_mac_hidden = th.stack(target_mac_hidden, dim=1)
-            target_mac_group_state = th.stack(target_mac_group_state, dim=1)
-
-            # Max over target Q-Values/ Double q learning
-            mac_out_detach = mac_out.clone().detach()
-            mac_out_detach[avail_actions == 0] = -9999999
-            cur_max_actions = mac_out_detach.max(dim=3, keepdim=True)[1]
-            target_max_qvals = th.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
-            
-            # Calculate n-step Q-Learning targets
-            target_max_qvals, _, _ = self.target_mixer(target_max_qvals, batch["state"], target_mac_hidden, target_mac_group_state, "target")
-
-            targets = build_td_lambda_targets(rewards, terminated, mask, target_max_qvals, 
-                                            self.args.n_agents, self.args.gamma, self.args.td_lambda)
-        
         full_head_variant = getattr(self.args, "full_head_variant", "dynamic").replace("-", "_")
+        full_head_train_stage = getattr(self.args, "full_head_train_stage", "joint").replace("-", "_")
         ptde_loss_only = full_head_variant in {
             "ptde_strict",
             "distill_q_teacher_td",
@@ -487,6 +447,7 @@ class GROUPLearner:
             "pid_dropout",
             "belief_cond",
             "teacher_td_qdistill",
+            "teacher_td_multidistill",
         }
         feat_distill_variants = {
             "teacher_td_featdistill",
@@ -505,6 +466,71 @@ class GROUPLearner:
             "distill_q_teacher_td",
             "distill_head_teacher_td",
         }
+        student_only_distill_stage = (
+            full_head_variant in teacher_only_distill_variants and full_head_train_stage == "student"
+        )
+
+        if student_only_distill_stage:
+            w1_avg_list = []
+            sd_loss = self._zero(chosen_action_qvals)
+            mixed_teacher_qvals = None
+            targets = chosen_action_qvals.new_zeros(chosen_action_qvals.shape)
+        else:
+            # Mixer
+            chosen_action_qvals, w1_avg_list, sd_loss = self.mixer(
+                chosen_action_qvals,
+                batch["state"][:, :-1],
+                mac_hidden[:, :-1],
+                mac_group_state[:, :-1],
+                "eval",
+            )
+            chosen_teacher_qvals = th.gather(mac_distill_teacher_q[:, :-1], dim=3, index=actions).squeeze(3)
+            mixed_teacher_qvals, _, _ = self.mixer(
+                chosen_teacher_qvals,
+                batch["state"][:, :-1],
+                mac_hidden[:, :-1],
+                mac_distill_teacher_group_state[:, :-1],
+                "eval",
+            )
+
+            # Calculate the Q-Values necessary for the target
+            with th.no_grad():
+                target_mac_out = []
+                target_mac_hidden = []
+                target_mac_group_state = []
+
+                self.target_mac.init_hidden(batch.batch_size)
+                for t in range(batch.max_seq_length):
+                    target_agent_outs = self.target_mac.forward(batch, t=t)
+                    target_mac_hidden.append(self.target_mac.hidden_states)
+                    target_mac_group_state.append(self.target_mac.group_states)
+                    target_mac_out.append(target_agent_outs)
+
+                # We don't need the first timesteps Q-Value estimate for calculating targets
+                target_mac_out = th.stack(target_mac_out, dim=1)
+                target_mac_hidden = th.stack(target_mac_hidden, dim=1)
+                target_mac_group_state = th.stack(target_mac_group_state, dim=1)
+
+                # Max over target Q-Values/ Double q learning
+                mac_out_detach = mac_out.clone().detach()
+                mac_out_detach[avail_actions == 0] = -9999999
+                cur_max_actions = mac_out_detach.max(dim=3, keepdim=True)[1]
+                target_max_qvals = th.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
+
+                # Calculate n-step Q-Learning targets
+                target_max_qvals, _, _ = self.target_mixer(
+                    target_max_qvals, batch["state"], target_mac_hidden, target_mac_group_state, "target"
+                )
+
+                targets = build_td_lambda_targets(
+                    rewards,
+                    terminated,
+                    mask,
+                    target_max_qvals,
+                    self.args.n_agents,
+                    self.args.gamma,
+                    self.args.td_lambda,
+                )
         
         # lasso_alpha
         if ptde_loss_only:
@@ -557,14 +583,23 @@ class GROUPLearner:
                 proto_sep_loss = getattr(self.args, "group_proto_sep_alpha", 0.0) * proto_sep_loss
                 similarity_group_loss = getattr(self.args, "group_similarity_alpha", 0.0) * similarity_group_loss
 
-        td_error = (chosen_action_qvals - targets.detach())
-        td_error = 0.5 * td_error.pow(2)
+        if student_only_distill_stage:
+            td_loss = self._zero(chosen_action_qvals)
+            teacher_td_loss = self._zero(chosen_action_qvals)
+            td_error = chosen_action_qvals.new_zeros(chosen_action_qvals.shape)
+            masked_td_error = td_error
+            mask = mask.expand_as(chosen_action_qvals)
+        else:
+            td_error = (chosen_action_qvals - targets.detach())
+            td_error = 0.5 * td_error.pow(2)
 
-        mask = mask.expand_as(td_error)
-        masked_td_error = td_error * mask
-        td_loss = masked_td_error.sum() / mask.sum()
+            mask = mask.expand_as(td_error)
+            masked_td_error = td_error * mask
+            td_loss = masked_td_error.sum() / mask.sum()
         teacher_td_loss = self._zero(chosen_action_qvals)
-        if full_head_variant in teacher_only_distill_variants:
+        if student_only_distill_stage:
+            teacher_td_loss = self._zero(chosen_action_qvals)
+        elif full_head_variant in teacher_only_distill_variants:
             teacher_td_loss = td_loss
             td_loss = self._zero(chosen_action_qvals)
         elif full_head_variant in teacher_td_variants:
@@ -578,13 +613,13 @@ class GROUPLearner:
             proto_sep_loss = self._zero(chosen_action_qvals)
             similarity_group_loss = self._zero(chosen_action_qvals)
         distill_loss = self._zero(chosen_action_qvals)
-        if full_head_variant in q_distill_variants:
+        if full_head_variant in q_distill_variants and full_head_train_stage != "teacher":
             distill_td = (mac_distill_student_q[:, :-1] - mac_distill_teacher_q[:, :-1].detach()).pow(2).mean(dim=-1)
             distill_mask = mask[:, :, 0].expand_as(distill_td) if mask.dim() == 4 else mask.expand_as(distill_td)
             distill_loss = distill_loss + getattr(self.args, "full_head_distill_alpha", 0.0) * (
                 (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
             )
-        if full_head_variant in feat_distill_variants:
+        if full_head_variant in feat_distill_variants and full_head_train_stage != "teacher":
             distill_td = (
                 mac_distill_student_feat[:, :-1] - mac_distill_teacher_feat[:, :-1].detach()
             ).pow(2).mean(dim=-1)
@@ -592,7 +627,7 @@ class GROUPLearner:
             distill_loss = distill_loss + getattr(self.args, "full_head_distill_alpha", 0.0) * (
                 (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
             )
-        elif full_head_variant in head_distill_variants:
+        elif full_head_variant in head_distill_variants and full_head_train_stage != "teacher":
             distill_td = (
                 mac_distill_student_head_params[:, :-1] - mac_distill_teacher_head_params[:, :-1].detach()
             ).pow(2).mean(dim=-1)
