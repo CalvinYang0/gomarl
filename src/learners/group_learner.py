@@ -497,6 +497,8 @@ class GROUPLearner:
         teacher_td_variants = {
             "distill_q_teacher_td",
             "distill_head_teacher_td",
+            "teacher_td_qdistill",
+            "teacher_td_featdistill",
         }
         
         # lasso_alpha
