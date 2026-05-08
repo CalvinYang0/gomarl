@@ -1517,7 +1517,11 @@ class GroupAgent(nn.Module):
             student_wb, student_bb, student_wo, student_bo, b, a
         )
 
-        if test_mode or student_stage:
+        if test_mode:
+            if self.full_head_train_stage == "teacher":
+                return q_teacher, teacher_group_state
+            return q_student, student_group_state
+        if student_stage:
             return q_student, student_group_state
         return q_teacher, teacher_group_state
 
@@ -1931,3 +1935,6 @@ class GroupAgent(nn.Module):
         self.current_groups = self._assignment_lists(self.group_probs.detach())
 
         return q, h, group_state, group_probs, group_graphs
+
+    def set_full_head_train_stage(self, stage):
+        self.full_head_train_stage = str(stage).replace("-", "_")

@@ -59,6 +59,10 @@ class BasicMAC:
     def load_models(self, path):
         self.agent.load_state_dict(th.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage))
 
+    def set_full_head_train_stage(self, stage):
+        if hasattr(self.agent, "set_full_head_train_stage"):
+            self.agent.set_full_head_train_stage(stage)
+
     def _build_agents(self, input_shape):
         self.agent = agent_REGISTRY[self.args.agent](input_shape, self.args)
 

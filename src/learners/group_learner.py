@@ -51,6 +51,14 @@ class GROUPLearner:
         
         self.train_t = 0
 
+    def set_full_head_train_stage(self, stage):
+        stage = str(stage).replace("-", "_")
+        self.args.full_head_train_stage = stage
+        if hasattr(self.mac, "set_full_head_train_stage"):
+            self.mac.set_full_head_train_stage(stage)
+        if hasattr(self.target_mac, "set_full_head_train_stage"):
+            self.target_mac.set_full_head_train_stage(stage)
+
     def _zero(self, ref):
         return ref.new_tensor(0.0)
 

@@ -27,6 +27,14 @@ def get_agent_own_state_size(env_args):
 def _is_checkpoint_dir(path):
     return os.path.isfile(os.path.join(path, "agent.th"))
 
+
+def _resolve_runtime_train_stage(args, t_env):
+    configured_stage = str(getattr(args, "full_head_train_stage", "joint")).replace("-", "_")
+    if configured_stage != "two_stage":
+        return configured_stage
+    teacher_tmax = int(getattr(args, "full_head_two_stage_teacher_tmax", 5000000))
+    return "teacher" if t_env < teacher_tmax else "student"
+
 def run(_run, _config, _log):
 
     _config = args_sanity_check(_config, _log)
@@ -142,6 +150,10 @@ def run_sequential(args, logger):
     runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac=mac)
 
     learner = le_REGISTRY[args.learner](mac, buffer.scheme, logger, args)
+    current_runtime_stage = _resolve_runtime_train_stage(args, 0)
+    if hasattr(learner, "set_full_head_train_stage"):
+        learner.set_full_head_train_stage(current_runtime_stage)
+        logger.console_logger.info("Using runtime full-head train stage: {}".format(current_runtime_stage))
 
     if args.use_cuda:
         learner.cuda()
@@ -181,6 +193,10 @@ def run_sequential(args, logger):
         learner.load_models(model_path)
         if timestep_to_load > 0:
             runner.t_env = timestep_to_load
+        current_runtime_stage = _resolve_runtime_train_stage(args, runner.t_env)
+        if hasattr(learner, "set_full_head_train_stage"):
+            learner.set_full_head_train_stage(current_runtime_stage)
+            logger.console_logger.info("Using runtime full-head train stage: {}".format(current_runtime_stage))
 
         if args.evaluate or args.save_replay:
             evaluate_sequential(args, runner)
@@ -198,6 +214,13 @@ def run_sequential(args, logger):
     logger.console_logger.info("Beginning training for {} timesteps".format(args.t_max))
 
     while runner.t_env <= args.t_max:
+        runtime_stage = _resolve_runtime_train_stage(args, runner.t_env)
+        if runtime_stage != current_runtime_stage and hasattr(learner, "set_full_head_train_stage"):
+            learner.set_full_head_train_stage(runtime_stage)
+            current_runtime_stage = runtime_stage
+            logger.console_logger.info(
+                "Switched runtime full-head train stage to {} at t_env={}".format(runtime_stage, runner.t_env)
+            )
 
         with th.no_grad():
             episode_batch = runner.run(test_mode=False)
