@@ -33,6 +33,7 @@ full_head_local_ctde: False       # when True and full-head mode is selected, sk
 full_head_variant: "dynamic"      # dynamic | no_struct | tri_branch | distill | ptde_strict | distill_q_teacher_td | teacher_td_qdistill | teacher_td_featdistill | distill_head | distill_head_teacher_td | belief_cond | pid_dropout | ema_step | ema_ep_param_mean | ema_ep_struct_mean | grad_decouple | rf | id_cond | gcn | gat | temporal_gnn | edge_gnn | relation_gnn | hetero_enemy
 full_head_distill_alpha: 0.2      # used by distill / ptde_strict / distill_q_teacher_td / teacher_td_qdistill / teacher_td_featdistill / distill_head / distill_head_teacher_td / pid_dropout / belief_cond
 full_head_teacher_td_alpha: 1.0   # used by teacher-TD distill variants
+full_head_student_stopgrad: False # when True, block student distill gradients from flowing back into shared node/h features
 full_head_belief_kl_alpha: 0.01   # only used when full_head_variant=belief_cond
 full_head_belief_latent_dim: 32   # only used when full_head_variant=belief_cond
 full_head_pid_start: 0.0          # only used when full_head_variant=pid_dropout

@@ -494,11 +494,13 @@ class GROUPLearner:
             "distill_head",
             "distill_head_teacher_td",
         }
+        teacher_only_distill_variants = {
+            "teacher_td_qdistill",
+            "teacher_td_featdistill",
+        }
         teacher_td_variants = {
             "distill_q_teacher_td",
             "distill_head_teacher_td",
-            "teacher_td_qdistill",
-            "teacher_td_featdistill",
         }
         
         # lasso_alpha
@@ -559,7 +561,10 @@ class GROUPLearner:
         masked_td_error = td_error * mask
         td_loss = masked_td_error.sum() / mask.sum()
         teacher_td_loss = self._zero(chosen_action_qvals)
-        if full_head_variant in teacher_td_variants:
+        if full_head_variant in teacher_only_distill_variants:
+            teacher_td_loss = td_loss
+            td_loss = self._zero(chosen_action_qvals)
+        elif full_head_variant in teacher_td_variants:
             teacher_td_error = 0.5 * (mixed_teacher_qvals - targets.detach()).pow(2)
             teacher_td_mask = mask.expand_as(teacher_td_error)
             teacher_td_loss = (teacher_td_error * teacher_td_mask).sum() / teacher_td_mask.sum().clamp(min=1.0)

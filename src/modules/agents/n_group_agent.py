@@ -140,6 +140,7 @@ class GroupAgent(nn.Module):
         }
         self.full_head_param_ema_beta = getattr(args, "full_head_param_ema_beta", 0.99)
         self.full_head_use_ema_in_test = getattr(args, "full_head_use_ema_in_test", True)
+        self.full_head_student_stopgrad = bool(getattr(args, "full_head_student_stopgrad", False))
         self.rf_fan_mode = getattr(args, "full_head_rf_fan_mode", "fan_in")
         self.full_head_pid_start = float(getattr(args, "full_head_pid_start", 0.0))
         self.full_head_pid_end = float(getattr(args, "full_head_pid_end", 0.5))
@@ -1437,6 +1438,11 @@ class GroupAgent(nn.Module):
         )
 
         student_source = node_embed if node_embed is not None else h
+        student_head_input = dynamic_input
+        if self.full_head_student_stopgrad:
+            student_source = student_source.detach()
+            if student_head_input is not None:
+                student_head_input = student_head_input.detach()
         student_base_feat = self.distill_student_encoder(student_source.reshape(b * a, -1)).view(b, a, -1)
         student_head_feat = student_base_feat
         if self.full_head_variant == "teacher_td_featdistill":
@@ -1452,7 +1458,7 @@ class GroupAgent(nn.Module):
             self.student_hyper_bottleneck_b,
             self.student_hyper_w,
             self.student_hyper_b,
-            head_input=dynamic_input,
+            head_input=student_head_input,
         )
 
         self.distill_teacher_q = q_teacher
