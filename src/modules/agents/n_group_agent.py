@@ -102,8 +102,11 @@ class GroupAgent(nn.Module):
             "no_graph_struct": "no_struct",
             "teacher_q_distill": "teacher_td_qdistill",
             "teacher_feat_distill": "teacher_td_featdistill",
+            "teacher_mix_distill": "teacher_td_multidistill",
+            "teacher_multi_distill": "teacher_td_multidistill",
             "teacher_only_qdistill": "teacher_td_qdistill",
             "teacher_only_featdistill": "teacher_td_featdistill",
+            "teacher_only_multidistill": "teacher_td_multidistill",
         }
         self.full_head_variant = legacy_variant_map.get(self.full_head_variant, self.full_head_variant)
         self.full_head_distill_variants = {
@@ -118,6 +121,7 @@ class GroupAgent(nn.Module):
         self.full_head_teacher_only_distill_variants = {
             "teacher_td_qdistill",
             "teacher_td_featdistill",
+            "teacher_td_multidistill",
         }
         self.full_head_q_distill_variants = {
             "distill",
@@ -126,9 +130,11 @@ class GroupAgent(nn.Module):
             "pid_dropout",
             "belief_cond",
             "teacher_td_qdistill",
+            "teacher_td_multidistill",
         }
         self.full_head_feat_distill_variants = {
             "teacher_td_featdistill",
+            "teacher_td_multidistill",
         }
         self.full_head_head_distill_variants = {
             "distill_head",
@@ -434,7 +440,7 @@ class GroupAgent(nn.Module):
                             self.student_hyper_w = nn.Sequential(
                                 nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.n_actions)
                             )
-                            if self.full_head_variant == "teacher_td_featdistill":
+                            if self.full_head_variant in {"teacher_td_featdistill", "teacher_td_multidistill"}:
                                 self.student_feat_adapter = nn.Sequential(
                                     nn.Linear(args.hypernet_embed, args.hypernet_embed),
                                     nn.ReLU(inplace=True),
@@ -1445,7 +1451,7 @@ class GroupAgent(nn.Module):
                 student_head_input = student_head_input.detach()
         student_base_feat = self.distill_student_encoder(student_source.reshape(b * a, -1)).view(b, a, -1)
         student_head_feat = student_base_feat
-        if self.full_head_variant == "teacher_td_featdistill":
+        if self.full_head_variant in {"teacher_td_featdistill", "teacher_td_multidistill"}:
             student_head_feat = self.student_feat_adapter(student_base_feat.reshape(b * a, -1)).view(b, a, -1)
             self.distill_teacher_feat = teacher_head_feat
             self.distill_student_feat = student_head_feat

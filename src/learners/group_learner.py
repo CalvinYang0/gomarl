@@ -478,6 +478,7 @@ class GROUPLearner:
             "pid_dropout",
             "teacher_td_qdistill",
             "teacher_td_featdistill",
+            "teacher_td_multidistill",
         }
         q_distill_variants = {
             "distill",
@@ -489,6 +490,7 @@ class GROUPLearner:
         }
         feat_distill_variants = {
             "teacher_td_featdistill",
+            "teacher_td_multidistill",
         }
         head_distill_variants = {
             "distill_head",
@@ -497,6 +499,7 @@ class GROUPLearner:
         teacher_only_distill_variants = {
             "teacher_td_qdistill",
             "teacher_td_featdistill",
+            "teacher_td_multidistill",
         }
         teacher_td_variants = {
             "distill_q_teacher_td",
@@ -578,15 +581,17 @@ class GROUPLearner:
         if full_head_variant in q_distill_variants:
             distill_td = (mac_distill_student_q[:, :-1] - mac_distill_teacher_q[:, :-1].detach()).pow(2).mean(dim=-1)
             distill_mask = mask[:, :, 0].expand_as(distill_td) if mask.dim() == 4 else mask.expand_as(distill_td)
-            distill_loss = (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
-            distill_loss = getattr(self.args, "full_head_distill_alpha", 0.0) * distill_loss
-        elif full_head_variant in feat_distill_variants:
+            distill_loss = distill_loss + getattr(self.args, "full_head_distill_alpha", 0.0) * (
+                (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
+            )
+        if full_head_variant in feat_distill_variants:
             distill_td = (
                 mac_distill_student_feat[:, :-1] - mac_distill_teacher_feat[:, :-1].detach()
             ).pow(2).mean(dim=-1)
             distill_mask = mask[:, :, 0].expand_as(distill_td) if mask.dim() == 4 else mask.expand_as(distill_td)
-            distill_loss = (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
-            distill_loss = getattr(self.args, "full_head_distill_alpha", 0.0) * distill_loss
+            distill_loss = distill_loss + getattr(self.args, "full_head_distill_alpha", 0.0) * (
+                (distill_td * distill_mask).sum() / distill_mask.sum().clamp(min=1.0)
+            )
         elif full_head_variant in head_distill_variants:
             distill_td = (
                 mac_distill_student_head_params[:, :-1] - mac_distill_teacher_head_params[:, :-1].detach()
