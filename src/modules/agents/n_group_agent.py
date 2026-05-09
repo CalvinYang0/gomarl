@@ -1814,6 +1814,7 @@ class GroupAgent(nn.Module):
             "graph_better_struct_ego_subgraph",
             "graph_input_fusion",
             "graph_input_fusion_node_embed",
+            "graph_input_fusion_node_embed_two_layer_head",
             "graph_input_fusion_node_embed_no_groupemb",
             "graph_input_fusion_node_embed_no_reg",
             "graph_input_fusion_node_embed_no_groupemb_no_reg",
