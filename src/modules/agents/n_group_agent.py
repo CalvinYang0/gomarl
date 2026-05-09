@@ -66,11 +66,20 @@ class GroupAgent(nn.Module):
         self.full_head_local_ctde = (
             getattr(args, "full_head_local_ctde", False) and self.group_head_mode in self.full_head_local_ctde_modes
         )
+        self.full_head_update_interval = max(1, int(getattr(args, "full_head_update_interval", 5)))
         self.full_head_variant = getattr(args, "full_head_variant", "dynamic").replace("-", "_")
         self.full_head_train_stage = getattr(args, "full_head_train_stage", "joint").replace("-", "_")
         legacy_variant_map = {
             "episode_mean": "ema_ep_struct_mean",
             "episode_mean_param_avg": "ema_ep_struct_mean",
+            "episode_once": "episode_once_head",
+            "episode_fixed": "episode_once_head",
+            "ep_once_head": "episode_once_head",
+            "ep_fixed_head": "episode_once_head",
+            "kstep": "kstep_head",
+            "k_step": "kstep_head",
+            "step_k": "kstep_head",
+            "step_interval_head": "kstep_head",
             "gradient_separate": "grad_decouple",
             "grad_separate": "grad_decouple",
             "std_gcn": "standard_gcn",
@@ -742,6 +751,11 @@ class GroupAgent(nn.Module):
         self.distill_teacher_feat = None
         self.distill_student_feat = None
         self.belief_aux_loss = None
+        self.episode_fixed_head_wb = None
+        self.episode_fixed_head_bb = None
+        self.episode_fixed_head_wo = None
+        self.episode_fixed_head_bo = None
+        self.episode_head_update_step = 0
         self.episode_head_feat_sum = None
         self.episode_head_feat_count = 0
         self.episode_param_sum_wb = None
@@ -781,6 +795,11 @@ class GroupAgent(nn.Module):
         self.distill_teacher_head_params = None
         self.distill_student_head_params = None
         self.belief_aux_loss = None
+        self.episode_fixed_head_wb = None
+        self.episode_fixed_head_bb = None
+        self.episode_fixed_head_wo = None
+        self.episode_fixed_head_bo = None
+        self.episode_head_update_step = 0
         self.episode_head_feat_sum = None
         self.episode_head_feat_count = 0
         self.episode_param_sum_wb = None
@@ -1463,13 +1482,19 @@ class GroupAgent(nn.Module):
         self.head_param_ema_wo.mul_(beta).add_(wo_agent, alpha=1.0 - beta)
         self.head_param_ema_bo.mul_(beta).add_(bo_agent, alpha=1.0 - beta)
 
-    def _apply_full_head_with_fixed_params(self, h, wb, bb, wo, bo):
-        b, a, _ = h.size()
-        wb_use = wb.unsqueeze(0).expand(b, -1, -1, -1).reshape(b * a, self.a_h_dim, self.a_h_dim)
-        bb_use = bb.unsqueeze(0).expand(b, -1, -1, -1).reshape(b * a, 1, self.a_h_dim)
-        wo_use = wo.unsqueeze(0).expand(b, -1, -1, -1).reshape(b * a, self.a_h_dim, self.action_dim)
-        bo_use = bo.unsqueeze(0).expand(b, -1, -1, -1).reshape(b * a, 1, self.action_dim)
-        bottleneck = th.matmul(h.reshape(b * a, 1, self.a_h_dim), wb_use) + bb_use
+    def _apply_full_head_with_fixed_params(self, head_source, wb, bb, wo, bo):
+        b, a, _ = head_source.size()
+        if wb.dim() == 3:
+            wb_use = wb.unsqueeze(0).expand(b, -1, -1, -1).reshape(b * a, self.a_h_dim, self.a_h_dim)
+            bb_use = bb.unsqueeze(0).expand(b, -1, -1, -1).reshape(b * a, 1, self.a_h_dim)
+            wo_use = wo.unsqueeze(0).expand(b, -1, -1, -1).reshape(b * a, self.a_h_dim, self.action_dim)
+            bo_use = bo.unsqueeze(0).expand(b, -1, -1, -1).reshape(b * a, 1, self.action_dim)
+        else:
+            wb_use = wb.reshape(b * a, self.a_h_dim, self.a_h_dim)
+            bb_use = bb.reshape(b * a, 1, self.a_h_dim)
+            wo_use = wo.reshape(b * a, self.a_h_dim, self.action_dim)
+            bo_use = bo.reshape(b * a, 1, self.action_dim)
+        bottleneck = th.matmul(head_source.reshape(b * a, 1, self.a_h_dim), wb_use) + bb_use
         bottleneck = F.relu(bottleneck, inplace=True)
         q = th.matmul(bottleneck, wo_use) + bo_use
         return q.view(b, a, -1)
@@ -1683,6 +1708,41 @@ class GroupAgent(nn.Module):
             else:
                 if self.full_head_variant in {"dynamic", "rf", "hypermarl_rf", "grad_decouple", "id_cond", "tri_branch", "no_struct"}:
                     q, _, _, _, _ = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
+                elif self.full_head_variant == "episode_once_head":
+                    if self.episode_fixed_head_wb is None:
+                        q, wb, bb, wo, bo = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
+                        self.episode_fixed_head_wb = wb
+                        self.episode_fixed_head_bb = bb
+                        self.episode_fixed_head_wo = wo
+                        self.episode_fixed_head_bo = bo
+                    else:
+                        q = self._apply_full_head_with_fixed_params(
+                            dynamic_input,
+                            self.episode_fixed_head_wb,
+                            self.episode_fixed_head_bb,
+                            self.episode_fixed_head_wo,
+                            self.episode_fixed_head_bo,
+                        )
+                elif self.full_head_variant == "kstep_head":
+                    should_refresh = (
+                        self.episode_fixed_head_wb is None
+                        or self.episode_head_update_step % self.full_head_update_interval == 0
+                    )
+                    if should_refresh:
+                        q, wb, bb, wo, bo = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
+                        self.episode_fixed_head_wb = wb
+                        self.episode_fixed_head_bb = bb
+                        self.episode_fixed_head_wo = wo
+                        self.episode_fixed_head_bo = bo
+                    else:
+                        q = self._apply_full_head_with_fixed_params(
+                            dynamic_input,
+                            self.episode_fixed_head_wb,
+                            self.episode_fixed_head_bb,
+                            self.episode_fixed_head_wo,
+                            self.episode_fixed_head_bo,
+                        )
+                    self.episode_head_update_step += 1
                 elif self.full_head_variant in self.full_head_teacher_only_distill_variants:
                     q, group_state = self._apply_teacher_only_distill_head(
                         h,
