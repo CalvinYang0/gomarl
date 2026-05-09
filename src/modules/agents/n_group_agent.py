@@ -148,6 +148,7 @@ class GroupAgent(nn.Module):
         self.full_head_param_ema_beta = getattr(args, "full_head_param_ema_beta", 0.99)
         self.full_head_use_ema_in_test = getattr(args, "full_head_use_ema_in_test", True)
         self.full_head_student_stopgrad = bool(getattr(args, "full_head_student_stopgrad", False))
+        self.full_head_apply_rf_init = bool(getattr(args, "full_head_apply_rf_init", False))
         self.rf_fan_mode = getattr(args, "full_head_rf_fan_mode", "fan_in")
         self.full_head_pid_start = float(getattr(args, "full_head_pid_start", 0.0))
         self.full_head_pid_end = float(getattr(args, "full_head_pid_end", 0.5))
@@ -697,7 +698,7 @@ class GroupAgent(nn.Module):
             )
             self.hyper_b = nn.Sequential(nn.Linear(args.hypernet_embed, args.n_actions))
             self.hyper_w = nn.Sequential(nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.n_actions))
-            if self.full_head_variant == "rf" and (
+            if (self.full_head_variant == "rf" or self.full_head_apply_rf_init) and (
                 self.group_head_mode in self.no_group_param_scope_modes
                 or self.group_head_mode in self.grouped_full_head_modes
             ):
@@ -1286,6 +1287,22 @@ class GroupAgent(nn.Module):
             self._reset_linear_fan_init(self.hyper_w[0])
         if hasattr(self, "hyper_b") and isinstance(self.hyper_b, nn.Sequential) and len(self.hyper_b) > 0:
             self._reset_linear_fan_init(self.hyper_b[0])
+        if hasattr(self, "teacher_hyper_bottleneck_w"):
+            self._reset_linear_fan_init(self.teacher_hyper_bottleneck_w)
+        if hasattr(self, "teacher_hyper_bottleneck_b"):
+            self._reset_linear_fan_init(self.teacher_hyper_bottleneck_b)
+        if hasattr(self, "teacher_hyper_w") and isinstance(self.teacher_hyper_w, nn.Sequential) and len(self.teacher_hyper_w) > 0:
+            self._reset_linear_fan_init(self.teacher_hyper_w[0])
+        if hasattr(self, "teacher_hyper_b") and isinstance(self.teacher_hyper_b, nn.Sequential) and len(self.teacher_hyper_b) > 0:
+            self._reset_linear_fan_init(self.teacher_hyper_b[0])
+        if hasattr(self, "student_hyper_bottleneck_w"):
+            self._reset_linear_fan_init(self.student_hyper_bottleneck_w)
+        if hasattr(self, "student_hyper_bottleneck_b"):
+            self._reset_linear_fan_init(self.student_hyper_bottleneck_b)
+        if hasattr(self, "student_hyper_w") and isinstance(self.student_hyper_w, nn.Sequential) and len(self.student_hyper_w) > 0:
+            self._reset_linear_fan_init(self.student_hyper_w[0])
+        if hasattr(self, "student_hyper_b") and isinstance(self.student_hyper_b, nn.Sequential) and len(self.student_hyper_b) > 0:
+            self._reset_linear_fan_init(self.student_hyper_b[0])
 
     def _update_episode_head_feat_mean(self, head_feat):
         if self.episode_head_feat_sum is None or self.episode_head_feat_sum.shape != head_feat.shape:

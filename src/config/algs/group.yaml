@@ -36,6 +36,7 @@ full_head_two_stage_teacher_tmax: 5000000  # when full_head_train_stage=two_stag
 full_head_distill_alpha: 0.2      # used by distill / ptde_strict / distill_q_teacher_td / teacher_td_qdistill / teacher_td_featdistill / teacher_td_multidistill / distill_head / distill_head_teacher_td / pid_dropout / belief_cond
 full_head_teacher_td_alpha: 1.0   # used by teacher-TD distill variants
 full_head_student_stopgrad: False # when True, block student distill gradients from flowing back into shared node/h features
+full_head_apply_rf_init: False    # when True, apply the RF fan init to the current full-head generators, including teacher/student distill heads
 full_head_belief_kl_alpha: 0.01   # only used when full_head_variant=belief_cond
 full_head_belief_latent_dim: 32   # only used when full_head_variant=belief_cond
 full_head_pid_start: 0.0          # only used when full_head_variant=pid_dropout
