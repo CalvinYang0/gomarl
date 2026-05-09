@@ -1484,7 +1484,7 @@ class GroupAgent(nn.Module):
 
     def _apply_full_head_with_fixed_params(self, head_source, wb, bb, wo, bo):
         b, a, _ = head_source.size()
-        if wb.dim() == 3:
+        if wb.dim() == 3 and wb.size(0) == a:
             wb_use = wb.unsqueeze(0).expand(b, -1, -1, -1).reshape(b * a, self.a_h_dim, self.a_h_dim)
             bb_use = bb.unsqueeze(0).expand(b, -1, -1, -1).reshape(b * a, 1, self.a_h_dim)
             wo_use = wo.unsqueeze(0).expand(b, -1, -1, -1).reshape(b * a, self.a_h_dim, self.action_dim)
