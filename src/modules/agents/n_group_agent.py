@@ -76,6 +76,8 @@ class GroupAgent(nn.Module):
             "std_gcn": "standard_gcn",
             "gcn_standard": "standard_gcn",
             "rf_strategy": "rf",
+            "hyper_rf": "hypermarl_rf",
+            "orth_rf": "hypermarl_rf",
             "with_id": "id_cond",
             "three_branch": "tri_branch",
             "three_branch_mlp": "tri_branch",
@@ -719,6 +721,11 @@ class GroupAgent(nn.Module):
                 or self.group_head_mode in self.grouped_full_head_modes
             ):
                 self._reset_full_head_rf_initialization()
+            if self.full_head_variant == "hypermarl_rf" and (
+                self.group_head_mode in self.no_group_param_scope_modes
+                or self.group_head_mode in self.grouped_full_head_modes
+            ):
+                self._reset_full_head_hypermarl_initialization()
 
         self.group_probs = None
         self.group_graphs = None
@@ -1310,6 +1317,22 @@ class GroupAgent(nn.Module):
             if linear.bias is not None:
                 nn.init.zeros_(linear.bias)
 
+    def _reset_linear_orthogonal_init(self, linear, gain=1.0):
+        if not isinstance(linear, nn.Linear):
+            return
+        with th.no_grad():
+            nn.init.orthogonal_(linear.weight, gain=gain)
+            if linear.bias is not None:
+                nn.init.zeros_(linear.bias)
+
+    def _reset_linear_zero_init(self, linear):
+        if not isinstance(linear, nn.Linear):
+            return
+        with th.no_grad():
+            nn.init.zeros_(linear.weight)
+            if linear.bias is not None:
+                nn.init.zeros_(linear.bias)
+
     def _reset_full_head_rf_initialization(self):
         if hasattr(self, "hyper_bottleneck_w"):
             self._reset_linear_fan_init(self.hyper_bottleneck_w)
@@ -1335,6 +1358,37 @@ class GroupAgent(nn.Module):
             self._reset_linear_fan_init(self.student_hyper_w[0])
         if hasattr(self, "student_hyper_b") and isinstance(self.student_hyper_b, nn.Sequential) and len(self.student_hyper_b) > 0:
             self._reset_linear_fan_init(self.student_hyper_b[0])
+
+    def _reset_full_head_hypermarl_initialization(self):
+        hidden_gain = math.sqrt(2.0)
+        output_gain = 1.0
+
+        if hasattr(self, "hyper_bottleneck_w"):
+            self._reset_linear_orthogonal_init(self.hyper_bottleneck_w, gain=hidden_gain)
+        if hasattr(self, "hyper_bottleneck_b"):
+            self._reset_linear_zero_init(self.hyper_bottleneck_b)
+        if hasattr(self, "hyper_w") and isinstance(self.hyper_w, nn.Sequential) and len(self.hyper_w) > 0:
+            self._reset_linear_orthogonal_init(self.hyper_w[0], gain=output_gain)
+        if hasattr(self, "hyper_b") and isinstance(self.hyper_b, nn.Sequential) and len(self.hyper_b) > 0:
+            self._reset_linear_zero_init(self.hyper_b[0])
+
+        if hasattr(self, "teacher_hyper_bottleneck_w"):
+            self._reset_linear_orthogonal_init(self.teacher_hyper_bottleneck_w, gain=hidden_gain)
+        if hasattr(self, "teacher_hyper_bottleneck_b"):
+            self._reset_linear_zero_init(self.teacher_hyper_bottleneck_b)
+        if hasattr(self, "teacher_hyper_w") and isinstance(self.teacher_hyper_w, nn.Sequential) and len(self.teacher_hyper_w) > 0:
+            self._reset_linear_orthogonal_init(self.teacher_hyper_w[0], gain=output_gain)
+        if hasattr(self, "teacher_hyper_b") and isinstance(self.teacher_hyper_b, nn.Sequential) and len(self.teacher_hyper_b) > 0:
+            self._reset_linear_zero_init(self.teacher_hyper_b[0])
+
+        if hasattr(self, "student_hyper_bottleneck_w"):
+            self._reset_linear_orthogonal_init(self.student_hyper_bottleneck_w, gain=hidden_gain)
+        if hasattr(self, "student_hyper_bottleneck_b"):
+            self._reset_linear_zero_init(self.student_hyper_bottleneck_b)
+        if hasattr(self, "student_hyper_w") and isinstance(self.student_hyper_w, nn.Sequential) and len(self.student_hyper_w) > 0:
+            self._reset_linear_orthogonal_init(self.student_hyper_w[0], gain=output_gain)
+        if hasattr(self, "student_hyper_b") and isinstance(self.student_hyper_b, nn.Sequential) and len(self.student_hyper_b) > 0:
+            self._reset_linear_zero_init(self.student_hyper_b[0])
 
     def _update_episode_head_feat_mean(self, head_feat):
         if self.episode_head_feat_sum is None or self.episode_head_feat_sum.shape != head_feat.shape:
@@ -1627,7 +1681,7 @@ class GroupAgent(nn.Module):
                 q_static = self.static_out_head(h.reshape(b * a, self.a_h_dim)).view(b * a, 1, self.action_dim)
                 q = q_static + self.dynamic_residual_scale * q_dynamic
             else:
-                if self.full_head_variant in {"dynamic", "rf", "grad_decouple", "id_cond", "tri_branch", "no_struct"}:
+                if self.full_head_variant in {"dynamic", "rf", "hypermarl_rf", "grad_decouple", "id_cond", "tri_branch", "no_struct"}:
                     q, _, _, _, _ = self._build_dynamic_full_head_q(h, group_state, head_input=dynamic_input)
                 elif self.full_head_variant in self.full_head_teacher_only_distill_variants:
                     q, group_state = self._apply_teacher_only_distill_head(
