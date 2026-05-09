@@ -238,6 +238,7 @@ class GroupAgent(nn.Module):
                 "graph_better_struct_ego_subgraph",
                 "graph_input_fusion",
                 "graph_input_fusion_node_embed",
+                "graph_input_fusion_node_embed_two_layer_head",
                 "graph_input_fusion_node_embed_no_groupemb",
                 "graph_input_fusion_node_embed_no_reg",
                 "graph_input_fusion_node_embed_no_groupemb_no_reg",
@@ -275,6 +276,7 @@ class GroupAgent(nn.Module):
                 elif self.group_head_mode in [
                     "graph_input_fusion",
                     "graph_input_fusion_node_embed",
+                    "graph_input_fusion_node_embed_two_layer_head",
                     "graph_input_fusion_node_embed_no_groupemb",
                     "graph_input_fusion_node_embed_no_reg",
                     "graph_input_fusion_node_embed_no_groupemb_no_reg",
@@ -303,6 +305,7 @@ class GroupAgent(nn.Module):
                     self.struct_stat_dim = args.n_agents + 2
                     if self.group_head_mode in [
                         "graph_input_fusion_node_embed",
+                        "graph_input_fusion_node_embed_two_layer_head",
                         "graph_input_fusion_node_embed_no_groupemb",
                         "graph_input_fusion_node_embed_no_reg",
                         "graph_input_fusion_node_embed_no_groupemb_no_reg",
@@ -325,6 +328,7 @@ class GroupAgent(nn.Module):
                 elif self.group_head_mode in [
                     "graph_input_fusion",
                     "graph_input_fusion_node_embed",
+                    "graph_input_fusion_node_embed_two_layer_head",
                     "graph_input_fusion_node_embed_no_groupemb",
                     "graph_input_fusion_node_embed_no_reg",
                     "graph_input_fusion_node_embed_no_groupemb_no_reg",
@@ -365,6 +369,11 @@ class GroupAgent(nn.Module):
                         nn.ReLU(inplace=True),
                         nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
                     )
+                    if self.group_head_mode == "graph_input_fusion_node_embed_two_layer_head":
+                        self.static_pre_head = nn.Sequential(
+                            nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim),
+                            nn.ReLU(inplace=True),
+                        )
                 if self.group_head_mode == "graph_input_fusion_hidden_head":
                     self.head_input_encoder = nn.Sequential(
                         nn.Linear(args.rnn_hidden_dim, args.hypernet_embed),
@@ -934,6 +943,7 @@ class GroupAgent(nn.Module):
         elif self.group_head_mode in [
             "graph_input_fusion",
             "graph_input_fusion_node_embed",
+            "graph_input_fusion_node_embed_two_layer_head",
             "graph_input_fusion_node_embed_no_groupemb",
             "graph_input_fusion_node_embed_no_reg",
             "graph_input_fusion_node_embed_no_groupemb_no_reg",
@@ -960,6 +970,7 @@ class GroupAgent(nn.Module):
             struct_input = th.cat([row_probs, degree, entropy], dim=-1)
             if self.group_head_mode in [
                 "graph_input_fusion_node_embed",
+                "graph_input_fusion_node_embed_two_layer_head",
                 "graph_input_fusion_node_embed_no_groupemb",
                 "graph_input_fusion_node_embed_no_reg",
                 "graph_input_fusion_node_embed_no_groupemb_no_reg",
@@ -1868,6 +1879,7 @@ class GroupAgent(nn.Module):
                 if self.group_head_mode in [
                     "graph_input_fusion",
                     "graph_input_fusion_node_embed",
+                    "graph_input_fusion_node_embed_two_layer_head",
                     "graph_input_fusion_node_embed_no_groupemb",
                     "graph_input_fusion_node_embed_no_reg",
                     "graph_input_fusion_node_embed_no_groupemb_no_reg",
@@ -1896,6 +1908,7 @@ class GroupAgent(nn.Module):
                         graph_source
                         if self.group_head_mode in [
                             "graph_input_fusion_node_embed",
+                            "graph_input_fusion_node_embed_two_layer_head",
                             "graph_input_fusion_node_embed_no_groupemb",
                             "graph_input_fusion_node_embed_no_reg",
                             "graph_input_fusion_node_embed_no_groupemb_no_reg",
@@ -1923,6 +1936,12 @@ class GroupAgent(nn.Module):
                     group_state = self.group_decoder((struct_feat + group_emb).reshape(b * a, -1)).view(b, a, -1)
             if self.group_head_mode in self.grouped_full_head_modes:
                 q = self._apply_group_dynamic_full_head(h, group_state)
+            elif self.group_head_mode == "graph_input_fusion_node_embed_two_layer_head":
+                h_pre = self.static_pre_head(h.reshape(b * a, -1)).view(b, a, -1)
+                fc2_w = self.hyper_w(group_state.reshape(b * a, -1)).reshape(b * a, self.a_h_dim, self.action_dim)
+                fc2_b = self.hyper_b(group_state.reshape(b * a, -1)).reshape(b * a, 1, self.action_dim)
+                q = th.matmul(h_pre.reshape(b * a, 1, self.a_h_dim), fc2_w) + fc2_b
+                q = q.view(b, a, -1)
             elif (
                 self.group_head_mode not in self.no_group_head_compare_modes
                 and self.group_head_mode not in self.no_group_param_scope_modes
