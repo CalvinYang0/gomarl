@@ -968,7 +968,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_head_only",
         ]:
             struct_input = th.cat([row_probs, degree, entropy], dim=-1)
-            if self.group_head_mode in [
+            if node_embed is not None and self.group_head_mode in [
                 "graph_input_fusion_node_embed",
                 "graph_input_fusion_node_embed_two_layer_head",
                 "graph_input_fusion_node_embed_no_groupemb",
