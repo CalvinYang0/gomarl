@@ -73,6 +73,8 @@ class GroupAgent(nn.Module):
             "episode_mean_param_avg": "ema_ep_struct_mean",
             "gradient_separate": "grad_decouple",
             "grad_separate": "grad_decouple",
+            "std_gcn": "standard_gcn",
+            "gcn_standard": "standard_gcn",
             "rf_strategy": "rf",
             "with_id": "id_cond",
             "three_branch": "tri_branch",
@@ -526,6 +528,8 @@ class GroupAgent(nn.Module):
                             nn.Linear(args.hypernet_embed, args.hypernet_embed),
                             nn.Tanh(),
                         )
+                        self.full_head_standard_gcn_in = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim)
+                        self.full_head_standard_gcn_out = nn.Linear(args.rnn_hidden_dim, args.hypernet_embed)
                         self.full_head_gat_q = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                         self.full_head_gat_k = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
                         self.full_head_gat_v = nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, bias=False)
@@ -1075,7 +1079,7 @@ class GroupAgent(nn.Module):
         struct_feat = self._build_graph_struct_features(group_graphs, node_embed=node_embed)
         if (
             self.group_head_mode in self.full_head_local_ctde_modes
-            and self.full_head_variant in {"gcn", "neighbor_agg", "gat", "temporal_gnn", "edge_gnn", "relation_gnn", "hetero_enemy"}
+            and self.full_head_variant in {"gcn", "neighbor_agg", "standard_gcn", "gat", "temporal_gnn", "edge_gnn", "relation_gnn", "hetero_enemy"}
         ):
             variant_struct = self._build_full_head_graph_variant_struct(node_embed, group_graphs, graph_context=graph_context)
             if variant_struct is not None:
@@ -1172,6 +1176,20 @@ class GroupAgent(nn.Module):
             neighbor_embed = th.matmul(row_probs, node_embed)
             gcn_input = th.cat([node_embed, neighbor_embed], dim=-1)
             return self.full_head_gcn_encoder(gcn_input.reshape(b * a, -1)).view(b, a, -1)
+
+        if self.full_head_variant == "standard_gcn":
+            identity = th.eye(a, device=node_embed.device, dtype=node_embed.dtype).unsqueeze(0)
+            adj_hat = group_graphs + identity
+            degree_hat = adj_hat.sum(dim=-1).clamp(min=1e-8)
+            degree_inv_sqrt = degree_hat.pow(-0.5)
+            norm_adj = degree_inv_sqrt.unsqueeze(-1) * adj_hat * degree_inv_sqrt.unsqueeze(-2)
+
+            hidden = self.full_head_standard_gcn_in(node_embed)
+            hidden = th.matmul(norm_adj, hidden)
+            hidden = F.relu(hidden, inplace=True)
+            hidden = self.full_head_standard_gcn_out(hidden)
+            hidden = th.matmul(norm_adj, hidden)
+            return th.tanh(hidden)
 
         if self.full_head_variant == "gat":
             q = self.full_head_gat_q(node_embed)
