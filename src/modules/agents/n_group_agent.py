@@ -108,6 +108,9 @@ class GroupAgent(nn.Module):
             "teacher_only_qdistill": "teacher_td_qdistill",
             "teacher_only_featdistill": "teacher_td_featdistill",
             "teacher_only_multidistill": "teacher_td_multidistill",
+            "neighbor_mean": "neighbor_agg",
+            "mean_agg": "neighbor_agg",
+            "row_neighbor_agg": "neighbor_agg",
         }
         self.full_head_variant = legacy_variant_map.get(self.full_head_variant, self.full_head_variant)
         self.full_head_distill_variants = {
@@ -1072,7 +1075,7 @@ class GroupAgent(nn.Module):
         struct_feat = self._build_graph_struct_features(group_graphs, node_embed=node_embed)
         if (
             self.group_head_mode in self.full_head_local_ctde_modes
-            and self.full_head_variant in {"gcn", "gat", "temporal_gnn", "edge_gnn", "relation_gnn", "hetero_enemy"}
+            and self.full_head_variant in {"gcn", "neighbor_agg", "gat", "temporal_gnn", "edge_gnn", "relation_gnn", "hetero_enemy"}
         ):
             variant_struct = self._build_full_head_graph_variant_struct(node_embed, group_graphs, graph_context=graph_context)
             if variant_struct is not None:
@@ -1165,7 +1168,7 @@ class GroupAgent(nn.Module):
         degree = group_graphs.sum(dim=-1, keepdim=True)
         row_probs = group_graphs / degree.clamp(min=1e-8)
 
-        if self.full_head_variant == "gcn":
+        if self.full_head_variant in {"gcn", "neighbor_agg"}:
             neighbor_embed = th.matmul(row_probs, node_embed)
             gcn_input = th.cat([node_embed, neighbor_embed], dim=-1)
             return self.full_head_gcn_encoder(gcn_input.reshape(b * a, -1)).view(b, a, -1)
