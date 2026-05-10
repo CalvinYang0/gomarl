@@ -17,6 +17,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed_head",
             "graph_input_fusion_struct_feat_head",
             "graph_input_fusion_node_embed_struct_feat_head",
+            "graph_input_fusion_node_embed_no_groupemb_no_group",
         }
         self.no_group_param_scope_modes = {
             "graph_input_fusion_node_embed_struct_feat_two_layer_head",
@@ -256,6 +257,7 @@ class GroupAgent(nn.Module):
                 "graph_input_fusion_node_embed",
                 "graph_input_fusion_node_embed_two_layer_head",
                 "graph_input_fusion_node_embed_no_groupemb",
+                "graph_input_fusion_node_embed_no_groupemb_no_group",
                 "graph_input_fusion_node_embed_no_reg",
                 "graph_input_fusion_node_embed_no_groupemb_no_reg",
                 "graph_input_fusion_node_embed_struct_only",
@@ -294,6 +296,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed",
                     "graph_input_fusion_node_embed_two_layer_head",
                     "graph_input_fusion_node_embed_no_groupemb",
+                    "graph_input_fusion_node_embed_no_groupemb_no_group",
                     "graph_input_fusion_node_embed_no_reg",
                     "graph_input_fusion_node_embed_no_groupemb_no_reg",
                     "graph_input_fusion_node_embed_struct_only",
@@ -323,6 +326,7 @@ class GroupAgent(nn.Module):
                         "graph_input_fusion_node_embed",
                         "graph_input_fusion_node_embed_two_layer_head",
                         "graph_input_fusion_node_embed_no_groupemb",
+                        "graph_input_fusion_node_embed_no_groupemb_no_group",
                         "graph_input_fusion_node_embed_no_reg",
                         "graph_input_fusion_node_embed_no_groupemb_no_reg",
                         "graph_input_fusion_node_embed_struct_only",
@@ -346,6 +350,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed",
                     "graph_input_fusion_node_embed_two_layer_head",
                     "graph_input_fusion_node_embed_no_groupemb",
+                    "graph_input_fusion_node_embed_no_groupemb_no_group",
                     "graph_input_fusion_node_embed_no_reg",
                     "graph_input_fusion_node_embed_no_groupemb_no_reg",
                     "graph_input_fusion_node_embed_struct_only",
@@ -726,12 +731,14 @@ class GroupAgent(nn.Module):
             self.hyper_b = nn.Sequential(nn.Linear(args.hypernet_embed, args.n_actions))
             self.hyper_w = nn.Sequential(nn.Linear(args.hypernet_embed, args.rnn_hidden_dim * args.n_actions))
             if (self.full_head_variant == "rf" or self.full_head_apply_rf_init) and (
-                self.group_head_mode in self.no_group_param_scope_modes
+                self.group_head_mode in self.no_group_head_compare_modes
+                or self.group_head_mode in self.no_group_param_scope_modes
                 or self.group_head_mode in self.grouped_full_head_modes
             ):
                 self._reset_full_head_rf_initialization()
             if self.full_head_variant == "hypermarl_rf" and (
-                self.group_head_mode in self.no_group_param_scope_modes
+                self.group_head_mode in self.no_group_head_compare_modes
+                or self.group_head_mode in self.no_group_param_scope_modes
                 or self.group_head_mode in self.grouped_full_head_modes
             ):
                 self._reset_full_head_hypermarl_initialization()
@@ -978,6 +985,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed",
             "graph_input_fusion_node_embed_two_layer_head",
             "graph_input_fusion_node_embed_no_groupemb",
+            "graph_input_fusion_node_embed_no_groupemb_no_group",
             "graph_input_fusion_node_embed_no_reg",
             "graph_input_fusion_node_embed_no_groupemb_no_reg",
             "graph_input_fusion_node_embed_struct_only",
@@ -1005,6 +1013,7 @@ class GroupAgent(nn.Module):
                 "graph_input_fusion_node_embed",
                 "graph_input_fusion_node_embed_two_layer_head",
                 "graph_input_fusion_node_embed_no_groupemb",
+                "graph_input_fusion_node_embed_no_groupemb_no_group",
                 "graph_input_fusion_node_embed_no_reg",
                 "graph_input_fusion_node_embed_no_groupemb_no_reg",
                 "graph_input_fusion_node_embed_struct_only",
@@ -1951,6 +1960,7 @@ class GroupAgent(nn.Module):
             "graph_input_fusion_node_embed",
             "graph_input_fusion_node_embed_two_layer_head",
             "graph_input_fusion_node_embed_no_groupemb",
+            "graph_input_fusion_node_embed_no_groupemb_no_group",
             "graph_input_fusion_node_embed_no_reg",
             "graph_input_fusion_node_embed_no_groupemb_no_reg",
             "graph_input_fusion_node_embed_struct_only",
@@ -2017,6 +2027,7 @@ class GroupAgent(nn.Module):
                     "graph_input_fusion_node_embed",
                     "graph_input_fusion_node_embed_two_layer_head",
                     "graph_input_fusion_node_embed_no_groupemb",
+                    "graph_input_fusion_node_embed_no_groupemb_no_group",
                     "graph_input_fusion_node_embed_no_reg",
                     "graph_input_fusion_node_embed_no_groupemb_no_reg",
                     "graph_input_fusion_node_embed_sharp",

@@ -81,6 +81,7 @@ def uses_dynamic_grouping(args):
         "graph_input_fusion_node_embed_head",
         "graph_input_fusion_struct_feat_head",
         "graph_input_fusion_node_embed_struct_feat_head",
+        "graph_input_fusion_node_embed_no_groupemb_no_group",
         "graph_input_fusion_node_embed_struct_feat_two_layer_head",
         "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
         "graph_input_fusion_node_embed_struct_feat_full_head",
