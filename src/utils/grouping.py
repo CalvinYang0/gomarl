@@ -68,4 +68,28 @@ def resolve_group_config(args):
 
 
 def uses_dynamic_grouping(args):
-    return getattr(args, "group_mode", "dynamic") == "dynamic"
+    if getattr(args, "group_mode", "dynamic") != "dynamic":
+        return False
+
+    group_head_mode = getattr(args, "group_head_mode", "latent")
+    if isinstance(group_head_mode, str):
+        group_head_mode = group_head_mode.replace("-", "_")
+
+    no_group_modes = {
+        "graph_input_fusion_node_embed_struct_only",
+        "graph_input_fusion_hidden_head",
+        "graph_input_fusion_node_embed_head",
+        "graph_input_fusion_struct_feat_head",
+        "graph_input_fusion_node_embed_struct_feat_head",
+        "graph_input_fusion_node_embed_struct_feat_two_layer_head",
+        "graph_input_fusion_node_embed_struct_feat_bottleneck_head",
+        "graph_input_fusion_node_embed_struct_feat_full_head",
+        "graph_input_fusion_node_embed_struct_feat_full_head_early_node",
+        "graph_input_fusion_node_embed_struct_feat_full_head_residual",
+        "graph_input_fusion_node_embed_struct_feat_decoupled_head",
+        "graph_input_fusion_node_embed_struct_feat_decoupled_residual_head",
+        "graph_input_fusion_node_embed_gcn_full_head",
+        "graph_input_fusion_node_embed_subgraph_full_head",
+        "graph_input_fusion_node_embed_struct_feat_full_model",
+    }
+    return group_head_mode not in no_group_modes
