@@ -1,0 +1,48 @@
+# --- Clean hypernetwork family ---
+
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 100000
+
+runner: "parallel"
+run: "default"
+batch_size_run: 8
+buffer_size: 5000
+batch_size: 128
+optimizer: "adam"
+
+t_max: 10050000
+target_update_interval: 200
+
+mac: "clean_mac"
+agent: "clean_hyper"
+agent_output_type: q
+learner: "clean_learner"
+mixer: "qmix"                 # qmix | vdn | none
+mixing_embed_dim: 32
+hypernet_embed: 64
+hypernet_layers: 2
+
+# Six clean models:
+# - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)
+# - hypermarl_id: HyperMARL-style learned e_i table conditions the hypernetwork;
+#                 shared trunk does not consume one-hot agent id (CTDE)
+# - dynamic_route: local route/codebook selects the head condition (CTDE)
+# - graph_hypercond: obs-only graph + standard GCN -> hypernetwork condition (currently CTCE validation)
+# - graph_route: obs-only graph + standard GCN -> route/codebook (currently CTCE validation)
+# - qmix_minimal: shared trunk + fixed linear head, no hypernetwork (CTDE)
+clean_model_type: "baseline"
+clean_apply_hypermarl_init: False
+clean_condition_dim: 64
+clean_id_embed_dim: 64
+clean_route_num: 4
+clean_route_temperature: 1.0
+clean_graph_node_dim: 64
+clean_graph_layers: 1
+clean_graph_topk: null
+
+lr: 0.001
+td_lambda: 0.6
+
+name: "clean_hyper_baseline"

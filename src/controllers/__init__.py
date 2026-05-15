@@ -1,7 +1,7 @@
 REGISTRY = {}
 
 from .basic_controller import BasicMAC
-from .group_controller import NMAC as GroupMAC
+from .clean_controller import CleanMAC
 
 REGISTRY["basic_mac"] = BasicMAC
-REGISTRY["group_mac"] = GroupMAC
+REGISTRY["clean_mac"] = CleanMAC

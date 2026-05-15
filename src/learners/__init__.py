@@ -1,5 +1,5 @@
-from .group_learner import GROUPLearner
+from .clean_learner import CleanLearner
 
 REGISTRY = {}
 
-REGISTRY["group_learner"] = GROUPLearner
+REGISTRY["clean_learner"] = CleanLearner

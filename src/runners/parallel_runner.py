@@ -2,24 +2,8 @@ from envs import REGISTRY as env_REGISTRY
 from functools import partial
 from components.episode_buffer import EpisodeBatch
 from multiprocessing import Pipe, Process
-import copy
 import numpy as np
 import torch as th
-
-
-def _extract_role_snapshot(mac):
-    role_features = getattr(mac, "group_struct_features", None)
-    role_probs = getattr(mac, "group_probs", None)
-    role_prototypes = getattr(mac, "group_role_prototypes", None)
-    if role_features is None or role_probs is None:
-        return None
-    snapshot = {
-        "role_features": copy.deepcopy(role_features[0].detach().cpu().numpy()),
-        "role_probs": copy.deepcopy(role_probs[0].detach().cpu().numpy()),
-    }
-    if role_prototypes is not None:
-        snapshot["role_prototypes"] = copy.deepcopy(role_prototypes.detach().cpu().numpy())
-    return snapshot
 
 class ParallelRunner:
 
@@ -54,8 +38,6 @@ class ParallelRunner:
         self.test_stats = {}
 
         self.log_train_stats_t = -100000
-        self.last_test_viz_trace = None
-        self.last_test_group = None
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -78,31 +60,22 @@ class ParallelRunner:
     def reset(self, test_mode=False):
         self.batch = self.new_batch()
 
-        want_group_viz = test_mode and getattr(self.args, "visualize_group_graph", False)
-        for idx, parent_conn in enumerate(self.parent_conns):
-            if want_group_viz and idx == 0:
-                parent_conn.send(("reset", {"want_viz": True}))
-            else:
-                parent_conn.send(("reset", None))
+        for parent_conn in self.parent_conns:
+            parent_conn.send(("reset", None))
 
         pre_transition_data = {
             "state": [],
             "avail_actions": [],
             "obs": []
         }
-        reset_viz = []
 
         for parent_conn in self.parent_conns:
             data = parent_conn.recv()
             pre_transition_data["state"].append(data["state"])
             pre_transition_data["avail_actions"].append(data["avail_actions"])
             pre_transition_data["obs"].append(data["obs"])
-            reset_viz.append(data.get("viz_info"))
 
         self.batch.update(pre_transition_data, ts=0)
-        self.current_test_viz_trace = None
-        if want_group_viz and reset_viz and reset_viz[0] is not None:
-            self.current_test_viz_trace = [{"viz_info": reset_viz[0], "group": None}]
 
         self.t = 0
         self.env_steps_this_run = 0
@@ -140,10 +113,7 @@ class ParallelRunner:
             for idx, parent_conn in enumerate(self.parent_conns):
                 if idx in envs_not_terminated:
                     if not terminated[idx]:
-                        if self.current_test_viz_trace is not None and idx == 0:
-                            parent_conn.send(("step", {"actions": cpu_actions[action_idx], "want_viz": True}))
-                        else:
-                            parent_conn.send(("step", cpu_actions[action_idx]))
+                        parent_conn.send(("step", cpu_actions[action_idx]))
                     action_idx += 1
 
             envs_not_terminated = [b_idx for b_idx, termed in enumerate(terminated) if not termed]
@@ -183,14 +153,6 @@ class ParallelRunner:
                     pre_transition_data["state"].append(data["state"])
                     pre_transition_data["avail_actions"].append(data["avail_actions"])
                     pre_transition_data["obs"].append(data["obs"])
-                    if self.current_test_viz_trace is not None and idx == 0 and data.get("viz_info") is not None:
-                        current_groups = getattr(self.mac, "current_groups", None)
-                        current_group = copy.deepcopy(current_groups[0]) if current_groups is not None else None
-                        role_snapshot = _extract_role_snapshot(self.mac)
-                        frame = {"viz_info": data["viz_info"], "group": current_group}
-                        if role_snapshot is not None:
-                            frame.update(role_snapshot)
-                        self.current_test_viz_trace.append(frame)
 
             self.batch.update(post_transition_data, bs=envs_not_terminated, ts=self.t, mark_filled=False)
 
@@ -229,11 +191,6 @@ class ParallelRunner:
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
 
-        if test_mode:
-            self.last_test_viz_trace = self.current_test_viz_trace
-            current_groups = getattr(self.mac, "current_groups", None)
-            self.last_test_group = copy.deepcopy(current_groups[0]) if current_groups is not None else None
-
         return self.batch
 
     def _log(self, returns, stats, prefix):
@@ -252,8 +209,7 @@ def env_worker(remote, env_fn):
     while True:
         cmd, data = remote.recv()
         if cmd == "step":
-            want_viz = isinstance(data, dict) and data.get("want_viz", False)
-            actions = data["actions"] if isinstance(data, dict) else data
+            actions = data
             reward, terminated, env_info = env.step(actions)
             state = env.get_state()
             avail_actions = env.get_avail_actions()
@@ -266,19 +222,14 @@ def env_worker(remote, env_fn):
                 "terminated": terminated,
                 "info": env_info
             }
-            if want_viz:
-                response["viz_info"] = env.get_group_viz_info()
             remote.send(response)
         elif cmd == "reset":
             env.reset()
-            response = {
+            remote.send({
                 "state": env.get_state(),
                 "avail_actions": env.get_avail_actions(),
                 "obs": env.get_obs()
-            }
-            if isinstance(data, dict) and data.get("want_viz", False):
-                response["viz_info"] = env.get_group_viz_info()
-            remote.send(response)
+            })
         elif cmd == "close":
             env.close()
             remote.close()

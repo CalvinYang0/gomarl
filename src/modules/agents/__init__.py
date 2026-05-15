@@ -1,5 +1,5 @@
 REGISTRY = {}
 
-from .n_group_agent import GroupAgent
+from .clean_hyper_agent import CleanHyperAgent
 
-REGISTRY["n_group"] = GroupAgent
+REGISTRY["clean_hyper"] = CleanHyperAgent

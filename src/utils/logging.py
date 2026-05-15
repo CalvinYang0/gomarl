@@ -120,55 +120,6 @@ class Logger:
                 self.sacred_info["{}_T".format(key)] = [t]
                 self.sacred_info[key] = [value]
 
-    def log_group(self, group, t, prefix=""):
-        if not group:
-            return
-
-        sizes = [len(group_i) for group_i in group]
-        max_agent_id = max(agent_id for group_i in group for agent_id in group_i)
-        assignment = [-1 for _ in range(max_agent_id + 1)]
-        for group_id, group_i in enumerate(group):
-            for agent_id in group_i:
-                assignment[agent_id] = group_id
-
-        self.log_stat(prefix + "group_num", len(group), t)
-        self.log_stat(prefix + "group_size_mean", float(np.mean(sizes)), t)
-        self.log_stat(prefix + "group_size_max", float(np.max(sizes)), t)
-        self.log_stat(prefix + "group_size_min", float(np.min(sizes)), t)
-        self.log_misc(prefix + "group_structure", str(group), t)
-        self.log_misc(prefix + "group_assignment", str(assignment), t)
-
-    def log_group_viz(self, group_trace, group, t, map_name, max_frames=24, fps=4, prefix="test_"):
-        if not self.use_wandb or not group_trace:
-            return
-
-        from utils.group_viz import build_group_viz_frames, build_role_scatter_image
-
-        frames = build_group_viz_frames(group_trace, group, map_name, max_frames=max_frames)
-        if not frames:
-            frames = None
-
-        if frames is not None:
-            video = np.stack(frames, axis=0).transpose(0, 3, 1, 2)
-            self._update_wandb_buffer(
-                prefix + "group_graph_video",
-                self.wandb_module.Video(video, fps=fps, format="mp4"),
-                t,
-            )
-            self._update_wandb_buffer(
-                prefix + "group_graph_final",
-                self.wandb_module.Image(frames[-1]),
-                t,
-            )
-
-        role_scatter = build_role_scatter_image(group_trace, map_name)
-        if role_scatter is not None:
-            self._update_wandb_buffer(
-                prefix + "group_role_scatter",
-                self.wandb_module.Image(role_scatter),
-                t,
-            )
-
     def print_recent_stats(self):
         log_str = "Recent Stats | t_env: {:>10} | Episode: {:>8}\n".format(*self.stats["episode"][-1])
         i = 0
