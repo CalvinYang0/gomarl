@@ -24,7 +24,7 @@ mixing_embed_dim: 32
 hypernet_embed: 64
 hypernet_layers: 2
 
-# Seven clean models:
+# Nine clean models:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)
 # - hypermarl_id: id-conditioned dynamic-head baseline; learned e_i only provides
 #                 a condition vector for the generated head, so this is NOT the strict
@@ -33,6 +33,18 @@ hypernet_layers: 2
 #                      that generates the full post-RNN two-layer action network
 #                      parameters; shared trunk does not consume one-hot agent id (CTDE)
 # - dynamic_route: local route/codebook selects the head condition (CTDE)
+# - rpg_relation_hypercond: RPG-inspired single-task CTDE adaptation. It uses
+#                           observation-only self/teammate/other relation capture,
+#                           first-person cross-attention, and a separate relation GRU
+#                           to produce a continuous relation pattern that conditions
+#                           our generated head. It does NOT reproduce RPG's continual-
+#                           learning regularizers, task embedding, or structured
+#                           ego/interaction decision-maker split.
+# - rpg_relation_route: same RPG-inspired relation capturer, but the relation
+#                       pattern is first converted into route logits and then
+#                       selects a learned route/codebook embedding before head
+#                       generation. This is a relation-routed codebook variant,
+#                       not an RPG reproduction and not HyperMARL-style agent-id e_i.
 # - graph_hypercond: obs-only graph + standard GCN -> hypernetwork condition (currently CTCE validation)
 # - graph_route: obs-only graph + standard GCN -> route/codebook (currently CTCE validation)
 # - qmix_minimal: shared trunk + fixed linear head, no hypernetwork (CTDE)
@@ -43,6 +55,7 @@ clean_id_embed_dim: 64
 clean_hyper_mlp_hidden_dim: 64
 clean_route_num: 4
 clean_route_temperature: 1.0
+clean_rpg_relation_dim: 64
 clean_graph_node_dim: 64
 clean_graph_layers: 1
 clean_graph_topk: null

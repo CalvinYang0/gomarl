@@ -8,6 +8,8 @@ class CleanMAC(BasicMAC):
         return getattr(self.args, "clean_model_type", "baseline").replace("-", "_") in {
             "hypermarl_id",
             "hypermarl_fullnet",
+            "rpg_relation_hypercond",
+            "rpg_relation_route",
         }
 
     def _get_input_shape(self, scheme):

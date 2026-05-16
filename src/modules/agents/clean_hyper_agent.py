@@ -4,6 +4,8 @@ import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 
+from envs.starcraft.smac_maps import get_map_params
+
 
 class MLPHyperParameterGenerator(nn.Module):
     def __init__(self, embed_dim, output_dims, hyper_hidden_dim):
@@ -116,12 +118,108 @@ class ObsGraphEncoder(nn.Module):
         return graph_feat, adj, node_tokens
 
 
+class RPGInspiredRelationCapturer(nn.Module):
+    # RPG-inspired single-task adaptation:
+    # we borrow observation splitting, first-person relation capture, and a
+    # temporal relation state, but we do not reproduce RPG's continual-learning
+    # regularizers, task embedding, or structured ego/interaction decision heads.
+    def __init__(
+        self,
+        move_dim,
+        own_dim,
+        ally_feat_dim,
+        enemy_feat_dim,
+        relation_dim,
+        output_dim,
+    ):
+        super().__init__()
+        self.move_dim = move_dim
+        self.own_dim = own_dim
+        self.ally_feat_dim = ally_feat_dim
+        self.enemy_feat_dim = enemy_feat_dim
+        self.relation_dim = relation_dim
+
+        self.self_encoder = nn.Sequential(
+            nn.Linear(move_dim + own_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.ally_encoder = nn.Sequential(
+            nn.Linear(ally_feat_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.enemy_encoder = nn.Sequential(
+            nn.Linear(enemy_feat_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+
+        self.self_query = nn.Linear(relation_dim, relation_dim)
+        self.ally_key = nn.Linear(relation_dim, relation_dim)
+        self.ally_value = nn.Linear(relation_dim, relation_dim)
+        self.enemy_key = nn.Linear(relation_dim, relation_dim)
+        self.enemy_value = nn.Linear(relation_dim, relation_dim)
+
+        self.instant_pattern = nn.Sequential(
+            nn.Linear(relation_dim * 3, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.temporal_gru = nn.GRUCell(relation_dim * 2, relation_dim)
+        self.output_encoder = nn.Sequential(
+            nn.Linear(relation_dim, output_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(output_dim, output_dim),
+        )
+
+    def _masked_cross_attention(self, query, tokens, mask, key_proj, value_proj):
+        scale = math.sqrt(float(self.relation_dim))
+        key = key_proj(tokens)
+        value = value_proj(tokens)
+        logits = th.matmul(self.self_query(query).unsqueeze(2), key.transpose(-1, -2)).squeeze(2) / scale
+        valid_mask = mask.bool()
+        valid_any = valid_mask.any(dim=-1, keepdim=True)
+        masked_logits = logits.masked_fill(~valid_mask, -1e9)
+        attn = F.softmax(masked_logits, dim=-1)
+        attn = th.where(valid_any, attn, th.zeros_like(attn))
+        context = th.matmul(attn.unsqueeze(2), value).squeeze(2)
+        return context, attn
+
+    def forward(self, self_feat, ally_feat, enemy_feat, prev_relation_hidden):
+        self_token = self.self_encoder(self_feat)
+        ally_tokens = self.ally_encoder(ally_feat)
+        enemy_tokens = self.enemy_encoder(enemy_feat)
+
+        ally_mask = ally_feat.abs().sum(dim=-1) > 0
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+
+        ally_context, ally_attn = self._masked_cross_attention(
+            self_token, ally_tokens, ally_mask, self.ally_key, self.ally_value
+        )
+        enemy_context, enemy_attn = self._masked_cross_attention(
+            self_token, enemy_tokens, enemy_mask, self.enemy_key, self.enemy_value
+        )
+
+        instant = self.instant_pattern(th.cat([self_token, ally_context, enemy_context], dim=-1))
+        temporal_input = th.cat([self_token, instant], dim=-1)
+
+        batch_size, n_agents, _ = temporal_input.shape
+        flat_input = temporal_input.reshape(batch_size * n_agents, -1)
+        flat_prev = prev_relation_hidden.reshape(batch_size * n_agents, -1)
+        relation_hidden = self.temporal_gru(flat_input, flat_prev).view(batch_size, n_agents, self.relation_dim)
+        condition = self.output_encoder(relation_hidden)
+        return condition, relation_hidden, ally_attn, enemy_attn
+
+
 class CleanHyperAgent(nn.Module):
     MODEL_SPECS = {
         "baseline": {"uses_hypernet": True, "execution_scope": "ctde"},
         "hypermarl_id": {"uses_hypernet": True, "execution_scope": "ctde"},
         "hypermarl_fullnet": {"uses_hypernet": True, "execution_scope": "ctde"},
         "dynamic_route": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_relation_route": {"uses_hypernet": True, "execution_scope": "ctde"},
         "graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctce"},
         "graph_route": {"uses_hypernet": True, "execution_scope": "ctce"},
         "qmix_minimal": {"uses_hypernet": False, "execution_scope": "ctde"},
@@ -160,6 +258,7 @@ class CleanHyperAgent(nn.Module):
         self.graph_topk = getattr(args, "clean_graph_topk", None)
         self.hyper_mlp_hidden_dim = int(getattr(args, "clean_hyper_mlp_hidden_dim", 64))
         self.apply_hypermarl_init = bool(getattr(args, "clean_apply_hypermarl_init", False))
+        self.rpg_relation_dim = int(getattr(args, "clean_rpg_relation_dim", self.cond_dim))
 
         self.obs_dim = input_shape
         if getattr(args, "obs_last_action", False):
@@ -178,6 +277,12 @@ class CleanHyperAgent(nn.Module):
             nn.Linear(self.cond_dim, self.cond_dim),
         )
 
+        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route"}:
+            self._init_rpg_relation_capturer()
+        else:
+            self.rpg_relation_capturer = None
+            self.rpg_obs_layout = None
+
         if self.model_type in {"hypermarl_id", "hypermarl_fullnet"}:
             self.id_embeddings = nn.Embedding(self.n_agents, self.id_embed_dim)
             nn.init.orthogonal_(self.id_embeddings.weight)
@@ -193,7 +298,7 @@ class CleanHyperAgent(nn.Module):
             self.id_embeddings = None
             self.id_condition_encoder = None
 
-        if self.model_type in {"dynamic_route", "graph_route"}:
+        if self.model_type in {"dynamic_route", "graph_route", "rpg_relation_route"}:
             self.route_logits_head = nn.Sequential(
                 nn.Linear(self.cond_dim, self.cond_dim),
                 nn.ReLU(inplace=True),
@@ -252,9 +357,14 @@ class CleanHyperAgent(nn.Module):
         self.latest_route_indices = None
         self.latest_graph_adj = None
         self.latest_graph_nodes = None
+        self.latest_relation_ally_attn = None
+        self.latest_relation_enemy_attn = None
 
     def init_hidden(self):
-        return self.fc1.weight.new_zeros(self.hidden_dim)
+        hidden_size = self.hidden_dim
+        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route"}:
+            hidden_size += self.rpg_relation_dim
+        return self.fc1.weight.new_zeros(hidden_size)
 
     def _apply_hypermarl_style_init(self):
         nn.init.orthogonal_(self.hyper_bottleneck_w.weight, gain=math.sqrt(2.0))
@@ -270,6 +380,95 @@ class CleanHyperAgent(nn.Module):
         obs = context["obs"]
         prev_action = context["prev_action"]
         return th.cat([obs, prev_action, hidden], dim=-1)
+
+    def _build_rpg_obs_layout(self):
+        env_args = getattr(self.args, "env_args", {})
+        if getattr(self.args, "env", None) != "sc2":
+            raise ValueError("rpg_relation_hypercond currently only supports env=sc2.")
+
+        map_params = get_map_params(env_args["map_name"])
+        shield_bits_ally = 1 if map_params["a_race"] == "P" else 0
+        shield_bits_enemy = 1 if map_params["b_race"] == "P" else 0
+        unit_type_bits = map_params["unit_type_bits"]
+
+        move_dim = 4
+        if env_args.get("obs_pathing_grid", False):
+            move_dim += 8
+        if env_args.get("obs_terrain_height", False):
+            move_dim += 9
+
+        enemy_feat_dim = 4 + unit_type_bits
+        if env_args.get("obs_all_health", True):
+            enemy_feat_dim += 1 + shield_bits_enemy
+
+        ally_feat_dim = 4 + unit_type_bits
+        if env_args.get("obs_all_health", True):
+            ally_feat_dim += 1 + shield_bits_ally
+        if env_args.get("obs_last_action", False):
+            ally_feat_dim += self.n_actions
+
+        own_dim = unit_type_bits
+        if env_args.get("obs_own_health", True):
+            own_dim += 1 + shield_bits_ally
+        if env_args.get("obs_timestep_number", False):
+            own_dim += 1
+
+        return {
+            "move_dim": move_dim,
+            "enemy_feat_dim": enemy_feat_dim,
+            "ally_feat_dim": ally_feat_dim,
+            "own_dim": own_dim,
+            "n_enemies": map_params["n_enemies"],
+            "n_allies": self.n_agents - 1,
+        }
+
+    def _init_rpg_relation_capturer(self):
+        self.rpg_obs_layout = self._build_rpg_obs_layout()
+        self.rpg_relation_capturer = RPGInspiredRelationCapturer(
+            move_dim=self.rpg_obs_layout["move_dim"],
+            own_dim=self.rpg_obs_layout["own_dim"],
+            ally_feat_dim=self.rpg_obs_layout["ally_feat_dim"],
+            enemy_feat_dim=self.rpg_obs_layout["enemy_feat_dim"],
+            relation_dim=self.rpg_relation_dim,
+            output_dim=self.cond_dim,
+        )
+
+    def _split_rpg_obs(self, obs):
+        layout = self.rpg_obs_layout
+        batch_size, n_agents, _ = obs.shape
+        idx = 0
+
+        move = obs[:, :, idx : idx + layout["move_dim"]]
+        idx += layout["move_dim"]
+
+        enemy_total = layout["n_enemies"] * layout["enemy_feat_dim"]
+        enemy = obs[:, :, idx : idx + enemy_total].view(
+            batch_size, n_agents, layout["n_enemies"], layout["enemy_feat_dim"]
+        )
+        idx += enemy_total
+
+        ally_total = layout["n_allies"] * layout["ally_feat_dim"]
+        ally = obs[:, :, idx : idx + ally_total].view(
+            batch_size, n_agents, layout["n_allies"], layout["ally_feat_dim"]
+        )
+        idx += ally_total
+
+        own = obs[:, :, idx : idx + layout["own_dim"]]
+        return move, enemy, ally, own
+
+    def _build_rpg_condition(self, context, relation_hidden):
+        obs = context["obs"]
+        move_feat, enemy_feat, ally_feat, own_feat = self._split_rpg_obs(obs)
+        self_feat = th.cat([move_feat, own_feat], dim=-1)
+        condition, new_relation_hidden, ally_attn, enemy_attn = self.rpg_relation_capturer(
+            self_feat=self_feat,
+            ally_feat=ally_feat,
+            enemy_feat=enemy_feat,
+            prev_relation_hidden=relation_hidden,
+        )
+        self.latest_relation_ally_attn = ally_attn.detach()
+        self.latest_relation_enemy_attn = enemy_attn.detach()
+        return condition, new_relation_hidden
 
     def _route_from_logits(self, route_logits, test_mode):
         if test_mode:
@@ -291,6 +490,8 @@ class CleanHyperAgent(nn.Module):
         self.latest_route_indices = None
         self.latest_graph_adj = None
         self.latest_graph_nodes = None
+        self.latest_relation_ally_attn = None
+        self.latest_relation_enemy_attn = None
 
         if self.model_type == "baseline":
             condition = self.local_condition_encoder(self._build_local_source(hidden, context))
@@ -304,6 +505,10 @@ class CleanHyperAgent(nn.Module):
             local_base = self.local_condition_encoder(self._build_local_source(hidden, context))
             route_logits = self.route_logits_head(local_base)
             condition = self._route_from_logits(route_logits, test_mode=test_mode)
+        elif self.model_type in {"rpg_relation_hypercond", "rpg_relation_route"}:
+            raise RuntimeError(
+                "{} uses a dedicated condition path and should bypass _build_condition.".format(self.model_type)
+            )
         elif self.model_type == "graph_hypercond":
             graph_feat, graph_adj, graph_nodes = self.graph_encoder(context["obs"])
             self.latest_graph_adj = graph_adj.detach()
@@ -363,20 +568,48 @@ class CleanHyperAgent(nn.Module):
         flat_inputs = inputs.reshape(batch_size * n_agents, -1)
         x = F.relu(self.fc1(flat_inputs), inplace=True)
 
+        self.latest_route_logits = None
+        self.latest_route_indices = None
+        self.latest_graph_adj = None
+        self.latest_graph_nodes = None
+        self.latest_relation_ally_attn = None
+        self.latest_relation_enemy_attn = None
+        self.latest_condition = None
+
         if hidden_state is None:
             hidden_state = self.init_hidden().unsqueeze(0).expand(batch_size, n_agents, -1)
-        flat_hidden = hidden_state.reshape(batch_size * n_agents, -1)
+        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route"}:
+            policy_hidden_state = hidden_state[:, :, : self.hidden_dim]
+            relation_hidden_state = hidden_state[:, :, self.hidden_dim :]
+        else:
+            policy_hidden_state = hidden_state
+            relation_hidden_state = None
+
+        flat_hidden = policy_hidden_state.reshape(batch_size * n_agents, -1)
         hidden = self.rnn(x, flat_hidden).view(batch_size, n_agents, self.hidden_dim)
 
         if self.model_type == "qmix_minimal":
             q = self.fixed_head(hidden)
+            next_hidden = hidden
         else:
             if context is None:
                 raise ValueError("{} requires context with obs/prev_action.".format(self.model_type))
-            condition = self._build_condition(hidden, context, test_mode=test_mode)
-            if self.model_type == "hypermarl_fullnet":
-                q = self._apply_full_hypermarl_head(hidden, condition)
-            else:
+            if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route"}:
+                relation_condition, next_relation_hidden = self._build_rpg_condition(context, relation_hidden_state)
+                if self.model_type == "rpg_relation_hypercond":
+                    condition = relation_condition
+                else:
+                    route_logits = self.route_logits_head(relation_condition)
+                    condition = self._route_from_logits(route_logits, test_mode=test_mode)
+                self.latest_condition = condition.detach()
                 q = self._apply_dynamic_head(hidden, condition)
+                next_hidden = th.cat([hidden, next_relation_hidden], dim=-1)
+            else:
+                condition = self._build_condition(hidden, context, test_mode=test_mode)
+                if self.model_type == "hypermarl_fullnet":
+                    q = self._apply_full_hypermarl_head(hidden, condition)
+                else:
+                    q = self._apply_dynamic_head(hidden, condition)
+                next_hidden = hidden
 
-        return q, hidden
+        return q, next_hidden
