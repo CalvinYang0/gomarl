@@ -24,7 +24,7 @@ mixing_embed_dim: 32
 hypernet_embed: 64
 hypernet_layers: 2
 
-# Nine clean models:
+# Ten clean models:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)
 # - hypermarl_id: id-conditioned dynamic-head baseline; learned e_i only provides
 #                 a condition vector for the generated head, so this is NOT the strict
@@ -45,6 +45,15 @@ hypernet_layers: 2
 #                       selects a learned route/codebook embedding before head
 #                       generation. This is a relation-routed codebook variant,
 #                       not an RPG reproduction and not HyperMARL-style agent-id e_i.
+# - rpg_structured_hypercond: RPG-inspired structured maker. It keeps the same
+#                             relation capturer, then splits the decision-maker
+#                             into an ego-action branch and an enemy-interaction
+#                             branch. The ego branch is condition-generated,
+#                             while the interaction branch is a shared scorer
+#                             conditioned on the relation pattern and enemy
+#                             tokens. This mimics RPG's maker split, but does
+#                             NOT fully reproduce its original hypernetwork
+#                             parameterization.
 # - graph_hypercond: obs-only graph + standard GCN -> hypernetwork condition (currently CTCE validation)
 # - graph_route: obs-only graph + standard GCN -> route/codebook (currently CTCE validation)
 # - qmix_minimal: shared trunk + fixed linear head, no hypernetwork (CTDE)

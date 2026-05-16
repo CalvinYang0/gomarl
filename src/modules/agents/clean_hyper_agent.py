@@ -188,11 +188,10 @@ class RPGInspiredRelationCapturer(nn.Module):
 
     def forward(self, self_feat, ally_feat, enemy_feat, prev_relation_hidden):
         self_token = self.self_encoder(self_feat)
-        ally_tokens = self.ally_encoder(ally_feat)
-        enemy_tokens = self.enemy_encoder(enemy_feat)
-
         ally_mask = ally_feat.abs().sum(dim=-1) > 0
         enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        ally_tokens = self.ally_encoder(ally_feat) * ally_mask.unsqueeze(-1).float()
+        enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
 
         ally_context, ally_attn = self._masked_cross_attention(
             self_token, ally_tokens, ally_mask, self.ally_key, self.ally_value
@@ -209,7 +208,7 @@ class RPGInspiredRelationCapturer(nn.Module):
         flat_prev = prev_relation_hidden.reshape(batch_size * n_agents, -1)
         relation_hidden = self.temporal_gru(flat_input, flat_prev).view(batch_size, n_agents, self.relation_dim)
         condition = self.output_encoder(relation_hidden)
-        return condition, relation_hidden, ally_attn, enemy_attn
+        return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
 
 
 class CleanHyperAgent(nn.Module):
@@ -220,6 +219,7 @@ class CleanHyperAgent(nn.Module):
         "dynamic_route": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_route": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctce"},
         "graph_route": {"uses_hypernet": True, "execution_scope": "ctce"},
         "qmix_minimal": {"uses_hypernet": False, "execution_scope": "ctde"},
@@ -277,7 +277,7 @@ class CleanHyperAgent(nn.Module):
             nn.Linear(self.cond_dim, self.cond_dim),
         )
 
-        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route"}:
+        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
             self._init_rpg_relation_capturer()
         else:
             self.rpg_relation_capturer = None
@@ -338,7 +338,10 @@ class CleanHyperAgent(nn.Module):
         else:
             self.full_head_hypernet = None
 
-        if self.MODEL_SPECS[self.model_type]["uses_hypernet"] and self.model_type != "hypermarl_fullnet":
+        if self.MODEL_SPECS[self.model_type]["uses_hypernet"] and self.model_type not in {
+            "hypermarl_fullnet",
+            "rpg_structured_hypercond",
+        }:
             self.hyper_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
             self.hyper_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
             self.hyper_out_w = nn.Linear(self.cond_dim, self.hidden_dim * self.n_actions)
@@ -352,6 +355,34 @@ class CleanHyperAgent(nn.Module):
             self.hyper_out_b = None
             self.fixed_head = nn.Linear(self.hidden_dim, self.n_actions) if self.model_type == "qmix_minimal" else None
 
+        if self.model_type == "rpg_structured_hypercond":
+            self.rpg_n_ego_actions = self.n_actions - self.rpg_obs_layout["n_enemies"]
+            self.rpg_ego_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
+            self.rpg_ego_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
+            self.rpg_ego_out_w = nn.Linear(self.cond_dim, self.hidden_dim * self.rpg_n_ego_actions)
+            self.rpg_ego_out_b = nn.Linear(self.cond_dim, self.rpg_n_ego_actions)
+            self.rpg_interaction_scorer = nn.Sequential(
+                nn.Linear(self.hidden_dim + self.cond_dim + self.rpg_relation_dim, self.hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.hidden_dim, 1),
+            )
+            if self.apply_hypermarl_init:
+                nn.init.orthogonal_(self.rpg_ego_bottleneck_w.weight, gain=math.sqrt(2.0))
+                nn.init.zeros_(self.rpg_ego_bottleneck_w.bias)
+                nn.init.zeros_(self.rpg_ego_bottleneck_b.weight)
+                nn.init.zeros_(self.rpg_ego_bottleneck_b.bias)
+                nn.init.orthogonal_(self.rpg_ego_out_w.weight, gain=1.0)
+                nn.init.zeros_(self.rpg_ego_out_w.bias)
+                nn.init.zeros_(self.rpg_ego_out_b.weight)
+                nn.init.zeros_(self.rpg_ego_out_b.bias)
+        else:
+            self.rpg_n_ego_actions = None
+            self.rpg_ego_bottleneck_w = None
+            self.rpg_ego_bottleneck_b = None
+            self.rpg_ego_out_w = None
+            self.rpg_ego_out_b = None
+            self.rpg_interaction_scorer = None
+
         self.latest_condition = None
         self.latest_route_logits = None
         self.latest_route_indices = None
@@ -362,7 +393,7 @@ class CleanHyperAgent(nn.Module):
 
     def init_hidden(self):
         hidden_size = self.hidden_dim
-        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route"}:
+        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
             hidden_size += self.rpg_relation_dim
         return self.fc1.weight.new_zeros(hidden_size)
 
@@ -384,7 +415,7 @@ class CleanHyperAgent(nn.Module):
     def _build_rpg_obs_layout(self):
         env_args = getattr(self.args, "env_args", {})
         if getattr(self.args, "env", None) != "sc2":
-            raise ValueError("rpg_relation_hypercond currently only supports env=sc2.")
+            raise ValueError("RPG-inspired relation variants currently only support env=sc2.")
 
         map_params = get_map_params(env_args["map_name"])
         shield_bits_ally = 1 if map_params["a_race"] == "P" else 0
@@ -460,7 +491,14 @@ class CleanHyperAgent(nn.Module):
         obs = context["obs"]
         move_feat, enemy_feat, ally_feat, own_feat = self._split_rpg_obs(obs)
         self_feat = th.cat([move_feat, own_feat], dim=-1)
-        condition, new_relation_hidden, ally_attn, enemy_attn = self.rpg_relation_capturer(
+        (
+            condition,
+            new_relation_hidden,
+            ally_attn,
+            enemy_attn,
+            enemy_tokens,
+            enemy_mask,
+        ) = self.rpg_relation_capturer(
             self_feat=self_feat,
             ally_feat=ally_feat,
             enemy_feat=enemy_feat,
@@ -468,7 +506,7 @@ class CleanHyperAgent(nn.Module):
         )
         self.latest_relation_ally_attn = ally_attn.detach()
         self.latest_relation_enemy_attn = enemy_attn.detach()
-        return condition, new_relation_hidden
+        return condition, new_relation_hidden, enemy_tokens, enemy_mask
 
     def _route_from_logits(self, route_logits, test_mode):
         if test_mode:
@@ -505,7 +543,7 @@ class CleanHyperAgent(nn.Module):
             local_base = self.local_condition_encoder(self._build_local_source(hidden, context))
             route_logits = self.route_logits_head(local_base)
             condition = self._route_from_logits(route_logits, test_mode=test_mode)
-        elif self.model_type in {"rpg_relation_hypercond", "rpg_relation_route"}:
+        elif self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
             raise RuntimeError(
                 "{} uses a dedicated condition path and should bypass _build_condition.".format(self.model_type)
             )
@@ -563,6 +601,33 @@ class CleanHyperAgent(nn.Module):
                 current = F.elu(current)
         return current.view(batch_size, n_agents, self.n_actions)
 
+    def _apply_rpg_structured_maker(self, hidden, relation_condition, enemy_tokens, enemy_mask):
+        batch_size, n_agents, _ = hidden.shape
+        flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
+        flat_condition = relation_condition.reshape(batch_size * n_agents, -1)
+
+        ego_bottleneck_w = self.rpg_ego_bottleneck_w(flat_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.hidden_dim
+        )
+        ego_bottleneck_b = self.rpg_ego_bottleneck_b(flat_condition).view(batch_size * n_agents, 1, self.hidden_dim)
+        ego_out_w = self.rpg_ego_out_w(flat_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.rpg_n_ego_actions
+        )
+        ego_out_b = self.rpg_ego_out_b(flat_condition).view(
+            batch_size * n_agents, 1, self.rpg_n_ego_actions
+        )
+
+        ego_mid = F.elu(th.bmm(flat_hidden, ego_bottleneck_w) + ego_bottleneck_b)
+        q_ego = th.bmm(ego_mid, ego_out_w) + ego_out_b
+        q_ego = q_ego.view(batch_size, n_agents, self.rpg_n_ego_actions)
+
+        hidden_rep = hidden.unsqueeze(2).expand(-1, -1, self.rpg_obs_layout["n_enemies"], -1)
+        cond_rep = relation_condition.unsqueeze(2).expand(-1, -1, self.rpg_obs_layout["n_enemies"], -1)
+        interaction_input = th.cat([hidden_rep, cond_rep, enemy_tokens], dim=-1)
+        q_attack = self.rpg_interaction_scorer(interaction_input).squeeze(-1)
+        q_attack = q_attack.masked_fill(~enemy_mask.bool(), 0.0)
+        return th.cat([q_ego, q_attack], dim=-1)
+
     def forward(self, inputs, hidden_state, context=None, test_mode=False):
         batch_size, n_agents, _ = inputs.shape
         flat_inputs = inputs.reshape(batch_size * n_agents, -1)
@@ -578,7 +643,7 @@ class CleanHyperAgent(nn.Module):
 
         if hidden_state is None:
             hidden_state = self.init_hidden().unsqueeze(0).expand(batch_size, n_agents, -1)
-        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route"}:
+        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
             policy_hidden_state = hidden_state[:, :, : self.hidden_dim]
             relation_hidden_state = hidden_state[:, :, self.hidden_dim :]
         else:
@@ -594,15 +659,23 @@ class CleanHyperAgent(nn.Module):
         else:
             if context is None:
                 raise ValueError("{} requires context with obs/prev_action.".format(self.model_type))
-            if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route"}:
-                relation_condition, next_relation_hidden = self._build_rpg_condition(context, relation_hidden_state)
+            if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
+                relation_condition, next_relation_hidden, enemy_tokens, enemy_mask = self._build_rpg_condition(
+                    context, relation_hidden_state
+                )
                 if self.model_type == "rpg_relation_hypercond":
                     condition = relation_condition
-                else:
+                    self.latest_condition = condition.detach()
+                    q = self._apply_dynamic_head(hidden, condition)
+                elif self.model_type == "rpg_relation_route":
                     route_logits = self.route_logits_head(relation_condition)
                     condition = self._route_from_logits(route_logits, test_mode=test_mode)
-                self.latest_condition = condition.detach()
-                q = self._apply_dynamic_head(hidden, condition)
+                    self.latest_condition = condition.detach()
+                    q = self._apply_dynamic_head(hidden, condition)
+                else:
+                    condition = relation_condition
+                    self.latest_condition = condition.detach()
+                    q = self._apply_rpg_structured_maker(hidden, relation_condition, enemy_tokens, enemy_mask)
                 next_hidden = th.cat([hidden, next_relation_hidden], dim=-1)
             else:
                 condition = self._build_condition(hidden, context, test_mode=test_mode)

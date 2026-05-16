@@ -10,6 +10,7 @@ class CleanMAC(BasicMAC):
             "hypermarl_fullnet",
             "rpg_relation_hypercond",
             "rpg_relation_route",
+            "rpg_structured_hypercond",
         }
 
     def _get_input_shape(self, scheme):
