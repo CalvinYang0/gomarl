@@ -5,7 +5,10 @@ from .basic_controller import BasicMAC
 
 class CleanMAC(BasicMAC):
     def _exclude_agent_id_from_trunk(self):
-        return getattr(self.args, "clean_model_type", "baseline").replace("-", "_") == "hypermarl_id"
+        return getattr(self.args, "clean_model_type", "baseline").replace("-", "_") in {
+            "hypermarl_id",
+            "hypermarl_fullnet",
+        }
 
     def _get_input_shape(self, scheme):
         input_shape = scheme["obs"]["vshape"]

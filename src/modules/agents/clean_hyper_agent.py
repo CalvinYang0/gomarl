@@ -5,6 +5,54 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class MLPHyperParameterGenerator(nn.Module):
+    def __init__(self, embed_dim, output_dims, hyper_hidden_dim):
+        super().__init__()
+        self.output_dims = output_dims
+        self.weight_mlps = nn.ModuleList()
+        self.bias_mlps = nn.ModuleList()
+
+        for layer_idx, (input_dim, output_dim) in enumerate(self.output_dims):
+            is_final = layer_idx == len(self.output_dims) - 1
+            gain = 1.0 if is_final else math.sqrt(2.0)
+
+            weight_mlp = nn.Sequential(
+                nn.Linear(embed_dim, hyper_hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(hyper_hidden_dim, input_dim * output_dim),
+            )
+            bias_mlp = nn.Sequential(
+                nn.Linear(embed_dim, hyper_hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(hyper_hidden_dim, output_dim),
+            )
+
+            nn.init.orthogonal_(weight_mlp[0].weight, gain=math.sqrt(2.0))
+            nn.init.zeros_(weight_mlp[0].bias)
+            nn.init.orthogonal_(weight_mlp[2].weight, gain=gain)
+            nn.init.zeros_(weight_mlp[2].bias)
+
+            nn.init.orthogonal_(bias_mlp[0].weight, gain=math.sqrt(2.0))
+            nn.init.zeros_(bias_mlp[0].bias)
+            nn.init.zeros_(bias_mlp[2].weight)
+            nn.init.zeros_(bias_mlp[2].bias)
+
+            self.weight_mlps.append(weight_mlp)
+            self.bias_mlps.append(bias_mlp)
+
+    def forward(self, embeddings):
+        weights = []
+        biases = []
+        for weight_mlp, bias_mlp, (input_dim, output_dim) in zip(
+            self.weight_mlps, self.bias_mlps, self.output_dims
+        ):
+            weight = weight_mlp(embeddings).view(embeddings.size(0), input_dim, output_dim)
+            bias = bias_mlp(embeddings).view(embeddings.size(0), 1, output_dim)
+            weights.append(weight)
+            biases.append(bias)
+        return weights, biases
+
+
 class StandardGraphConv(nn.Module):
     def __init__(self, in_dim, out_dim):
         super().__init__()
@@ -72,6 +120,7 @@ class CleanHyperAgent(nn.Module):
     MODEL_SPECS = {
         "baseline": {"uses_hypernet": True, "execution_scope": "ctde"},
         "hypermarl_id": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "hypermarl_fullnet": {"uses_hypernet": True, "execution_scope": "ctde"},
         "dynamic_route": {"uses_hypernet": True, "execution_scope": "ctde"},
         "graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctce"},
         "graph_route": {"uses_hypernet": True, "execution_scope": "ctce"},
@@ -82,6 +131,8 @@ class CleanHyperAgent(nn.Module):
         super().__init__()
         self.args = args
         self.model_type = getattr(args, "clean_model_type", "baseline").replace("-", "_")
+        if self.model_type == "hypermarl_mlp_hyper":
+            self.model_type = "hypermarl_fullnet"
         if self.model_type not in self.MODEL_SPECS:
             raise ValueError(
                 "Unknown clean_model_type={}. Expected one of {}.".format(
@@ -107,6 +158,7 @@ class CleanHyperAgent(nn.Module):
         self.graph_node_dim = int(getattr(args, "clean_graph_node_dim", self.cond_dim))
         self.graph_layers = int(getattr(args, "clean_graph_layers", 1))
         self.graph_topk = getattr(args, "clean_graph_topk", None)
+        self.hyper_mlp_hidden_dim = int(getattr(args, "clean_hyper_mlp_hidden_dim", 64))
         self.apply_hypermarl_init = bool(getattr(args, "clean_apply_hypermarl_init", False))
 
         self.obs_dim = input_shape
@@ -126,16 +178,20 @@ class CleanHyperAgent(nn.Module):
             nn.Linear(self.cond_dim, self.cond_dim),
         )
 
-        if self.model_type == "hypermarl_id":
+        if self.model_type in {"hypermarl_id", "hypermarl_fullnet"}:
             self.id_embeddings = nn.Embedding(self.n_agents, self.id_embed_dim)
-            self.id_condition_encoder = nn.Sequential(
-                nn.Linear(self.id_embed_dim, self.cond_dim),
-                nn.ReLU(inplace=True),
-                nn.Linear(self.cond_dim, self.cond_dim),
-            )
             nn.init.orthogonal_(self.id_embeddings.weight)
+            if self.model_type == "hypermarl_id":
+                self.id_condition_encoder = nn.Sequential(
+                    nn.Linear(self.id_embed_dim, self.cond_dim),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(self.cond_dim, self.cond_dim),
+                )
+            else:
+                self.id_condition_encoder = None
         else:
             self.id_embeddings = None
+            self.id_condition_encoder = None
 
         if self.model_type in {"dynamic_route", "graph_route"}:
             self.route_logits_head = nn.Sequential(
@@ -165,7 +221,19 @@ class CleanHyperAgent(nn.Module):
             self.graph_encoder = None
             self.graph_condition_encoder = None
 
-        if self.MODEL_SPECS[self.model_type]["uses_hypernet"]:
+        if self.model_type == "hypermarl_fullnet":
+            self.full_head_hypernet = MLPHyperParameterGenerator(
+                embed_dim=self.id_embed_dim,
+                output_dims=[
+                    (self.hidden_dim, self.hidden_dim),
+                    (self.hidden_dim, self.n_actions),
+                ],
+                hyper_hidden_dim=self.hyper_mlp_hidden_dim,
+            )
+        else:
+            self.full_head_hypernet = None
+
+        if self.MODEL_SPECS[self.model_type]["uses_hypernet"] and self.model_type != "hypermarl_fullnet":
             self.hyper_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
             self.hyper_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
             self.hyper_out_w = nn.Linear(self.cond_dim, self.hidden_dim * self.n_actions)
@@ -173,7 +241,11 @@ class CleanHyperAgent(nn.Module):
             if self.apply_hypermarl_init:
                 self._apply_hypermarl_style_init()
         else:
-            self.fixed_head = nn.Linear(self.hidden_dim, self.n_actions)
+            self.hyper_bottleneck_w = None
+            self.hyper_bottleneck_b = None
+            self.hyper_out_w = None
+            self.hyper_out_b = None
+            self.fixed_head = nn.Linear(self.hidden_dim, self.n_actions) if self.model_type == "qmix_minimal" else None
 
         self.latest_condition = None
         self.latest_route_logits = None
@@ -225,6 +297,9 @@ class CleanHyperAgent(nn.Module):
         elif self.model_type == "hypermarl_id":
             agent_ids = th.arange(self.n_agents, device=hidden.device).view(1, self.n_agents).expand(hidden.size(0), -1)
             condition = self.id_condition_encoder(self.id_embeddings(agent_ids))
+        elif self.model_type == "hypermarl_fullnet":
+            agent_ids = th.arange(self.n_agents, device=hidden.device).view(1, self.n_agents).expand(hidden.size(0), -1)
+            condition = self.id_embeddings(agent_ids)
         elif self.model_type == "dynamic_route":
             local_base = self.local_condition_encoder(self._build_local_source(hidden, context))
             route_logits = self.route_logits_head(local_base)
@@ -270,6 +345,19 @@ class CleanHyperAgent(nn.Module):
         q = th.bmm(mid, out_w) + out_b
         return q.view(batch_size, n_agents, self.n_actions)
 
+    def _apply_full_hypermarl_head(self, hidden, id_embeddings):
+        batch_size, n_agents, _ = hidden.shape
+        flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
+        flat_embeddings = id_embeddings.reshape(batch_size * n_agents, -1)
+        weights, biases = self.full_head_hypernet(flat_embeddings)
+
+        current = flat_hidden
+        for layer_idx, (weight, bias) in enumerate(zip(weights, biases)):
+            current = th.bmm(current, weight) + bias
+            if layer_idx != len(weights) - 1:
+                current = F.elu(current)
+        return current.view(batch_size, n_agents, self.n_actions)
+
     def forward(self, inputs, hidden_state, context=None, test_mode=False):
         batch_size, n_agents, _ = inputs.shape
         flat_inputs = inputs.reshape(batch_size * n_agents, -1)
@@ -286,6 +374,9 @@ class CleanHyperAgent(nn.Module):
             if context is None:
                 raise ValueError("{} requires context with obs/prev_action.".format(self.model_type))
             condition = self._build_condition(hidden, context, test_mode=test_mode)
-            q = self._apply_dynamic_head(hidden, condition)
+            if self.model_type == "hypermarl_fullnet":
+                q = self._apply_full_hypermarl_head(hidden, condition)
+            else:
+                q = self._apply_dynamic_head(hidden, condition)
 
         return q, hidden

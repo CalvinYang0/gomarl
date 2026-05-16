@@ -24,10 +24,14 @@ mixing_embed_dim: 32
 hypernet_embed: 64
 hypernet_layers: 2
 
-# Six clean models:
+# Seven clean models:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)
-# - hypermarl_id: HyperMARL-style learned e_i table conditions the hypernetwork;
-#                 shared trunk does not consume one-hot agent id (CTDE)
+# - hypermarl_id: id-conditioned dynamic-head baseline; learned e_i only provides
+#                 a condition vector for the generated head, so this is NOT the strict
+#                 HyperMARL-equivalent architecture (CTDE)
+# - hypermarl_fullnet: HyperMARL-style learned e_i table feeds an MLP hypernetwork
+#                      that generates the full post-RNN two-layer action network
+#                      parameters; shared trunk does not consume one-hot agent id (CTDE)
 # - dynamic_route: local route/codebook selects the head condition (CTDE)
 # - graph_hypercond: obs-only graph + standard GCN -> hypernetwork condition (currently CTCE validation)
 # - graph_route: obs-only graph + standard GCN -> route/codebook (currently CTCE validation)
@@ -36,6 +40,7 @@ clean_model_type: "baseline"
 clean_apply_hypermarl_init: False
 clean_condition_dim: 64
 clean_id_embed_dim: 64
+clean_hyper_mlp_hidden_dim: 64
 clean_route_num: 4
 clean_route_temperature: 1.0
 clean_graph_node_dim: 64
