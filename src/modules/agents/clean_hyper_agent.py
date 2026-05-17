@@ -413,6 +413,187 @@ class HeteroGATRelationCapturer(nn.Module):
         return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
 
 
+class GlobalGraphGATLayer(nn.Module):
+    def __init__(self, relation_dim):
+        super().__init__()
+        self.relation_dim = relation_dim
+        self.query = nn.Linear(relation_dim, relation_dim)
+        self.key = nn.Linear(relation_dim, relation_dim)
+        self.value = nn.Linear(relation_dim, relation_dim)
+        self.out = nn.Linear(relation_dim, relation_dim)
+        self.norm = nn.LayerNorm(relation_dim)
+
+    def forward(self, nodes, node_mask):
+        query = self.query(nodes)
+        key = self.key(nodes)
+        value = self.value(nodes)
+        logits = th.matmul(query, key.transpose(-1, -2)) / math.sqrt(float(self.relation_dim))
+
+        source_mask = node_mask.bool().unsqueeze(1)
+        valid_any = node_mask.bool().any(dim=-1, keepdim=True).unsqueeze(-1)
+        logits = logits.masked_fill(~source_mask, -1e9)
+        attn = F.softmax(logits, dim=-1)
+        attn = th.where(valid_any, attn, th.zeros_like(attn))
+
+        context = th.matmul(attn, value)
+        updated = self.norm(nodes + F.elu(self.out(context), inplace=True))
+        updated = updated * node_mask.unsqueeze(-1).float()
+        return updated, attn
+
+
+class GlobalCrossAttention(nn.Module):
+    def __init__(self, relation_dim):
+        super().__init__()
+        self.relation_dim = relation_dim
+        self.query = nn.Linear(relation_dim, relation_dim)
+        self.key = nn.Linear(relation_dim, relation_dim)
+        self.value = nn.Linear(relation_dim, relation_dim)
+        self.out = nn.Linear(relation_dim, relation_dim)
+
+    def forward(self, query_nodes, key_nodes, key_mask):
+        query = self.query(query_nodes)
+        key = self.key(key_nodes)
+        value = self.value(key_nodes)
+        logits = th.matmul(query, key.transpose(-1, -2)) / math.sqrt(float(self.relation_dim))
+
+        valid_mask = key_mask.bool().unsqueeze(1)
+        valid_any = key_mask.bool().any(dim=-1, keepdim=True).unsqueeze(-1)
+        logits = logits.masked_fill(~valid_mask, -1e9)
+        attn = F.softmax(logits, dim=-1)
+        attn = th.where(valid_any, attn, th.zeros_like(attn))
+
+        context = th.matmul(attn, value)
+        return F.elu(self.out(context), inplace=True), attn
+
+
+class GlobalTwoGraphGATRelationEncoder(nn.Module):
+    # CTCE upper-bound graph encoder. It builds one global friendly graph and
+    # one global enemy graph per timestep, then bridges enemy information back
+    # into each friendly node through cross-graph attention.
+    def __init__(
+        self,
+        move_dim,
+        own_dim,
+        enemy_feat_dim,
+        relation_dim,
+        output_dim,
+    ):
+        super().__init__()
+        self.relation_dim = relation_dim
+        self.friend_encoder = nn.Sequential(
+            nn.Linear(move_dim + own_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.enemy_encoder = nn.Sequential(
+            nn.Linear(enemy_feat_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.friend_graph = GlobalGraphGATLayer(relation_dim)
+        self.enemy_graph = GlobalGraphGATLayer(relation_dim)
+        self.enemy_to_friend = GlobalCrossAttention(relation_dim)
+        self.output_encoder = nn.Sequential(
+            nn.Linear(relation_dim * 2, output_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(output_dim, output_dim),
+        )
+
+    def _pool_global_enemy_features(self, enemy_feat):
+        visible = enemy_feat.abs().sum(dim=-1) > 0
+        count = visible.sum(dim=1).clamp(min=1).unsqueeze(-1)
+        pooled = (enemy_feat * visible.unsqueeze(-1).float()).sum(dim=1) / count
+        return pooled, visible.any(dim=1)
+
+    def forward(self, self_feat, enemy_feat):
+        batch_size, n_agents, _ = self_feat.shape
+        friend_mask = th.ones(batch_size, n_agents, device=self_feat.device, dtype=th.bool)
+        friend_tokens = self.friend_encoder(self_feat)
+
+        pooled_enemy, enemy_mask = self._pool_global_enemy_features(enemy_feat)
+        enemy_tokens = self.enemy_encoder(pooled_enemy) * enemy_mask.unsqueeze(-1).float()
+
+        friend_graph_tokens, _ = self.friend_graph(friend_tokens, friend_mask)
+        enemy_graph_tokens, _ = self.enemy_graph(enemy_tokens, enemy_mask)
+        enemy_context, _ = self.enemy_to_friend(friend_graph_tokens, enemy_graph_tokens, enemy_mask)
+        return self.output_encoder(th.cat([friend_graph_tokens, enemy_context], dim=-1))
+
+
+class GlobalHeteroGATRelationEncoder(nn.Module):
+    # CTCE upper-bound heterogeneous graph encoder. Friendly and enemy nodes
+    # share one global graph, while node-type embeddings and edge-type
+    # embeddings tell attention which semantic relation each message represents.
+    def __init__(
+        self,
+        move_dim,
+        own_dim,
+        enemy_feat_dim,
+        relation_dim,
+        output_dim,
+    ):
+        super().__init__()
+        self.relation_dim = relation_dim
+        self.friend_encoder = nn.Sequential(
+            nn.Linear(move_dim + own_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.enemy_encoder = nn.Sequential(
+            nn.Linear(enemy_feat_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.node_type_embed = nn.Embedding(2, relation_dim)
+        self.edge_type_bias = nn.Embedding(4, 1)
+        self.edge_type_value = nn.Embedding(4, relation_dim)
+        self.query = nn.Linear(relation_dim, relation_dim)
+        self.key = nn.Linear(relation_dim, relation_dim)
+        self.value = nn.Linear(relation_dim, relation_dim)
+        self.out = nn.Linear(relation_dim, relation_dim)
+        self.norm = nn.LayerNorm(relation_dim)
+        self.output_encoder = nn.Sequential(
+            nn.Linear(relation_dim, output_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(output_dim, output_dim),
+        )
+
+    def _pool_global_enemy_features(self, enemy_feat):
+        visible = enemy_feat.abs().sum(dim=-1) > 0
+        count = visible.sum(dim=1).clamp(min=1).unsqueeze(-1)
+        pooled = (enemy_feat * visible.unsqueeze(-1).float()).sum(dim=1) / count
+        return pooled, visible.any(dim=1)
+
+    def forward(self, self_feat, enemy_feat):
+        batch_size, n_agents, _ = self_feat.shape
+        pooled_enemy, enemy_mask = self._pool_global_enemy_features(enemy_feat)
+        n_enemies = pooled_enemy.size(1)
+
+        friend_tokens = self.friend_encoder(self_feat)
+        enemy_tokens = self.enemy_encoder(pooled_enemy) * enemy_mask.unsqueeze(-1).float()
+        friend_type = th.zeros(n_agents, device=self_feat.device, dtype=th.long)
+        enemy_type = th.ones(n_enemies, device=self_feat.device, dtype=th.long)
+        node_types = th.cat([friend_type, enemy_type], dim=0)
+        nodes = th.cat([friend_tokens, enemy_tokens], dim=1) + self.node_type_embed(node_types).unsqueeze(0)
+
+        friend_mask = th.ones(batch_size, n_agents, device=self_feat.device, dtype=th.bool)
+        node_mask = th.cat([friend_mask, enemy_mask], dim=1)
+        edge_types = node_types.unsqueeze(1) * 2 + node_types.unsqueeze(0)
+
+        query = self.query(nodes)
+        key = self.key(nodes)
+        value = self.value(nodes)
+        logits = th.matmul(query, key.transpose(-1, -2)) / math.sqrt(float(self.relation_dim))
+        logits = logits + self.edge_type_bias(edge_types).squeeze(-1).unsqueeze(0)
+        logits = logits.masked_fill(~node_mask.unsqueeze(1), -1e9)
+        attn = F.softmax(logits, dim=-1)
+
+        edge_value = self.edge_type_value(edge_types).unsqueeze(0)
+        typed_value = value.unsqueeze(1) + edge_value
+        context = (attn.unsqueeze(-1) * typed_value).sum(dim=2)
+        updated = self.norm(nodes + F.elu(self.out(context), inplace=True))
+        return self.output_encoder(updated[:, :n_agents])
+
+
 class CleanHyperAgent(nn.Module):
     MODEL_SPECS = {
         "baseline": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -425,6 +606,8 @@ class CleanHyperAgent(nn.Module):
         "rpg_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "two_graph_gat_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "hetero_gat_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "global_two_graph_gat_hypercond": {"uses_hypernet": True, "execution_scope": "ctce"},
+        "global_hetero_gat_hypercond": {"uses_hypernet": True, "execution_scope": "ctce"},
         "graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctce"},
         "graph_route": {"uses_hypernet": True, "execution_scope": "ctce"},
         "qmix_minimal": {"uses_hypernet": False, "execution_scope": "ctde"},
@@ -537,6 +720,23 @@ class CleanHyperAgent(nn.Module):
         else:
             self.graph_encoder = None
             self.graph_condition_encoder = None
+
+        if self.model_type in {"global_two_graph_gat_hypercond", "global_hetero_gat_hypercond"}:
+            self.rpg_obs_layout = self._build_rpg_obs_layout()
+            global_graph_cls = (
+                GlobalTwoGraphGATRelationEncoder
+                if self.model_type == "global_two_graph_gat_hypercond"
+                else GlobalHeteroGATRelationEncoder
+            )
+            self.global_graph_relation_encoder = global_graph_cls(
+                move_dim=self.rpg_obs_layout["move_dim"],
+                own_dim=self.rpg_obs_layout["own_dim"],
+                enemy_feat_dim=self.rpg_obs_layout["enemy_feat_dim"],
+                relation_dim=self.rpg_relation_dim,
+                output_dim=self.cond_dim,
+            )
+        else:
+            self.global_graph_relation_encoder = None
 
         if self.model_type == "hypermarl_fullnet":
             self.full_head_hypernet = MLPHyperParameterGenerator(
@@ -740,6 +940,11 @@ class CleanHyperAgent(nn.Module):
         self.latest_relation_enemy_attn = enemy_attn.detach()
         return condition, new_relation_hidden, enemy_tokens, enemy_mask
 
+    def _build_global_graph_condition(self, context):
+        move_feat, enemy_feat, _, own_feat = self._split_rpg_obs(context["obs"])
+        self_feat = th.cat([move_feat, own_feat], dim=-1)
+        return self.global_graph_relation_encoder(self_feat, enemy_feat)
+
     def _route_from_logits(self, route_logits, test_mode):
         if test_mode:
             route_index = route_logits.argmax(dim=-1)
@@ -798,6 +1003,8 @@ class CleanHyperAgent(nn.Module):
             graph_base = self.graph_condition_encoder(graph_feat)
             route_logits = self.route_logits_head(graph_base)
             condition = self._route_from_logits(route_logits, test_mode=test_mode)
+        elif self.model_type in {"global_two_graph_gat_hypercond", "global_hetero_gat_hypercond"}:
+            condition = self._build_global_graph_condition(context)
         elif self.model_type == "qmix_minimal":
             condition = None
         else:

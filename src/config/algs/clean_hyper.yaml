@@ -24,7 +24,7 @@ mixing_embed_dim: 32
 hypernet_embed: 64
 hypernet_layers: 2
 
-# Thirteen clean models:
+# Fifteen clean models:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)
 # - hypermarl_id: id-conditioned dynamic-head baseline; learned e_i only provides
 #                 a condition vector for the generated head, so this is NOT the strict
@@ -72,6 +72,15 @@ hypernet_layers: 2
 #                         ally->self, and enemy->self messages with type-level
 #                         attention, then uses the resulting relation condition
 #                         to generate the unified dynamic head.
+# - global_two_graph_gat_hypercond: CTCE whole-graph upper-bound model. It
+#                                   computes one friendly graph and one enemy
+#                                   graph per timestep, then uses cross-graph
+#                                   attention so friendly nodes can read enemy
+#                                   graph context before head generation.
+# - global_hetero_gat_hypercond: CTCE whole-graph upper-bound model. It puts
+#                                friendly and enemy nodes into one typed graph
+#                                with node-type and edge-type embeddings before
+#                                generating the dynamic head condition.
 # - graph_hypercond: obs-only graph + standard GCN -> hypernetwork condition (currently CTCE validation)
 # - graph_route: obs-only graph + standard GCN -> route/codebook (currently CTCE validation)
 # - qmix_minimal: shared trunk + fixed linear head, no hypernetwork (CTDE)
