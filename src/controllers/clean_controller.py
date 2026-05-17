@@ -11,6 +11,8 @@ class CleanMAC(BasicMAC):
             "rpg_relation_hypercond",
             "rpg_relation_route",
             "rpg_structured_hypercond",
+            "two_graph_gat_hypercond",
+            "hetero_gat_hypercond",
         }
 
     def _get_input_shape(self, scheme):

@@ -24,7 +24,7 @@ mixing_embed_dim: 32
 hypernet_embed: 64
 hypernet_layers: 2
 
-# Eleven clean models:
+# Thirteen clean models:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)
 # - hypermarl_id: id-conditioned dynamic-head baseline; learned e_i only provides
 #                 a condition vector for the generated head, so this is NOT the strict
@@ -61,6 +61,17 @@ hypernet_layers: 2
 #                             tokens. This mimics RPG's maker split, but does
 #                             NOT fully reproduce its original hypernetwork
 #                             parameterization.
+# - two_graph_gat_hypercond: CTDE ego-graph GAT counterpart to
+#                            rpg_relation_hypercond. It replaces RPG-style
+#                            first-person cross-attention with two explicit
+#                            local GAT graphs, self+allies and self+enemies,
+#                            then uses the resulting relation condition to
+#                            generate the unified dynamic head.
+# - hetero_gat_hypercond: CTDE ego-heterogeneous GAT counterpart to
+#                         rpg_relation_hypercond. It uses typed self-loop,
+#                         ally->self, and enemy->self messages with type-level
+#                         attention, then uses the resulting relation condition
+#                         to generate the unified dynamic head.
 # - graph_hypercond: obs-only graph + standard GCN -> hypernetwork condition (currently CTCE validation)
 # - graph_route: obs-only graph + standard GCN -> route/codebook (currently CTCE validation)
 # - qmix_minimal: shared trunk + fixed linear head, no hypernetwork (CTDE)

@@ -211,6 +211,208 @@ class RPGInspiredRelationCapturer(nn.Module):
         return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
 
 
+class EgoGATLayer(nn.Module):
+    def __init__(self, relation_dim):
+        super().__init__()
+        self.relation_dim = relation_dim
+        self.query = nn.Linear(relation_dim, relation_dim)
+        self.key = nn.Linear(relation_dim, relation_dim)
+        self.value = nn.Linear(relation_dim, relation_dim)
+        self.out = nn.Linear(relation_dim, relation_dim)
+        self.norm = nn.LayerNorm(relation_dim)
+
+    def forward(self, self_token, entity_tokens, entity_mask):
+        batch_size, n_agents, _ = self_token.shape
+        self_node = self_token.unsqueeze(2)
+        nodes = th.cat([self_node, entity_tokens], dim=2)
+        self_mask = th.ones(batch_size, n_agents, 1, device=self_token.device, dtype=th.bool)
+        node_mask = th.cat([self_mask, entity_mask.bool()], dim=-1)
+
+        query = self.query(self_token).unsqueeze(2)
+        key = self.key(nodes)
+        value = self.value(nodes)
+        logits = (query * key).sum(dim=-1) / math.sqrt(float(self.relation_dim))
+        logits = logits.masked_fill(~node_mask, -1e9)
+        attn = F.softmax(logits, dim=-1)
+        context = (attn.unsqueeze(-1) * value).sum(dim=2)
+        updated = self.norm(self_token + F.elu(self.out(context), inplace=True))
+        return updated, attn[:, :, 1:]
+
+
+class TwoGraphGATRelationCapturer(nn.Module):
+    # Explicit ego graph variant of RPG's relation capturer. It builds two
+    # local graphs per agent, self+allies and self+enemies, and reads the
+    # updated self node as the relation pattern source.
+    def __init__(
+        self,
+        move_dim,
+        own_dim,
+        ally_feat_dim,
+        enemy_feat_dim,
+        relation_dim,
+        output_dim,
+    ):
+        super().__init__()
+        self.relation_dim = relation_dim
+
+        self.self_encoder = nn.Sequential(
+            nn.Linear(move_dim + own_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.ally_encoder = nn.Sequential(
+            nn.Linear(ally_feat_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.enemy_encoder = nn.Sequential(
+            nn.Linear(enemy_feat_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+
+        self.ally_graph = EgoGATLayer(relation_dim)
+        self.enemy_graph = EgoGATLayer(relation_dim)
+        self.instant_pattern = nn.Sequential(
+            nn.Linear(relation_dim * 3, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.temporal_gru = nn.GRUCell(relation_dim * 2, relation_dim)
+        self.output_encoder = nn.Sequential(
+            nn.Linear(relation_dim, output_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(output_dim, output_dim),
+        )
+
+    def forward(self, self_feat, ally_feat, enemy_feat, prev_relation_hidden):
+        self_token = self.self_encoder(self_feat)
+        ally_mask = ally_feat.abs().sum(dim=-1) > 0
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        ally_tokens = self.ally_encoder(ally_feat) * ally_mask.unsqueeze(-1).float()
+        enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
+
+        ally_self, ally_attn = self.ally_graph(self_token, ally_tokens, ally_mask)
+        enemy_self, enemy_attn = self.enemy_graph(self_token, enemy_tokens, enemy_mask)
+        instant = self.instant_pattern(th.cat([self_token, ally_self, enemy_self], dim=-1))
+        temporal_input = th.cat([self_token, instant], dim=-1)
+
+        batch_size, n_agents, _ = temporal_input.shape
+        flat_input = temporal_input.reshape(batch_size * n_agents, -1)
+        flat_prev = prev_relation_hidden.reshape(batch_size * n_agents, -1)
+        relation_hidden = self.temporal_gru(flat_input, flat_prev).view(batch_size, n_agents, self.relation_dim)
+        condition = self.output_encoder(relation_hidden)
+        return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
+
+
+class TypedEgoGATMessage(nn.Module):
+    def __init__(self, relation_dim):
+        super().__init__()
+        self.relation_dim = relation_dim
+        self.query = nn.Linear(relation_dim, relation_dim)
+        self.key = nn.Linear(relation_dim, relation_dim)
+        self.value = nn.Linear(relation_dim, relation_dim)
+        self.out = nn.Linear(relation_dim, relation_dim)
+
+    def forward(self, self_token, entity_tokens, entity_mask):
+        valid_mask = entity_mask.bool()
+        valid_any = valid_mask.any(dim=-1, keepdim=True)
+        query = self.query(self_token).unsqueeze(2)
+        key = self.key(entity_tokens)
+        value = self.value(entity_tokens)
+        logits = (query * key).sum(dim=-1) / math.sqrt(float(self.relation_dim))
+        logits = logits.masked_fill(~valid_mask, -1e9)
+        attn = F.softmax(logits, dim=-1)
+        attn = th.where(valid_any, attn, th.zeros_like(attn))
+        message = (attn.unsqueeze(-1) * value).sum(dim=2)
+        return F.elu(self.out(message), inplace=True), attn
+
+
+class HeteroGATRelationCapturer(nn.Module):
+    # Ego-centric heterogeneous graph variant. It keeps separate message
+    # parameters for self-loop, ally->self, and enemy->self relation types,
+    # then uses type-level attention to fuse the typed messages.
+    def __init__(
+        self,
+        move_dim,
+        own_dim,
+        ally_feat_dim,
+        enemy_feat_dim,
+        relation_dim,
+        output_dim,
+    ):
+        super().__init__()
+        self.relation_dim = relation_dim
+
+        self.self_encoder = nn.Sequential(
+            nn.Linear(move_dim + own_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.ally_encoder = nn.Sequential(
+            nn.Linear(ally_feat_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.enemy_encoder = nn.Sequential(
+            nn.Linear(enemy_feat_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+
+        self.self_loop = nn.Linear(relation_dim, relation_dim)
+        self.ally_to_self = TypedEgoGATMessage(relation_dim)
+        self.enemy_to_self = TypedEgoGATMessage(relation_dim)
+        self.type_score = nn.Linear(relation_dim, 1)
+        self.type_norm = nn.LayerNorm(relation_dim)
+        self.instant_pattern = nn.Sequential(
+            nn.Linear(relation_dim * 2, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.temporal_gru = nn.GRUCell(relation_dim * 2, relation_dim)
+        self.output_encoder = nn.Sequential(
+            nn.Linear(relation_dim, output_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(output_dim, output_dim),
+        )
+
+    def forward(self, self_feat, ally_feat, enemy_feat, prev_relation_hidden):
+        self_token = self.self_encoder(self_feat)
+        ally_mask = ally_feat.abs().sum(dim=-1) > 0
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        ally_tokens = self.ally_encoder(ally_feat) * ally_mask.unsqueeze(-1).float()
+        enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
+
+        self_msg = F.elu(self.self_loop(self_token), inplace=True)
+        ally_msg, ally_attn = self.ally_to_self(self_token, ally_tokens, ally_mask)
+        enemy_msg, enemy_attn = self.enemy_to_self(self_token, enemy_tokens, enemy_mask)
+
+        typed_messages = th.stack([self_msg, ally_msg, enemy_msg], dim=2)
+        type_mask = th.stack(
+            [
+                th.ones_like(ally_mask[..., :1], dtype=th.bool),
+                ally_mask.any(dim=-1, keepdim=True),
+                enemy_mask.any(dim=-1, keepdim=True),
+            ],
+            dim=2,
+        ).squeeze(-1)
+        type_logits = self.type_score(typed_messages).squeeze(-1).masked_fill(~type_mask, -1e9)
+        type_attn = F.softmax(type_logits, dim=-1)
+        hetero_context = (type_attn.unsqueeze(-1) * typed_messages).sum(dim=2)
+        hetero_context = self.type_norm(self_token + hetero_context)
+
+        instant = self.instant_pattern(th.cat([self_token, hetero_context], dim=-1))
+        temporal_input = th.cat([self_token, instant], dim=-1)
+
+        batch_size, n_agents, _ = temporal_input.shape
+        flat_input = temporal_input.reshape(batch_size * n_agents, -1)
+        flat_prev = prev_relation_hidden.reshape(batch_size * n_agents, -1)
+        relation_hidden = self.temporal_gru(flat_input, flat_prev).view(batch_size, n_agents, self.relation_dim)
+        condition = self.output_encoder(relation_hidden)
+        return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
+
+
 class CleanHyperAgent(nn.Module):
     MODEL_SPECS = {
         "baseline": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -221,6 +423,8 @@ class CleanHyperAgent(nn.Module):
         "rpg_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_route": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "two_graph_gat_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "hetero_gat_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctce"},
         "graph_route": {"uses_hypernet": True, "execution_scope": "ctce"},
         "qmix_minimal": {"uses_hypernet": False, "execution_scope": "ctde"},
@@ -283,6 +487,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_relation_hypercond",
             "rpg_relation_route",
             "rpg_structured_hypercond",
+            "two_graph_gat_hypercond",
+            "hetero_gat_hypercond",
         }:
             self._init_rpg_relation_capturer()
         else:
@@ -400,7 +606,13 @@ class CleanHyperAgent(nn.Module):
 
     def init_hidden(self):
         hidden_size = self.hidden_dim
-        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
+        if self.model_type in {
+            "rpg_relation_hypercond",
+            "rpg_relation_route",
+            "rpg_structured_hypercond",
+            "two_graph_gat_hypercond",
+            "hetero_gat_hypercond",
+        }:
             hidden_size += self.rpg_relation_dim
         return self.fc1.weight.new_zeros(hidden_size)
 
@@ -462,7 +674,13 @@ class CleanHyperAgent(nn.Module):
 
     def _init_rpg_relation_capturer(self):
         self.rpg_obs_layout = self._build_rpg_obs_layout()
-        self.rpg_relation_capturer = RPGInspiredRelationCapturer(
+        capturer_cls = RPGInspiredRelationCapturer
+        if self.model_type == "two_graph_gat_hypercond":
+            capturer_cls = TwoGraphGATRelationCapturer
+        elif self.model_type == "hetero_gat_hypercond":
+            capturer_cls = HeteroGATRelationCapturer
+
+        self.rpg_relation_capturer = capturer_cls(
             move_dim=self.rpg_obs_layout["move_dim"],
             own_dim=self.rpg_obs_layout["own_dim"],
             ally_feat_dim=self.rpg_obs_layout["ally_feat_dim"],
@@ -562,6 +780,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_relation_hypercond",
             "rpg_relation_route",
             "rpg_structured_hypercond",
+            "two_graph_gat_hypercond",
+            "hetero_gat_hypercond",
         }:
             raise RuntimeError(
                 "{} uses a dedicated condition path and should bypass _build_condition.".format(self.model_type)
@@ -662,7 +882,13 @@ class CleanHyperAgent(nn.Module):
 
         if hidden_state is None:
             hidden_state = self.init_hidden().unsqueeze(0).expand(batch_size, n_agents, -1)
-        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
+        if self.model_type in {
+            "rpg_relation_hypercond",
+            "rpg_relation_route",
+            "rpg_structured_hypercond",
+            "two_graph_gat_hypercond",
+            "hetero_gat_hypercond",
+        }:
             policy_hidden_state = hidden_state[:, :, : self.hidden_dim]
             relation_hidden_state = hidden_state[:, :, self.hidden_dim :]
         else:
@@ -683,11 +909,21 @@ class CleanHyperAgent(nn.Module):
                 self.latest_condition = condition.detach()
                 q = self._apply_rpg_structured_maker(hidden, condition, enemy_tokens, enemy_mask)
                 next_hidden = hidden
-            elif self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
+            elif self.model_type in {
+                "rpg_relation_hypercond",
+                "rpg_relation_route",
+                "rpg_structured_hypercond",
+                "two_graph_gat_hypercond",
+                "hetero_gat_hypercond",
+            }:
                 relation_condition, next_relation_hidden, enemy_tokens, enemy_mask = self._build_rpg_condition(
                     context, relation_hidden_state
                 )
-                if self.model_type == "rpg_relation_hypercond":
+                if self.model_type in {
+                    "rpg_relation_hypercond",
+                    "two_graph_gat_hypercond",
+                    "hetero_gat_hypercond",
+                }:
                     condition = relation_condition
                     self.latest_condition = condition.detach()
                     q = self._apply_dynamic_head(hidden, condition)
