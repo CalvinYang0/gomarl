@@ -61,6 +61,12 @@ hypernet_layers: 2
 #                             tokens. This mimics RPG's maker split, but does
 #                             NOT fully reproduce its original hypernetwork
 #                             parameterization.
+# - rpg_full_structured_hypercond: corrected RPG-inspired structured maker.
+#                                  Both the ego-action branch and the
+#                                  enemy-interaction branch are generated from
+#                                  the relation pattern by hypernetworks. This is
+#                                  the closer comparison to RPG's hypernetwork
+#                                  decision-maker split.
 # - two_graph_gat_hypercond: CTDE ego-graph GAT counterpart to
 #                            rpg_relation_hypercond. It replaces RPG-style
 #                            first-person cross-attention with two explicit

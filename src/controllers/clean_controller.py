@@ -11,6 +11,7 @@ class CleanMAC(BasicMAC):
             "rpg_relation_hypercond",
             "rpg_relation_route",
             "rpg_structured_hypercond",
+            "rpg_full_structured_hypercond",
             "two_graph_gat_hypercond",
             "hetero_gat_hypercond",
         }
