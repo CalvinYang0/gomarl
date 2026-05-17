@@ -83,7 +83,7 @@ hypernet_layers: 2
 #                                generating the dynamic head condition.
 # - graph_hypercond: obs-only graph + standard GCN -> hypernetwork condition (currently CTCE validation)
 # - graph_route: obs-only graph + standard GCN -> route/codebook (currently CTCE validation)
-# - qmix_minimal: shared trunk + fixed linear head, no hypernetwork (CTDE)
+# - qmix_minimal: shared trunk + fixed two-layer MLP head, no hypernetwork (CTDE)
 clean_model_type: "baseline"
 clean_apply_hypermarl_init: False
 clean_condition_dim: 64

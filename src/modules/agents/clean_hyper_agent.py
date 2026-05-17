@@ -766,7 +766,15 @@ class CleanHyperAgent(nn.Module):
             self.hyper_bottleneck_b = None
             self.hyper_out_w = None
             self.hyper_out_b = None
-            self.fixed_head = nn.Linear(self.hidden_dim, self.n_actions) if self.model_type == "qmix_minimal" else None
+            self.fixed_head = (
+                nn.Sequential(
+                    nn.Linear(self.hidden_dim, self.hidden_dim),
+                    nn.ELU(inplace=True),
+                    nn.Linear(self.hidden_dim, self.n_actions),
+                )
+                if self.model_type == "qmix_minimal"
+                else None
+            )
 
         if self.model_type in {"local_structured_hypercond", "rpg_structured_hypercond"}:
             self.rpg_n_ego_actions = self.n_actions - self.rpg_obs_layout["n_enemies"]
