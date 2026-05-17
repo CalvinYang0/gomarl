@@ -217,6 +217,7 @@ class CleanHyperAgent(nn.Module):
         "hypermarl_id": {"uses_hypernet": True, "execution_scope": "ctde"},
         "hypermarl_fullnet": {"uses_hypernet": True, "execution_scope": "ctde"},
         "dynamic_route": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "local_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_route": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -277,7 +278,12 @@ class CleanHyperAgent(nn.Module):
             nn.Linear(self.cond_dim, self.cond_dim),
         )
 
-        if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
+        if self.model_type in {
+            "local_structured_hypercond",
+            "rpg_relation_hypercond",
+            "rpg_relation_route",
+            "rpg_structured_hypercond",
+        }:
             self._init_rpg_relation_capturer()
         else:
             self.rpg_relation_capturer = None
@@ -340,6 +346,7 @@ class CleanHyperAgent(nn.Module):
 
         if self.MODEL_SPECS[self.model_type]["uses_hypernet"] and self.model_type not in {
             "hypermarl_fullnet",
+            "local_structured_hypercond",
             "rpg_structured_hypercond",
         }:
             self.hyper_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
@@ -355,7 +362,7 @@ class CleanHyperAgent(nn.Module):
             self.hyper_out_b = None
             self.fixed_head = nn.Linear(self.hidden_dim, self.n_actions) if self.model_type == "qmix_minimal" else None
 
-        if self.model_type == "rpg_structured_hypercond":
+        if self.model_type in {"local_structured_hypercond", "rpg_structured_hypercond"}:
             self.rpg_n_ego_actions = self.n_actions - self.rpg_obs_layout["n_enemies"]
             self.rpg_ego_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
             self.rpg_ego_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
@@ -487,6 +494,13 @@ class CleanHyperAgent(nn.Module):
         own = obs[:, :, idx : idx + layout["own_dim"]]
         return move, enemy, ally, own
 
+    def _build_local_structured_condition(self, hidden, context):
+        condition = self.local_condition_encoder(self._build_local_source(hidden, context))
+        _, enemy_feat, _, _ = self._split_rpg_obs(context["obs"])
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        enemy_tokens = self.rpg_relation_capturer.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
+        return condition, enemy_tokens, enemy_mask
+
     def _build_rpg_condition(self, context, relation_hidden):
         obs = context["obs"]
         move_feat, enemy_feat, ally_feat, own_feat = self._split_rpg_obs(obs)
@@ -543,7 +557,12 @@ class CleanHyperAgent(nn.Module):
             local_base = self.local_condition_encoder(self._build_local_source(hidden, context))
             route_logits = self.route_logits_head(local_base)
             condition = self._route_from_logits(route_logits, test_mode=test_mode)
-        elif self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
+        elif self.model_type in {
+            "local_structured_hypercond",
+            "rpg_relation_hypercond",
+            "rpg_relation_route",
+            "rpg_structured_hypercond",
+        }:
             raise RuntimeError(
                 "{} uses a dedicated condition path and should bypass _build_condition.".format(self.model_type)
             )
@@ -659,7 +678,12 @@ class CleanHyperAgent(nn.Module):
         else:
             if context is None:
                 raise ValueError("{} requires context with obs/prev_action.".format(self.model_type))
-            if self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
+            if self.model_type == "local_structured_hypercond":
+                condition, enemy_tokens, enemy_mask = self._build_local_structured_condition(hidden, context)
+                self.latest_condition = condition.detach()
+                q = self._apply_rpg_structured_maker(hidden, condition, enemy_tokens, enemy_mask)
+                next_hidden = hidden
+            elif self.model_type in {"rpg_relation_hypercond", "rpg_relation_route", "rpg_structured_hypercond"}:
                 relation_condition, next_relation_hidden, enemy_tokens, enemy_mask = self._build_rpg_condition(
                     context, relation_hidden_state
                 )

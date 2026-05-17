@@ -24,7 +24,7 @@ mixing_embed_dim: 32
 hypernet_embed: 64
 hypernet_layers: 2
 
-# Ten clean models:
+# Eleven clean models:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)
 # - hypermarl_id: id-conditioned dynamic-head baseline; learned e_i only provides
 #                 a condition vector for the generated head, so this is NOT the strict
@@ -33,6 +33,13 @@ hypernet_layers: 2
 #                      that generates the full post-RNN two-layer action network
 #                      parameters; shared trunk does not consume one-hot agent id (CTDE)
 # - dynamic_route: local route/codebook selects the head condition (CTDE)
+# - local_structured_hypercond: control model for isolating the structured maker.
+#                               It keeps the baseline local condition source
+#                               (obs + prev_action + h), but replaces the unified
+#                               generated head with the same ego-action /
+#                               enemy-interaction maker split used by
+#                               rpg_structured_hypercond. It does NOT use the
+#                               RPG relation capturer.
 # - rpg_relation_hypercond: RPG-inspired single-task CTDE adaptation. It uses
 #                           observation-only self/teammate/other relation capture,
 #                           first-person cross-attention, and a separate relation GRU
