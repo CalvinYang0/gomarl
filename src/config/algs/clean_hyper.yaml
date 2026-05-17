@@ -100,6 +100,7 @@ clean_apply_hypermarl_init: False
 clean_condition_dim: 64
 clean_id_embed_dim: 64
 clean_hyper_mlp_hidden_dim: 64
+clean_rpg_interaction_hidden_dim: 16
 clean_route_num: 4
 clean_route_temperature: 1.0
 clean_rpg_relation_dim: 64

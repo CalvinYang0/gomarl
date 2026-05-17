@@ -649,6 +649,7 @@ class CleanHyperAgent(nn.Module):
         self.hyper_mlp_hidden_dim = int(getattr(args, "clean_hyper_mlp_hidden_dim", 64))
         self.apply_hypermarl_init = bool(getattr(args, "clean_apply_hypermarl_init", False))
         self.rpg_relation_dim = int(getattr(args, "clean_rpg_relation_dim", self.cond_dim))
+        self.rpg_interaction_hidden_dim = int(getattr(args, "clean_rpg_interaction_hidden_dim", 16))
 
         self.obs_dim = input_shape
         if getattr(args, "obs_last_action", False):
@@ -808,10 +809,10 @@ class CleanHyperAgent(nn.Module):
             if self.model_type == "rpg_full_structured_hypercond":
                 self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
                 self.rpg_interaction_bottleneck_w = nn.Linear(
-                    self.cond_dim, self.rpg_interaction_input_dim * self.hidden_dim
+                    self.cond_dim, self.rpg_interaction_input_dim * self.rpg_interaction_hidden_dim
                 )
-                self.rpg_interaction_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
-                self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.hidden_dim)
+                self.rpg_interaction_bottleneck_b = nn.Linear(self.cond_dim, self.rpg_interaction_hidden_dim)
+                self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.rpg_interaction_hidden_dim)
                 self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
                 self.rpg_interaction_scorer = None
             else:
@@ -1144,13 +1145,13 @@ class CleanHyperAgent(nn.Module):
                 batch_size * n_agents, self.rpg_obs_layout["n_enemies"], self.rpg_interaction_input_dim
             )
             interaction_bottleneck_w = self.rpg_interaction_bottleneck_w(flat_condition).view(
-                batch_size * n_agents, self.rpg_interaction_input_dim, self.hidden_dim
+                batch_size * n_agents, self.rpg_interaction_input_dim, self.rpg_interaction_hidden_dim
             )
             interaction_bottleneck_b = self.rpg_interaction_bottleneck_b(flat_condition).view(
-                batch_size * n_agents, 1, self.hidden_dim
+                batch_size * n_agents, 1, self.rpg_interaction_hidden_dim
             )
             interaction_out_w = self.rpg_interaction_out_w(flat_condition).view(
-                batch_size * n_agents, self.hidden_dim, 1
+                batch_size * n_agents, self.rpg_interaction_hidden_dim, 1
             )
             interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(
                 batch_size * n_agents, 1, 1
