@@ -67,6 +67,11 @@ hypernet_layers: 2
 #                                  the relation pattern by hypernetworks. This is
 #                                  the closer comparison to RPG's hypernetwork
 #                                  decision-maker split.
+# - rpg_readout_structured_hypercond: lighter structured maker. The enemy
+#                                     interaction branch uses a fixed encoder
+#                                     for [agent hidden, enemy token], while
+#                                     the relation pattern generates only the
+#                                     final readout layer.
 # - rpg_fixed_structured_maker: relation-pattern structured maker with no
 #                               generated decision parameters. The ego branch
 #                               and enemy-interaction branch are both fixed
