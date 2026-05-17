@@ -67,6 +67,11 @@ hypernet_layers: 2
 #                                  the relation pattern by hypernetworks. This is
 #                                  the closer comparison to RPG's hypernetwork
 #                                  decision-maker split.
+# - rpg_fixed_structured_maker: relation-pattern structured maker with no
+#                               generated decision parameters. The ego branch
+#                               and enemy-interaction branch are both fixed
+#                               MLPs conditioned by concatenating the relation
+#                               pattern to their inputs.
 # - two_graph_gat_hypercond: CTDE ego-graph GAT counterpart to
 #                            rpg_relation_hypercond. It replaces RPG-style
 #                            first-person cross-attention with two explicit
