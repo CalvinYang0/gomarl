@@ -72,6 +72,12 @@ hypernet_layers: 2
 #                                     for [agent hidden, enemy token], while
 #                                     the relation pattern generates only the
 #                                     final readout layer.
+# - rpg_linear_interaction_hypercond: lighter structured maker. The enemy
+#                                     interaction branch is a single linear
+#                                     layer generated from the relation
+#                                     pattern, applied to [agent hidden,
+#                                     enemy token]. This removes the generated
+#                                     interaction bottleneck layer.
 # - rpg_fixed_structured_maker: relation-pattern structured maker with no
 #                               generated decision parameters. The ego branch
 #                               and enemy-interaction branch are both fixed

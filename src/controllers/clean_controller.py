@@ -13,6 +13,7 @@ class CleanMAC(BasicMAC):
             "rpg_structured_hypercond",
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
+            "rpg_linear_interaction_hypercond",
             "rpg_fixed_structured_maker",
             "two_graph_gat_hypercond",
             "hetero_gat_hypercond",
