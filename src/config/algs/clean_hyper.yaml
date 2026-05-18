@@ -83,6 +83,11 @@ hypernet_layers: 2
 #                               and enemy-interaction branch are both fixed
 #                               MLPs conditioned by concatenating the relation
 #                               pattern to their inputs.
+# - rpg_fixed_linear_structured_maker: fixed structured-maker control. It keeps
+#                                      the fixed two-layer ego branch, but uses
+#                                      a single fixed linear layer for each
+#                                      enemy-interaction score, conditioned by
+#                                      concatenating the relation pattern.
 # - two_graph_gat_hypercond: CTDE ego-graph GAT counterpart to
 #                            rpg_relation_hypercond. It replaces RPG-style
 #                            first-person cross-attention with two explicit
