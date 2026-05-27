@@ -27,8 +27,20 @@ results_path = join(dirname(dirname(abspath(__file__))), "results")
 def my_main(_run, _config, _log):
     # Setting the random seed throughout the modules
     config = config_copy(_config)
+    if config.get("torch_num_threads") is not None:
+        th.set_num_threads(int(config["torch_num_threads"]))
+    if config.get("torch_num_interop_threads") is not None:
+        try:
+            th.set_num_interop_threads(int(config["torch_num_interop_threads"]))
+        except RuntimeError as exc:
+            _log.warning("Could not set torch_num_interop_threads: {}".format(exc))
     np.random.seed(config["seed"])
     th.manual_seed(config["seed"])
+    if th.cuda.is_available():
+        th.cuda.manual_seed_all(config["seed"])
+        cuda_deterministic = bool(config.get("cuda_deterministic", False))
+        th.backends.cudnn.deterministic = cuda_deterministic
+        th.backends.cudnn.benchmark = False if cuda_deterministic else bool(config.get("cuda_benchmark", True))
     config['env_args']['seed'] = config["seed"]
     
     # run

@@ -15,6 +15,10 @@ learner_log_interval: 2000 # Log training stats every {} timesteps
 t_max: 10000 # Stop running after this many timesteps
 use_cuda: True # Use gpu by default unless it isn't available
 buffer_cpu_only: True # If true we won't keep all of the replay buffer in vram
+torch_num_threads: null # Optional cap for PyTorch CPU worker threads
+torch_num_interop_threads: null # Optional cap for PyTorch inter-op threads
+cuda_benchmark: True # Let cuDNN autotune kernels when CUDA is enabled
+cuda_deterministic: False # Set True only when strict deterministic CUDA behavior is needed
 
 # --- Logging options ---
 use_tensorboard: False # Log results to tensorboard
