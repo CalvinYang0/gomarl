@@ -607,6 +607,10 @@ class CleanHyperAgent(nn.Module):
         "rpg_full_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_readout_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_linear_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_residual_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_film_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_moe_interaction_head": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_smooth_linear_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_fixed_structured_maker": {"uses_hypernet": False, "execution_scope": "ctde"},
         "rpg_fixed_linear_structured_maker": {"uses_hypernet": False, "execution_scope": "ctde"},
         "two_graph_gat_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -653,6 +657,11 @@ class CleanHyperAgent(nn.Module):
         self.apply_hypermarl_init = bool(getattr(args, "clean_apply_hypermarl_init", False))
         self.rpg_relation_dim = int(getattr(args, "clean_rpg_relation_dim", self.cond_dim))
         self.rpg_interaction_hidden_dim = int(getattr(args, "clean_rpg_interaction_hidden_dim", 16))
+        self.rpg_interaction_experts = int(getattr(args, "clean_rpg_interaction_experts", 4))
+        self.rpg_residual_gate_bias = float(getattr(args, "clean_rpg_residual_gate_bias", -1.0))
+        self.smooth_head_loss_coef = float(getattr(args, "clean_smooth_head_loss_coef", 0.0))
+        self.smooth_head_knn = int(getattr(args, "clean_smooth_head_knn", 4))
+        self.smooth_head_sample_size = int(getattr(args, "clean_smooth_head_sample_size", 256))
 
         self.obs_dim = input_shape
         if getattr(args, "obs_last_action", False):
@@ -679,6 +688,10 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_residual_interaction_hypercond",
+            "rpg_film_interaction_hypercond",
+            "rpg_moe_interaction_head",
+            "rpg_smooth_linear_interaction_hypercond",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
             "two_graph_gat_hypercond",
@@ -768,6 +781,10 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_residual_interaction_hypercond",
+            "rpg_film_interaction_hypercond",
+            "rpg_moe_interaction_head",
+            "rpg_smooth_linear_interaction_hypercond",
         }:
             self.hyper_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
             self.hyper_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
@@ -796,6 +813,10 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_residual_interaction_hypercond",
+            "rpg_film_interaction_hypercond",
+            "rpg_moe_interaction_head",
+            "rpg_smooth_linear_interaction_hypercond",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
         }:
@@ -846,6 +867,64 @@ class CleanHyperAgent(nn.Module):
                 self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
                 self.rpg_interaction_encoder = None
                 self.rpg_interaction_scorer = None
+            elif self.model_type == "rpg_smooth_linear_interaction_hypercond":
+                self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
+                self.rpg_interaction_bottleneck_w = None
+                self.rpg_interaction_bottleneck_b = None
+                self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.rpg_interaction_input_dim)
+                self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
+                self.rpg_interaction_encoder = None
+                self.rpg_interaction_scorer = None
+            elif self.model_type == "rpg_residual_interaction_hypercond":
+                self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
+                self.rpg_interaction_bottleneck_w = None
+                self.rpg_interaction_bottleneck_b = None
+                self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.rpg_interaction_input_dim)
+                self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
+                self.rpg_interaction_encoder = None
+                self.rpg_interaction_scorer = nn.Linear(
+                    self.hidden_dim + self.cond_dim + self.rpg_relation_dim, 1
+                )
+                self.rpg_interaction_gate = nn.Sequential(
+                    nn.Linear(self.cond_dim, self.cond_dim),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(self.cond_dim, 1),
+                )
+                nn.init.zeros_(self.rpg_interaction_gate[-1].weight)
+                nn.init.constant_(self.rpg_interaction_gate[-1].bias, self.rpg_residual_gate_bias)
+            elif self.model_type == "rpg_film_interaction_hypercond":
+                self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
+                self.rpg_interaction_bottleneck_w = None
+                self.rpg_interaction_bottleneck_b = None
+                self.rpg_interaction_out_w = None
+                self.rpg_interaction_out_b = None
+                self.rpg_interaction_encoder = nn.Sequential(
+                    nn.Linear(self.rpg_interaction_input_dim, self.rpg_interaction_hidden_dim),
+                    nn.ELU(inplace=True),
+                )
+                self.rpg_interaction_film_gamma = nn.Linear(self.cond_dim, self.rpg_interaction_hidden_dim)
+                self.rpg_interaction_film_beta = nn.Linear(self.cond_dim, self.rpg_interaction_hidden_dim)
+                self.rpg_interaction_scorer = nn.Linear(self.rpg_interaction_hidden_dim, 1)
+                nn.init.zeros_(self.rpg_interaction_film_gamma.weight)
+                nn.init.zeros_(self.rpg_interaction_film_gamma.bias)
+                nn.init.zeros_(self.rpg_interaction_film_beta.weight)
+                nn.init.zeros_(self.rpg_interaction_film_beta.bias)
+            elif self.model_type == "rpg_moe_interaction_head":
+                self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
+                self.rpg_interaction_bottleneck_w = None
+                self.rpg_interaction_bottleneck_b = None
+                self.rpg_interaction_out_w = None
+                self.rpg_interaction_out_b = None
+                self.rpg_interaction_encoder = None
+                self.rpg_interaction_scorer = None
+                self.rpg_interaction_expert_gate = nn.Sequential(
+                    nn.Linear(self.cond_dim, self.cond_dim),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(self.cond_dim, self.rpg_interaction_experts),
+                )
+                self.rpg_interaction_expert_heads = nn.ModuleList(
+                    [nn.Linear(self.rpg_interaction_input_dim, 1) for _ in range(self.rpg_interaction_experts)]
+                )
             elif self.model_type == "rpg_fixed_linear_structured_maker":
                 self.rpg_interaction_input_dim = self.hidden_dim + self.cond_dim + self.rpg_relation_dim
                 self.rpg_interaction_bottleneck_w = None
@@ -897,6 +976,14 @@ class CleanHyperAgent(nn.Module):
                     nn.init.zeros_(self.rpg_interaction_out_w.bias)
                     nn.init.zeros_(self.rpg_interaction_out_b.weight)
                     nn.init.zeros_(self.rpg_interaction_out_b.bias)
+                elif self.model_type in {
+                    "rpg_residual_interaction_hypercond",
+                    "rpg_smooth_linear_interaction_hypercond",
+                }:
+                    nn.init.orthogonal_(self.rpg_interaction_out_w.weight, gain=1.0)
+                    nn.init.zeros_(self.rpg_interaction_out_w.bias)
+                    nn.init.zeros_(self.rpg_interaction_out_b.weight)
+                    nn.init.zeros_(self.rpg_interaction_out_b.bias)
         else:
             self.rpg_n_ego_actions = None
             self.rpg_ego_bottleneck_w = None
@@ -911,8 +998,15 @@ class CleanHyperAgent(nn.Module):
             self.rpg_interaction_out_b = None
             self.rpg_interaction_encoder = None
             self.rpg_interaction_scorer = None
+            self.rpg_interaction_gate = None
+            self.rpg_interaction_film_gamma = None
+            self.rpg_interaction_film_beta = None
+            self.rpg_interaction_expert_gate = None
+            self.rpg_interaction_expert_heads = None
 
         self.latest_condition = None
+        self.latest_aux_loss = None
+        self.latest_generated_interaction_head = None
         self.latest_route_logits = None
         self.latest_route_indices = None
         self.latest_graph_adj = None
@@ -929,6 +1023,10 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_residual_interaction_hypercond",
+            "rpg_film_interaction_hypercond",
+            "rpg_moe_interaction_head",
+            "rpg_smooth_linear_interaction_hypercond",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
             "two_graph_gat_hypercond",
@@ -1109,6 +1207,10 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_residual_interaction_hypercond",
+            "rpg_film_interaction_hypercond",
+            "rpg_moe_interaction_head",
+            "rpg_smooth_linear_interaction_hypercond",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
             "two_graph_gat_hypercond",
@@ -1172,6 +1274,50 @@ class CleanHyperAgent(nn.Module):
             if layer_idx != len(weights) - 1:
                 current = F.elu(current)
         return current.view(batch_size, n_agents, self.n_actions)
+
+    def _linear_generated_interaction(self, flat_interaction_input, flat_condition, batch_size, n_agents):
+        interaction_out_w = self.rpg_interaction_out_w(flat_condition).view(
+            batch_size * n_agents, self.rpg_interaction_input_dim, 1
+        )
+        interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(batch_size * n_agents, 1, 1)
+        generated_head = th.cat(
+            [
+                interaction_out_w.reshape(batch_size * n_agents, -1),
+                interaction_out_b.reshape(batch_size * n_agents, -1),
+            ],
+            dim=-1,
+        )
+        self.latest_generated_interaction_head = generated_head.detach().view(batch_size, n_agents, -1)
+        q_attack = th.bmm(flat_interaction_input, interaction_out_w) + interaction_out_b
+        return q_attack.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"]), generated_head
+
+    def _head_smoothness_loss(self, flat_condition, generated_head):
+        if self.smooth_head_loss_coef <= 0.0 or generated_head.size(0) <= 1:
+            return generated_head.new_zeros(())
+
+        sample_size = min(self.smooth_head_sample_size, generated_head.size(0))
+        if sample_size < 2:
+            return generated_head.new_zeros(())
+
+        if sample_size < generated_head.size(0):
+            indices = th.linspace(
+                0, generated_head.size(0) - 1, steps=sample_size, device=generated_head.device
+            ).long()
+            condition = flat_condition.index_select(0, indices)
+            head = generated_head.index_select(0, indices)
+        else:
+            condition = flat_condition
+            head = generated_head
+
+        condition = F.normalize(condition, p=2, dim=-1)
+        head = F.normalize(head, p=2, dim=-1)
+        rel_dist = 1.0 - th.matmul(condition, condition.transpose(0, 1))
+        rel_dist = rel_dist.masked_fill(th.eye(sample_size, device=rel_dist.device).bool(), float("inf"))
+        knn = min(self.smooth_head_knn, sample_size - 1)
+        neighbor_idx = rel_dist.topk(k=knn, largest=False, dim=-1).indices
+        neighbor_head = head.index_select(0, neighbor_idx.reshape(-1)).view(sample_size, knn, -1)
+        head_sim = (head.unsqueeze(1) * neighbor_head).sum(dim=-1)
+        return (1.0 - head_sim).mean()
 
     def _apply_rpg_structured_maker(self, hidden, relation_condition, enemy_tokens, enemy_mask):
         batch_size, n_agents, _ = hidden.shape
@@ -1241,14 +1387,47 @@ class CleanHyperAgent(nn.Module):
             flat_interaction_input = interaction_input.reshape(
                 batch_size * n_agents, self.rpg_obs_layout["n_enemies"], self.rpg_interaction_input_dim
             )
-            interaction_out_w = self.rpg_interaction_out_w(flat_condition).view(
-                batch_size * n_agents, self.rpg_interaction_input_dim, 1
+            q_attack, _ = self._linear_generated_interaction(
+                flat_interaction_input, flat_condition, batch_size, n_agents
             )
-            interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(
-                batch_size * n_agents, 1, 1
+        elif self.model_type == "rpg_smooth_linear_interaction_hypercond":
+            interaction_input = th.cat([hidden_rep, enemy_tokens], dim=-1)
+            flat_interaction_input = interaction_input.reshape(
+                batch_size * n_agents, self.rpg_obs_layout["n_enemies"], self.rpg_interaction_input_dim
             )
-            q_attack = th.bmm(flat_interaction_input, interaction_out_w) + interaction_out_b
-            q_attack = q_attack.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"])
+            q_attack, generated_head = self._linear_generated_interaction(
+                flat_interaction_input, flat_condition, batch_size, n_agents
+            )
+            self.latest_aux_loss = self.smooth_head_loss_coef * self._head_smoothness_loss(
+                flat_condition, generated_head
+            )
+        elif self.model_type == "rpg_residual_interaction_hypercond":
+            cond_rep = relation_condition.unsqueeze(2).expand(-1, -1, self.rpg_obs_layout["n_enemies"], -1)
+            fixed_input = th.cat([hidden_rep, cond_rep, enemy_tokens], dim=-1)
+            q_fixed = self.rpg_interaction_scorer(fixed_input).squeeze(-1)
+            interaction_input = th.cat([hidden_rep, enemy_tokens], dim=-1)
+            flat_interaction_input = interaction_input.reshape(
+                batch_size * n_agents, self.rpg_obs_layout["n_enemies"], self.rpg_interaction_input_dim
+            )
+            q_dynamic, _ = self._linear_generated_interaction(
+                flat_interaction_input, flat_condition, batch_size, n_agents
+            )
+            gate = th.sigmoid(self.rpg_interaction_gate(relation_condition))
+            q_attack = q_fixed + gate.squeeze(-1).unsqueeze(-1) * q_dynamic
+        elif self.model_type == "rpg_film_interaction_hypercond":
+            interaction_input = th.cat([hidden_rep, enemy_tokens], dim=-1)
+            interaction_feat = self.rpg_interaction_encoder(interaction_input)
+            gamma = 1.0 + self.rpg_interaction_film_gamma(relation_condition).unsqueeze(2)
+            beta = self.rpg_interaction_film_beta(relation_condition).unsqueeze(2)
+            q_attack = self.rpg_interaction_scorer(gamma * interaction_feat + beta).squeeze(-1)
+        elif self.model_type == "rpg_moe_interaction_head":
+            interaction_input = th.cat([hidden_rep, enemy_tokens], dim=-1)
+            expert_qs = th.stack(
+                [expert(interaction_input).squeeze(-1) for expert in self.rpg_interaction_expert_heads],
+                dim=-1,
+            )
+            expert_weight = F.softmax(self.rpg_interaction_expert_gate(relation_condition), dim=-1)
+            q_attack = (expert_qs * expert_weight.unsqueeze(2)).sum(dim=-1)
         else:
             cond_rep = relation_condition.unsqueeze(2).expand(-1, -1, self.rpg_obs_layout["n_enemies"], -1)
             interaction_input = th.cat([hidden_rep, cond_rep, enemy_tokens], dim=-1)
@@ -1268,6 +1447,8 @@ class CleanHyperAgent(nn.Module):
         self.latest_relation_ally_attn = None
         self.latest_relation_enemy_attn = None
         self.latest_condition = None
+        self.latest_aux_loss = None
+        self.latest_generated_interaction_head = None
 
         if hidden_state is None:
             hidden_state = self.init_hidden().unsqueeze(0).expand(batch_size, n_agents, -1)
@@ -1278,6 +1459,10 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_residual_interaction_hypercond",
+            "rpg_film_interaction_hypercond",
+            "rpg_moe_interaction_head",
+            "rpg_smooth_linear_interaction_hypercond",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
             "two_graph_gat_hypercond",
@@ -1310,6 +1495,10 @@ class CleanHyperAgent(nn.Module):
                 "rpg_full_structured_hypercond",
                 "rpg_readout_structured_hypercond",
                 "rpg_linear_interaction_hypercond",
+                "rpg_residual_interaction_hypercond",
+                "rpg_film_interaction_hypercond",
+                "rpg_moe_interaction_head",
+                "rpg_smooth_linear_interaction_hypercond",
                 "rpg_fixed_structured_maker",
                 "rpg_fixed_linear_structured_maker",
                 "two_graph_gat_hypercond",

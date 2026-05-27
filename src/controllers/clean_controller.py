@@ -14,6 +14,10 @@ class CleanMAC(BasicMAC):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_residual_interaction_hypercond",
+            "rpg_film_interaction_hypercond",
+            "rpg_moe_interaction_head",
+            "rpg_smooth_linear_interaction_hypercond",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
             "two_graph_gat_hypercond",
@@ -63,4 +67,6 @@ class CleanMAC(BasicMAC):
         self.latest_route_indices = getattr(self.agent, "latest_route_indices", None)
         self.latest_graph_adj = getattr(self.agent, "latest_graph_adj", None)
         self.latest_graph_nodes = getattr(self.agent, "latest_graph_nodes", None)
+        self.latest_condition = getattr(self.agent, "latest_condition", None)
+        self.latest_aux_loss = getattr(self.agent, "latest_aux_loss", None)
         return agent_outs.view(ep_batch.batch_size, self.n_agents, -1)

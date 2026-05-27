@@ -24,7 +24,7 @@ mixing_embed_dim: 32
 hypernet_embed: 64
 hypernet_layers: 2
 
-# Fifteen clean models:
+# Clean model variants:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)
 # - hypermarl_id: id-conditioned dynamic-head baseline; learned e_i only provides
 #                 a condition vector for the generated head, so this is NOT the strict
@@ -78,6 +78,27 @@ hypernet_layers: 2
 #                                     pattern, applied to [agent hidden,
 #                                     enemy token]. This removes the generated
 #                                     interaction bottleneck layer.
+# - rpg_residual_interaction_hypercond: keeps the same generated ego branch,
+#                                       then combines a fixed linear
+#                                       interaction scorer with a
+#                                       relation-generated linear residual.
+#                                       A learned gate decides how strongly the
+#                                       dynamic correction participates.
+# - rpg_film_interaction_hypercond: keeps the generated ego branch, encodes
+#                                   [agent hidden, enemy token] with a fixed
+#                                   interaction encoder, and lets the relation
+#                                   pattern generate FiLM scale/bias
+#                                   modulation before the final attack score.
+# - rpg_moe_interaction_head: keeps the generated ego branch, but replaces the
+#                             generated linear interaction scorer with a soft
+#                             mixture of fixed interaction experts selected by
+#                             the relation pattern.
+# - rpg_smooth_linear_interaction_hypercond: same head structure as
+#                                            rpg_linear_interaction_hypercond,
+#                                            plus a KNN smoothness regularizer
+#                                            encouraging nearby relation
+#                                            patterns to generate nearby
+#                                            interaction heads.
 # - rpg_fixed_structured_maker: relation-pattern structured maker with no
 #                               generated decision parameters. The ego branch
 #                               and enemy-interaction branch are both fixed
@@ -117,6 +138,16 @@ clean_condition_dim: 64
 clean_id_embed_dim: 64
 clean_hyper_mlp_hidden_dim: 64
 clean_rpg_interaction_hidden_dim: 16
+clean_rpg_interaction_experts: 4
+clean_rpg_residual_gate_bias: -1.0
+clean_smooth_head_loss_coef: 0.01
+clean_smooth_head_knn: 4
+clean_smooth_head_sample_size: 256
+# Optional training-only credit gate. When enabled with a relation-conditioned
+# clean model, the learner multiplies each agent's selected Q by a positive
+# relation-pattern gate before the QMIX mixer. This remains CTDE because the
+# mixer is not used during decentralized execution.
+clean_relation_mixer_gate: False
 clean_route_num: 4
 clean_route_temperature: 1.0
 clean_rpg_relation_dim: 64

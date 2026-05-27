@@ -1,6 +1,8 @@
 import copy
 
 import torch as th
+import torch.nn as nn
+import torch.nn.functional as F
 from torch.optim import Adam, RMSprop
 
 from components.episode_buffer import EpisodeBatch
@@ -17,6 +19,20 @@ class CleanLearner:
         self.target_mac = copy.deepcopy(mac)
         self.logger = logger
         self.params = list(self.mac.parameters())
+        self.relation_mixer_gate = None
+        self.target_relation_mixer_gate = None
+        self.latest_relation_gate_mean = None
+        self.latest_relation_gate_std = None
+
+        if bool(getattr(args, "clean_relation_mixer_gate", False)):
+            cond_dim = int(getattr(args, "clean_condition_dim", args.hypernet_embed))
+            self.relation_mixer_gate = nn.Sequential(
+                nn.Linear(cond_dim, cond_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(cond_dim, 1),
+            )
+            self.target_relation_mixer_gate = copy.deepcopy(self.relation_mixer_gate)
+            self.params += list(self.relation_mixer_gate.parameters())
 
         mixer_name = getattr(args, "mixer", "qmix")
         if mixer_name == "qmix":
@@ -51,19 +67,39 @@ class CleanLearner:
         avail_actions = batch["avail_actions"]
 
         mac_out = []
+        relation_conditions = [] if self.relation_mixer_gate is not None else None
+        aux_losses = []
         self.mac.init_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
             mac_out.append(self.mac.forward(batch, t=t))
+            if relation_conditions is not None:
+                condition = getattr(self.mac, "latest_condition", None)
+                if condition is None:
+                    raise RuntimeError("clean_relation_mixer_gate=True requires a relation-conditioned clean model.")
+                relation_conditions.append(condition)
+            aux_loss = getattr(self.mac, "latest_aux_loss", None)
+            if aux_loss is not None:
+                aux_losses.append(aux_loss)
         mac_out = th.stack(mac_out, dim=1)
+        if relation_conditions is not None:
+            relation_conditions = th.stack(relation_conditions, dim=1)
 
         chosen_action_qvals = th.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)
 
         with th.no_grad():
             target_mac_out = []
+            target_relation_conditions = [] if self.target_relation_mixer_gate is not None else None
             self.target_mac.init_hidden(batch.batch_size)
             for t in range(batch.max_seq_length):
                 target_mac_out.append(self.target_mac.forward(batch, t=t))
+                if target_relation_conditions is not None:
+                    condition = getattr(self.target_mac, "latest_condition", None)
+                    if condition is None:
+                        raise RuntimeError("clean_relation_mixer_gate=True requires a relation-conditioned clean model.")
+                    target_relation_conditions.append(condition)
             target_mac_out = th.stack(target_mac_out, dim=1)
+            if target_relation_conditions is not None:
+                target_relation_conditions = th.stack(target_relation_conditions, dim=1)
 
             mac_out_detach = mac_out.detach().clone()
             mac_out_detach[avail_actions == 0] = -9999999
@@ -71,6 +107,10 @@ class CleanLearner:
             target_max_agent_qvals = th.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
 
             if self.target_mixer is not None:
+                if self.target_relation_mixer_gate is not None:
+                    target_max_agent_qvals = self._apply_relation_gate(
+                        target_max_agent_qvals, target_relation_conditions, target=True
+                    )
                 target_max_qvals = self.target_mixer(target_max_agent_qvals, batch["state"])
             else:
                 target_max_qvals = target_max_agent_qvals
@@ -86,12 +126,18 @@ class CleanLearner:
             )
 
         if self.mixer is not None:
+            if self.relation_mixer_gate is not None:
+                chosen_action_qvals = self._apply_relation_gate(
+                    chosen_action_qvals, relation_conditions[:, :-1], target=False
+                )
             chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])
 
         td_error = chosen_action_qvals - targets.detach()
         td_mask = mask.expand_as(td_error)
         masked_td_error = td_error * td_mask
-        loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
+        td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
+        aux_loss = th.stack(aux_losses).mean() if aux_losses else td_loss.new_zeros(())
+        loss = td_loss + aux_loss
 
         self.optimiser.zero_grad()
         loss.backward()
@@ -103,7 +149,12 @@ class CleanLearner:
             self.last_target_update_episode = episode_num
 
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
-            self.logger.log_stat("loss_td", loss.item(), t_env)
+            self.logger.log_stat("loss_td", td_loss.item(), t_env)
+            if aux_losses:
+                self.logger.log_stat("loss_aux", aux_loss.item(), t_env)
+            if self.latest_relation_gate_mean is not None:
+                self.logger.log_stat("relation_gate_mean", self.latest_relation_gate_mean, t_env)
+                self.logger.log_stat("relation_gate_std", self.latest_relation_gate_std, t_env)
             self.logger.log_stat("grad_norm", grad_norm, t_env)
             mask_elems = td_mask.sum().item()
             self.logger.log_stat(
@@ -123,10 +174,21 @@ class CleanLearner:
             )
             self.log_stats_t = t_env
 
+    def _apply_relation_gate(self, agent_qs, relation_conditions, target=False):
+        gate_net = self.target_relation_mixer_gate if target else self.relation_mixer_gate
+        gate_logits = gate_net(relation_conditions).squeeze(-1)
+        gates = F.softmax(gate_logits, dim=-1) * self.args.n_agents
+        if not target:
+            self.latest_relation_gate_mean = gates.mean().item()
+            self.latest_relation_gate_std = gates.std(unbiased=False).item()
+        return agent_qs * gates
+
     def _update_targets(self):
         self.target_mac.load_state(self.mac)
         if self.mixer is not None:
             self.target_mixer.load_state_dict(self.mixer.state_dict())
+        if self.relation_mixer_gate is not None:
+            self.target_relation_mixer_gate.load_state_dict(self.relation_mixer_gate.state_dict())
         self.logger.console_logger.info("Updated target network")
 
     def cuda(self):
@@ -135,11 +197,16 @@ class CleanLearner:
         if self.mixer is not None:
             self.mixer.cuda()
             self.target_mixer.cuda()
+        if self.relation_mixer_gate is not None:
+            self.relation_mixer_gate.cuda()
+            self.target_relation_mixer_gate.cuda()
 
     def save_models(self, path):
         self.mac.save_models(path)
         if self.mixer is not None:
             th.save(self.mixer.state_dict(), "{}/mixer.th".format(path))
+        if self.relation_mixer_gate is not None:
+            th.save(self.relation_mixer_gate.state_dict(), "{}/relation_mixer_gate.th".format(path))
         th.save(self.optimiser.state_dict(), "{}/opt.th".format(path))
 
     def load_models(self, path):
@@ -148,4 +215,9 @@ class CleanLearner:
         if self.mixer is not None:
             self.mixer.load_state_dict(th.load("{}/mixer.th".format(path), map_location=lambda storage, loc: storage))
             self.target_mixer.load_state_dict(self.mixer.state_dict())
+        if self.relation_mixer_gate is not None:
+            self.relation_mixer_gate.load_state_dict(
+                th.load("{}/relation_mixer_gate.th".format(path), map_location=lambda storage, loc: storage)
+            )
+            self.target_relation_mixer_gate.load_state_dict(self.relation_mixer_gate.state_dict())
         self.optimiser.load_state_dict(th.load("{}/opt.th".format(path), map_location=lambda storage, loc: storage))
