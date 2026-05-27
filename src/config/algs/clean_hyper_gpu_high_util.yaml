@@ -1,8 +1,6 @@
-# Higher-utilization GPU profile for a single 3090 with limited CPU workers.
-# Use this for full experimental runs when a single clean_hyper job leaves the
-# GPU underused. It keeps the algorithm unchanged and only changes throughput
-# knobs: more parallel envs, larger training batches, TF32, and fewer PyTorch
-# CPU threads so SC2 workers keep the CPU.
+# Higher-utilization GPU profile for a single GPU with limited CPU workers.
+# It keeps the algorithm unchanged and uses a conservative large training
+# batch. Larger values such as batch_size=256 can OOM on long SMAC episodes.
 
 action_selector: "epsilon_greedy"
 epsilon_start: 1.0
@@ -11,9 +9,9 @@ epsilon_anneal_time: 100000
 
 runner: "parallel"
 run: "default"
-batch_size_run: 10
-buffer_size: 8000
-batch_size: 256
+batch_size_run: 8
+buffer_size: 6000
+batch_size: 160
 optimizer: "adam"
 
 use_cuda: True
