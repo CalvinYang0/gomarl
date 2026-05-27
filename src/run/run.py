@@ -7,6 +7,7 @@ import shutil
 import torch as th
 from types import SimpleNamespace as SN
 from utils.logging import Logger
+from utils.battle_trace import save_battle_trace, render_battle_trace
 from utils.timehelper import time_left, time_str
 from os.path import dirname, abspath
 
@@ -17,6 +18,40 @@ from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
 
 from smac.env import StarCraft2Env
+
+
+def _safe_name(value):
+    return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in str(value))
+
+
+def _write_battle_trace_outputs(args, logger, trace):
+    if trace is None:
+        logger.console_logger.warning("Battle trace was requested but runner returned no trace.")
+        return
+
+    output_dir = getattr(args, "battle_trace_dir", "")
+    if output_dir in [None, ""]:
+        output_dir = os.path.join(args.local_results_path, "battle_traces", args.unique_token)
+    prefix = _safe_name(trace.get("prefix", "battle_trace"))
+
+    trace_path = save_battle_trace(trace, output_dir, prefix)
+    paths = {"trace_json": trace_path}
+    paths.update(
+        render_battle_trace(
+            trace,
+            output_dir,
+            prefix,
+            frame_stride=int(getattr(args, "battle_trace_frame_stride", 4)),
+            fps=int(getattr(args, "battle_trace_fps", 6)),
+            make_video=bool(getattr(args, "battle_trace_make_video", True)),
+            similarity_sample_size=int(getattr(args, "battle_trace_similarity_sample_size", 256)),
+        )
+    )
+
+    logger.console_logger.info("Battle trace saved to {}".format(trace_path))
+    if bool(getattr(args, "battle_trace_upload_wandb", True)):
+        logger.log_battle_trace_media(paths, int(trace.get("t_env", 0)), fps=int(getattr(args, "battle_trace_fps", 6)))
+
 
 def get_agent_own_state_size(env_args):
     sc_env = StarCraft2Env(**env_args)
@@ -176,6 +211,7 @@ def run_sequential(args, logger):
     last_test_T = -args.test_interval - 1
     last_log_T = 0
     model_save_time = 0
+    last_battle_trace_T = 0
 
     start_time = time.time()
     last_time = start_time
@@ -217,8 +253,26 @@ def run_sequential(args, logger):
             last_time = time.time()
 
             last_test_T = runner.t_env
-            for _ in range(n_test_runs):
+            trace_interval = int(getattr(args, "battle_trace_interval", 1000000))
+            should_trace = (
+                bool(getattr(args, "save_battle_trace", False))
+                and trace_interval > 0
+                and runner.t_env - last_battle_trace_T >= trace_interval
+                and hasattr(runner, "request_battle_trace")
+            )
+            trace_prefix = None
+            if should_trace:
+                map_name = getattr(args, "env_args", {}).get("map_name", getattr(args, "env", "env"))
+                trace_prefix = "{}_{}_t{}".format(args.name, map_name, runner.t_env)
+                logger.console_logger.info("Collecting battle trace at t_env={}".format(runner.t_env))
+
+            for test_run_idx in range(n_test_runs):
+                if should_trace and test_run_idx == 0:
+                    runner.request_battle_trace(prefix=trace_prefix, t_env=runner.t_env)
                 runner.run(test_mode=True)
+                if should_trace and test_run_idx == 0:
+                    _write_battle_trace_outputs(args, logger, runner.pop_battle_trace())
+                    last_battle_trace_T = runner.t_env
 
         if args.save_model and (runner.t_env - model_save_time >= args.save_model_interval or model_save_time == 0):
             model_save_time = runner.t_env

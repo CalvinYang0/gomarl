@@ -41,6 +41,11 @@ def my_main(_run, _config, _log):
         cuda_deterministic = bool(config.get("cuda_deterministic", False))
         th.backends.cudnn.deterministic = cuda_deterministic
         th.backends.cudnn.benchmark = False if cuda_deterministic else bool(config.get("cuda_benchmark", True))
+        allow_tf32 = bool(config.get("cuda_allow_tf32", True))
+        th.backends.cuda.matmul.allow_tf32 = allow_tf32
+        th.backends.cudnn.allow_tf32 = allow_tf32
+        if hasattr(th, "set_float32_matmul_precision"):
+            th.set_float32_matmul_precision(config.get("float32_matmul_precision", "high"))
     config['env_args']['seed'] = config["seed"]
     
     # run

@@ -1,6 +1,7 @@
 from envs import REGISTRY as env_REGISTRY
 from functools import partial
 from components.episode_buffer import EpisodeBatch
+from utils.battle_trace import model_diagnostics
 import numpy as np
 
 
@@ -24,6 +25,8 @@ class EpisodeRunner:
         self.test_stats = {}
 
         self.log_train_stats_t = -1000000
+        self.battle_trace_request = None
+        self.last_battle_trace = None
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -35,6 +38,14 @@ class EpisodeRunner:
 
     def save_replay(self):
         self.env.save_replay()
+
+    def request_battle_trace(self, prefix, t_env):
+        self.battle_trace_request = {"prefix": prefix, "t_env": int(t_env)}
+
+    def pop_battle_trace(self):
+        trace = self.last_battle_trace
+        self.last_battle_trace = None
+        return trace
 
     def close_env(self):
         self.env.close()
@@ -50,6 +61,10 @@ class EpisodeRunner:
         terminated = False
         episode_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
+        trace_request = self.battle_trace_request if test_mode else None
+        self.battle_trace_request = None
+        trace_frames = []
+        snapshot = self.env.get_battle_snapshot() if trace_request is not None else None
 
         while not terminated:
 
@@ -64,8 +79,21 @@ class EpisodeRunner:
             actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
             cpu_actions = actions.to("cpu").numpy()
 
+            if trace_request is not None:
+                trace_frames.append(
+                    {
+                        "t": int(self.t),
+                        "t_env": int(trace_request["t_env"]),
+                        "snapshot": snapshot,
+                        "actions": cpu_actions[0].astype(int).tolist(),
+                        "diagnostics": model_diagnostics(self.mac, batch_index=0),
+                    }
+                )
+
             reward, terminated, env_info = self.env.step(actions[0])
             episode_return += reward
+            if trace_request is not None:
+                snapshot = self.env.get_battle_snapshot()
 
             post_transition_data = {
                 "actions": cpu_actions,
@@ -87,6 +115,22 @@ class EpisodeRunner:
         actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
         cpu_actions = actions.to("cpu").numpy()
         self.batch.update({"actions": cpu_actions}, ts=self.t)
+        if trace_request is not None:
+            trace_frames.append(
+                {
+                    "t": int(self.t),
+                    "t_env": int(trace_request["t_env"]),
+                    "snapshot": snapshot,
+                    "actions": None,
+                    "diagnostics": model_diagnostics(self.mac, batch_index=0),
+                }
+            )
+            self.last_battle_trace = {
+                "prefix": trace_request["prefix"],
+                "t_env": int(trace_request["t_env"]),
+                "map_name": getattr(self.env, "map_name", None),
+                "frames": trace_frames,
+            }
         
         cur_stats = self.test_stats if test_mode else self.train_stats
         cur_returns = self.test_returns if test_mode else self.train_returns

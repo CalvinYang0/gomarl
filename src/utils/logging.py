@@ -120,6 +120,31 @@ class Logger:
                 self.sacred_info["{}_T".format(key)] = [t]
                 self.sacred_info[key] = [value]
 
+    def log_battle_trace_media(self, paths, t, fps=6):
+        if not self.use_wandb:
+            return
+
+        if "battle_overview" in paths:
+            self._update_wandb_buffer(
+                "battle_trace/overview",
+                self.wandb_module.Image(paths["battle_overview"]),
+                t,
+            )
+        if "similarity" in paths:
+            self._update_wandb_buffer(
+                "battle_trace/relation_head_similarity",
+                self.wandb_module.Image(paths["similarity"]),
+                t,
+            )
+        if "video" in paths:
+            video_path = paths["video"]
+            video_format = "gif" if video_path.endswith(".gif") else "mp4"
+            self._update_wandb_buffer(
+                "battle_trace/video",
+                self.wandb_module.Video(video_path, fps=fps, format=video_format),
+                t,
+            )
+
     def print_recent_stats(self):
         log_str = "Recent Stats | t_env: {:>10} | Episode: {:>8}\n".format(*self.stats["episode"][-1])
         i = 0

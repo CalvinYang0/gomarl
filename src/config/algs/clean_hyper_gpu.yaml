@@ -9,17 +9,27 @@ epsilon_anneal_time: 100000
 
 runner: "parallel"
 run: "default"
-batch_size_run: 4
-buffer_size: 5000
-batch_size: 128
+batch_size_run: 8
+buffer_size: 6000
+batch_size: 192
 optimizer: "adam"
 
 use_cuda: True
 buffer_cpu_only: True
-torch_num_threads: 4
+torch_num_threads: 2
 torch_num_interop_threads: 2
 cuda_benchmark: True
 cuda_deterministic: False
+cuda_allow_tf32: True
+float32_matmul_precision: "high"
+
+save_battle_trace: False
+battle_trace_interval: 1000000
+battle_trace_upload_wandb: True
+battle_trace_make_video: True
+battle_trace_frame_stride: 4
+battle_trace_fps: 6
+battle_trace_similarity_sample_size: 256
 
 t_max: 10050000
 target_update_interval: 200

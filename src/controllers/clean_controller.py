@@ -69,4 +69,7 @@ class CleanMAC(BasicMAC):
         self.latest_graph_nodes = getattr(self.agent, "latest_graph_nodes", None)
         self.latest_condition = getattr(self.agent, "latest_condition", None)
         self.latest_aux_loss = getattr(self.agent, "latest_aux_loss", None)
+        self.latest_generated_interaction_head = getattr(self.agent, "latest_generated_interaction_head", None)
+        self.latest_relation_ally_attn = getattr(self.agent, "latest_relation_ally_attn", None)
+        self.latest_relation_enemy_attn = getattr(self.agent, "latest_relation_enemy_attn", None)
         return agent_outs.view(ep_batch.batch_size, self.n_agents, -1)

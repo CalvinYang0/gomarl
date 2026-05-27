@@ -2,6 +2,7 @@ from envs import REGISTRY as env_REGISTRY
 from functools import partial
 from components.episode_buffer import EpisodeBatch
 from multiprocessing import Pipe, Process
+from utils.battle_trace import model_diagnostics
 import numpy as np
 import torch as th
 
@@ -38,6 +39,9 @@ class ParallelRunner:
         self.test_stats = {}
 
         self.log_train_stats_t = -100000
+        self.battle_trace_request = None
+        self.last_battle_trace = None
+        self.latest_snapshots = [None for _ in range(self.batch_size)]
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -52,6 +56,14 @@ class ParallelRunner:
 
     def save_replay(self):
         pass
+
+    def request_battle_trace(self, prefix, t_env):
+        self.battle_trace_request = {"prefix": prefix, "t_env": int(t_env)}
+
+    def pop_battle_trace(self):
+        trace = self.last_battle_trace
+        self.last_battle_trace = None
+        return trace
 
     def close_env(self):
         for parent_conn in self.parent_conns:
@@ -69,11 +81,12 @@ class ParallelRunner:
             "obs": []
         }
 
-        for parent_conn in self.parent_conns:
+        for env_idx, parent_conn in enumerate(self.parent_conns):
             data = parent_conn.recv()
             pre_transition_data["state"].append(data["state"])
             pre_transition_data["avail_actions"].append(data["avail_actions"])
             pre_transition_data["obs"].append(data["obs"])
+            self.latest_snapshots[env_idx] = data.get("snapshot")
 
         self.batch.update(pre_transition_data, ts=0)
 
@@ -88,6 +101,10 @@ class ParallelRunner:
         episode_lengths = [0 for _ in range(self.batch_size)]
         self.mac.init_hidden(batch_size=self.batch_size)
         terminated = [False for _ in range(self.batch_size)]
+        trace_request = self.battle_trace_request if test_mode else None
+        self.battle_trace_request = None
+        trace_env_idx = 0
+        trace_frames = []
 
         envs_not_terminated = [b_idx for b_idx, termed in enumerate(terminated) if not termed]
         final_env_infos = []
@@ -100,6 +117,21 @@ class ParallelRunner:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, bs=envs_not_terminated, test_mode=test_mode)
                 
             cpu_actions = actions.to("cpu").numpy()
+            action_by_env = {
+                env_idx: cpu_actions[action_idx]
+                for action_idx, env_idx in enumerate(envs_not_terminated)
+            }
+
+            if trace_request is not None and trace_env_idx in action_by_env:
+                trace_frames.append(
+                    {
+                        "t": int(self.t),
+                        "t_env": int(trace_request["t_env"]),
+                        "snapshot": self.latest_snapshots[trace_env_idx],
+                        "actions": action_by_env[trace_env_idx].astype(int).tolist(),
+                        "diagnostics": model_diagnostics(self.mac, batch_index=trace_env_idx),
+                    }
+                )
 
             actions_chosen = {
                 "actions": actions.unsqueeze(1).to("cpu"),
@@ -113,7 +145,8 @@ class ParallelRunner:
             for idx, parent_conn in enumerate(self.parent_conns):
                 if idx in envs_not_terminated:
                     if not terminated[idx]:
-                        parent_conn.send(("step", cpu_actions[action_idx]))
+                        cmd = "step_trace" if trace_request is not None and idx == trace_env_idx else "step"
+                        parent_conn.send((cmd, cpu_actions[action_idx]))
                     action_idx += 1
 
             envs_not_terminated = [b_idx for b_idx, termed in enumerate(terminated) if not termed]
@@ -136,6 +169,8 @@ class ParallelRunner:
                 if not terminated[idx]:
                     data = parent_conn.recv()
                     post_transition_data["reward"].append((data["reward"],))
+                    if "snapshot" in data:
+                        self.latest_snapshots[idx] = data["snapshot"]
 
                     episode_returns[idx] += data["reward"]
                     episode_lengths[idx] += 1
@@ -162,6 +197,22 @@ class ParallelRunner:
 
         if not test_mode:
             self.t_env += self.env_steps_this_run
+        elif trace_request is not None:
+            trace_frames.append(
+                {
+                    "t": int(self.t),
+                    "t_env": int(trace_request["t_env"]),
+                    "snapshot": self.latest_snapshots[trace_env_idx],
+                    "actions": None,
+                    "diagnostics": None,
+                }
+            )
+            self.last_battle_trace = {
+                "prefix": trace_request["prefix"],
+                "t_env": int(trace_request["t_env"]),
+                "map_name": getattr(self.args, "env_args", {}).get("map_name", None),
+                "frames": trace_frames,
+            }
 
         for parent_conn in self.parent_conns:
             parent_conn.send(("get_stats",None))
@@ -208,7 +259,7 @@ def env_worker(remote, env_fn):
     env = env_fn.x()
     while True:
         cmd, data = remote.recv()
-        if cmd == "step":
+        if cmd in {"step", "step_trace"}:
             actions = data
             reward, terminated, env_info = env.step(actions)
             state = env.get_state()
@@ -222,13 +273,16 @@ def env_worker(remote, env_fn):
                 "terminated": terminated,
                 "info": env_info
             }
+            if cmd == "step_trace":
+                response["snapshot"] = env.get_battle_snapshot()
             remote.send(response)
         elif cmd == "reset":
             env.reset()
             remote.send({
                 "state": env.get_state(),
                 "avail_actions": env.get_avail_actions(),
-                "obs": env.get_obs()
+                "obs": env.get_obs(),
+                "snapshot": env.get_battle_snapshot()
             })
         elif cmd == "close":
             env.close()

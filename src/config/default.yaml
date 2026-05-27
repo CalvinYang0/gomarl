@@ -19,6 +19,8 @@ torch_num_threads: null # Optional cap for PyTorch CPU worker threads
 torch_num_interop_threads: null # Optional cap for PyTorch inter-op threads
 cuda_benchmark: True # Let cuDNN autotune kernels when CUDA is enabled
 cuda_deterministic: False # Set True only when strict deterministic CUDA behavior is needed
+cuda_allow_tf32: True # Use TensorFloat-32 matmul/convolution on Ampere+ GPUs
+float32_matmul_precision: "high" # PyTorch 2.x matmul precision hint
 
 # --- Logging options ---
 use_tensorboard: False # Log results to tensorboard
@@ -37,6 +39,14 @@ evaluate: False # Evaluate model for test_nepisode episodes and quit (no trainin
 load_step: 0 # Load model trained on this many timesteps (0 if choose max possible)
 save_replay: False # Saving the replay of the model loaded from checkpoint_path
 local_results_path: "results" # Path for local results
+save_battle_trace: False # Periodically render one traced test episode
+battle_trace_interval: 1000000 # Trace/upload interval in environment steps
+battle_trace_dir: "" # Empty means results/battle_traces/<unique_token>
+battle_trace_upload_wandb: True # Upload trace media when W&B is enabled
+battle_trace_make_video: True # Try to render mp4/gif in addition to PNG summaries
+battle_trace_frame_stride: 4 # Render every Nth environment frame into video
+battle_trace_fps: 6 # Video playback FPS
+battle_trace_similarity_sample_size: 256 # Max agent-time samples for similarity heatmaps
 
 # --- RL hyperparameters ---
 gamma: 0.99

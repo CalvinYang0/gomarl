@@ -760,6 +760,43 @@ class StarCraft2Env(MultiAgentEnv):
             self._controller.save_replay(), replay_dir=replay_dir, prefix=prefix)
         logging.info("Replay saved at: %s" % replay_path)
 
+    def get_battle_snapshot(self):
+        """Return lightweight unit state for offline visualization."""
+        return {
+            "map_name": self.map_name,
+            "episode_steps": int(self._episode_steps),
+            "map_x": int(self.map_x),
+            "map_y": int(self.map_y),
+            "n_agents": int(self.n_agents),
+            "n_enemies": int(self.n_enemies),
+            "n_actions_no_attack": int(self.n_actions_no_attack),
+            "allies": [
+                self._unit_snapshot(unit_id, unit)
+                for unit_id, unit in sorted(self.agents.items())
+            ],
+            "enemies": [
+                self._unit_snapshot(unit_id, unit)
+                for unit_id, unit in sorted(self.enemies.items())
+            ],
+        }
+
+    @staticmethod
+    def _unit_snapshot(unit_id, unit):
+        shield = getattr(unit, "shield", 0.0)
+        shield_max = getattr(unit, "shield_max", 0.0)
+        return {
+            "id": int(unit_id),
+            "tag": int(unit.tag),
+            "unit_type": int(unit.unit_type),
+            "x": float(unit.pos.x),
+            "y": float(unit.pos.y),
+            "health": float(unit.health),
+            "health_max": float(unit.health_max),
+            "shield": float(shield),
+            "shield_max": float(shield_max),
+            "alive": bool(unit.health > 0),
+        }
+
     def unit_max_shield(self, unit):
         """Returns maximal shield for a given unit."""
         if unit.unit_type == 74 or unit.unit_type == self.stalker_id:
