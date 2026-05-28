@@ -73,6 +73,10 @@ def render_battle_trace(
     if _plot_similarity(frames, similarity_path, plt, similarity_sample_size):
         paths["similarity"] = similarity_path
 
+    alignment_path = os.path.join(output_dir, "{}_relation_head_alignment.png".format(prefix))
+    if _plot_alignment_summary(frames, alignment_path, plt, similarity_sample_size):
+        paths["alignment"] = alignment_path
+
     if make_video:
         video_path = _render_video(frames, output_dir, prefix, plt, frame_stride=frame_stride, fps=fps)
         if video_path is not None:
@@ -262,6 +266,64 @@ def _plot_similarity(frames, output_path, plt, sample_size):
     return True
 
 
+def _plot_alignment_summary(frames, output_path, plt, sample_size):
+    relation, head = _collect_relation_and_head(frames)
+    if relation is None or head is None:
+        return False
+
+    relation, head = _sample_aligned(relation, head, sample_size)
+    if relation.shape[0] < 3:
+        return False
+
+    rel_sim = _cosine_sim(relation)
+    head_sim = _cosine_sim(head)
+    rel_dist, head_dist = _upper_triangle_distances(rel_sim, head_sim)
+    corr = _rank_corr(rel_dist, head_dist)
+
+    fig, ax = plt.subplots(figsize=(8.2, 6.0))
+    hb = ax.hexbin(
+        rel_dist,
+        head_dist,
+        gridsize=46,
+        mincnt=1,
+        cmap="Blues",
+        linewidths=0.0,
+        alpha=0.92,
+    )
+    fig.colorbar(hb, ax=ax, label="number of sample pairs")
+
+    bin_x, mean_y = _binned_mean(rel_dist, head_dist, bins=12)
+    ax.plot(bin_x, mean_y, color="#d7301f", linewidth=2.7, marker="o", markersize=4.5, label="average trend")
+
+    ax.set_title("Similar relations generate similar decision heads", fontsize=15, pad=14)
+    ax.set_xlabel("Relation-pattern difference\n0 = same relation, larger = more different", fontsize=11)
+    ax.set_ylabel("Generated MLP-head parameter difference\n0 = same head, larger = more different", fontsize=11)
+    ax.grid(True, linestyle="--", alpha=0.25)
+    ax.legend(loc="upper left")
+
+    explanation = (
+        "Each point/bin compares two agent-time samples.\n"
+        "Upward trend means the hypernetwork changes the MLP head\n"
+        "when the relation pattern changes.\n"
+        "Rank correlation = {:.3f}".format(corr)
+    )
+    ax.text(
+        0.03,
+        0.97,
+        explanation,
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=10.5,
+        bbox={"boxstyle": "round,pad=0.45", "facecolor": "white", "edgecolor": "#999999", "alpha": 0.88},
+    )
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+    return True
+
+
 def _collect_relation_and_head(frames):
     relation_rows = []
     head_rows = []
@@ -322,6 +384,24 @@ def _cosine_sim(x):
 def _upper_triangle_distances(rel_sim, head_sim):
     idx = np.triu_indices(rel_sim.shape[0], k=1)
     return 1.0 - rel_sim[idx], 1.0 - head_sim[idx]
+
+
+def _binned_mean(x, y, bins=12):
+    if len(x) == 0:
+        return np.asarray([]), np.asarray([])
+    edges = np.linspace(float(np.min(x)), float(np.max(x)), bins + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    means = []
+    valid_centers = []
+    for left, right, center in zip(edges[:-1], edges[1:], centers):
+        if right == edges[-1]:
+            mask = (x >= left) & (x <= right)
+        else:
+            mask = (x >= left) & (x < right)
+        if np.any(mask):
+            valid_centers.append(center)
+            means.append(float(np.mean(y[mask])))
+    return np.asarray(valid_centers), np.asarray(means)
 
 
 def _rank_corr(x, y):
