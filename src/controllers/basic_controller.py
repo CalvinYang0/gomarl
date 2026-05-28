@@ -34,7 +34,8 @@ class BasicMAC:
             if getattr(self.args, "mask_before_softmax", True):
                 agent_outs = agent_outs.reshape(ep_batch.batch_size * self.n_agents, -1)
                 reshaped_avail_actions = avail_actions.reshape(ep_batch.batch_size * self.n_agents, -1)
-                agent_outs[reshaped_avail_actions == 0] = -1e10
+                mask_value = th.finfo(agent_outs.dtype).min if agent_outs.is_floating_point() else -9999999
+                agent_outs[reshaped_avail_actions == 0] = mask_value
 
             agent_outs = th.nn.functional.softmax(agent_outs, dim=-1)
             

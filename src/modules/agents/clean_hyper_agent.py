@@ -7,6 +7,12 @@ import torch.nn.functional as F
 from envs.starcraft.smac_maps import get_map_params
 
 
+def _neg_inf_like(tensor):
+    if tensor.is_floating_point():
+        return th.finfo(tensor.dtype).min
+    return -9999999
+
+
 class MLPHyperParameterGenerator(nn.Module):
     def __init__(self, embed_dim, output_dims, hyper_hidden_dim):
         super().__init__()
@@ -180,7 +186,7 @@ class RPGInspiredRelationCapturer(nn.Module):
         logits = th.matmul(self.self_query(query).unsqueeze(2), key.transpose(-1, -2)).squeeze(2) / scale
         valid_mask = mask.bool()
         valid_any = valid_mask.any(dim=-1, keepdim=True)
-        masked_logits = logits.masked_fill(~valid_mask, -1e9)
+        masked_logits = logits.masked_fill(~valid_mask, _neg_inf_like(logits))
         attn = F.softmax(masked_logits, dim=-1)
         attn = th.where(valid_any, attn, th.zeros_like(attn))
         context = th.matmul(attn.unsqueeze(2), value).squeeze(2)
@@ -232,7 +238,7 @@ class EgoGATLayer(nn.Module):
         key = self.key(nodes)
         value = self.value(nodes)
         logits = (query * key).sum(dim=-1) / math.sqrt(float(self.relation_dim))
-        logits = logits.masked_fill(~node_mask, -1e9)
+        logits = logits.masked_fill(~node_mask, _neg_inf_like(logits))
         attn = F.softmax(logits, dim=-1)
         context = (attn.unsqueeze(-1) * value).sum(dim=2)
         updated = self.norm(self_token + F.elu(self.out(context), inplace=True))
@@ -321,7 +327,7 @@ class TypedEgoGATMessage(nn.Module):
         key = self.key(entity_tokens)
         value = self.value(entity_tokens)
         logits = (query * key).sum(dim=-1) / math.sqrt(float(self.relation_dim))
-        logits = logits.masked_fill(~valid_mask, -1e9)
+        logits = logits.masked_fill(~valid_mask, _neg_inf_like(logits))
         attn = F.softmax(logits, dim=-1)
         attn = th.where(valid_any, attn, th.zeros_like(attn))
         message = (attn.unsqueeze(-1) * value).sum(dim=2)
@@ -397,7 +403,8 @@ class HeteroGATRelationCapturer(nn.Module):
             ],
             dim=2,
         ).squeeze(-1)
-        type_logits = self.type_score(typed_messages).squeeze(-1).masked_fill(~type_mask, -1e9)
+        type_logits = self.type_score(typed_messages).squeeze(-1)
+        type_logits = type_logits.masked_fill(~type_mask, _neg_inf_like(type_logits))
         type_attn = F.softmax(type_logits, dim=-1)
         hetero_context = (type_attn.unsqueeze(-1) * typed_messages).sum(dim=2)
         hetero_context = self.type_norm(self_token + hetero_context)
@@ -431,7 +438,7 @@ class GlobalGraphGATLayer(nn.Module):
 
         source_mask = node_mask.bool().unsqueeze(1)
         valid_any = node_mask.bool().any(dim=-1, keepdim=True).unsqueeze(-1)
-        logits = logits.masked_fill(~source_mask, -1e9)
+        logits = logits.masked_fill(~source_mask, _neg_inf_like(logits))
         attn = F.softmax(logits, dim=-1)
         attn = th.where(valid_any, attn, th.zeros_like(attn))
 
@@ -458,7 +465,7 @@ class GlobalCrossAttention(nn.Module):
 
         valid_mask = key_mask.bool().unsqueeze(1)
         valid_any = key_mask.bool().any(dim=-1, keepdim=True).unsqueeze(-1)
-        logits = logits.masked_fill(~valid_mask, -1e9)
+        logits = logits.masked_fill(~valid_mask, _neg_inf_like(logits))
         attn = F.softmax(logits, dim=-1)
         attn = th.where(valid_any, attn, th.zeros_like(attn))
 
@@ -584,7 +591,7 @@ class GlobalHeteroGATRelationEncoder(nn.Module):
         value = self.value(nodes)
         logits = th.matmul(query, key.transpose(-1, -2)) / math.sqrt(float(self.relation_dim))
         logits = logits + self.edge_type_bias(edge_types).squeeze(-1).unsqueeze(0)
-        logits = logits.masked_fill(~node_mask.unsqueeze(1), -1e9)
+        logits = logits.masked_fill(~node_mask.unsqueeze(1), _neg_inf_like(logits))
         attn = F.softmax(logits, dim=-1)
 
         edge_value = self.edge_type_value(edge_types).unsqueeze(0)
