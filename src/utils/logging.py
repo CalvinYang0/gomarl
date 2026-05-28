@@ -142,6 +142,14 @@ class Logger:
                 self.wandb_module.Image(paths["alignment"]),
                 t,
             )
+        if "relation_dynamics_video" in paths:
+            video_path = paths["relation_dynamics_video"]
+            video_format = "gif" if video_path.endswith(".gif") else "mp4"
+            self._update_wandb_buffer(
+                "battle_trace/relation_head_dynamics",
+                self.wandb_module.Video(video_path, fps=fps, format=video_format),
+                t,
+            )
         if "video" in paths:
             video_path = paths["video"]
             video_format = "gif" if video_path.endswith(".gif") else "mp4"

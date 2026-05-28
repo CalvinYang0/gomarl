@@ -27,7 +27,7 @@ save_battle_trace: False
 battle_trace_interval: 1000000
 battle_trace_upload_wandb: True
 battle_trace_make_video: True
-battle_trace_frame_stride: 4
+battle_trace_frame_stride: 1
 battle_trace_fps: 6
 battle_trace_similarity_sample_size: 256
 

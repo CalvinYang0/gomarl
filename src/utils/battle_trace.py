@@ -78,9 +78,20 @@ def render_battle_trace(
         paths["alignment"] = alignment_path
 
     if make_video:
-        video_path = _render_video(frames, output_dir, prefix, plt, frame_stride=frame_stride, fps=fps)
+        video_path = _render_battle_intent_video(frames, output_dir, prefix, plt, frame_stride=frame_stride, fps=fps)
         if video_path is not None:
             paths["video"] = video_path
+        relation_video_path = _render_relation_dynamics_video(
+            frames,
+            output_dir,
+            prefix,
+            plt,
+            frame_stride=frame_stride,
+            fps=fps,
+            sample_size=similarity_sample_size,
+        )
+        if relation_video_path is not None:
+            paths["relation_dynamics_video"] = relation_video_path
 
     return paths
 
@@ -103,7 +114,7 @@ def _plot_battle_overview(frames, output_path, plt):
     plt.close(fig)
 
 
-def _render_video(frames, output_dir, prefix, plt, frame_stride=4, fps=6):
+def _render_battle_intent_video(frames, output_dir, prefix, plt, frame_stride=1, fps=6):
     try:
         import imageio.v2 as imageio
     except ImportError:
@@ -118,8 +129,9 @@ def _render_video(frames, output_dir, prefix, plt, frame_stride=4, fps=6):
     bounds = _battle_bounds(frames)
     png_paths = []
     for idx, frame in enumerate(selected):
-        fig, ax = plt.subplots(figsize=(6.0, 5.2))
-        _draw_battle_frame(ax, frame, bounds)
+        fig, ax = plt.subplots(figsize=(8.5, 6.2))
+        prev_frame = selected[idx - 1] if idx > 0 else None
+        _draw_battle_frame(ax, frame, bounds, prev_frame=prev_frame)
         fig.tight_layout()
         png_path = os.path.join(frame_dir, "{:04d}.png".format(idx))
         fig.savefig(png_path, dpi=140)
@@ -127,12 +139,12 @@ def _render_video(frames, output_dir, prefix, plt, frame_stride=4, fps=6):
         png_paths.append(png_path)
 
     images = [imageio.imread(path) for path in png_paths]
-    mp4_path = os.path.join(output_dir, "{}_battle.mp4".format(prefix))
+    mp4_path = os.path.join(output_dir, "{}_battle_intent.mp4".format(prefix))
     try:
         imageio.mimsave(mp4_path, images, fps=fps)
         return mp4_path
     except Exception:
-        gif_path = os.path.join(output_dir, "{}_battle.gif".format(prefix))
+        gif_path = os.path.join(output_dir, "{}_battle_intent.gif".format(prefix))
         try:
             imageio.mimsave(gif_path, images, fps=fps)
             return gif_path
@@ -140,19 +152,215 @@ def _render_video(frames, output_dir, prefix, plt, frame_stride=4, fps=6):
             return None
 
 
-def _draw_battle_frame(ax, frame, bounds):
+def _render_relation_dynamics_video(frames, output_dir, prefix, plt, frame_stride=1, fps=6, sample_size=256):
+    try:
+        import imageio.v2 as imageio
+    except ImportError:
+        return None
+
+    relation_items = []
+    for frame in frames:
+        diagnostics = frame.get("diagnostics") or {}
+        relation = diagnostics.get("relation_condition")
+        if relation is None:
+            continue
+        relation = np.asarray(relation, dtype=np.float32)
+        if relation.ndim != 2:
+            continue
+        head = diagnostics.get("generated_interaction_head")
+        if head is not None:
+            head = np.asarray(head, dtype=np.float32)
+            if head.ndim != 2 or head.shape[0] != relation.shape[0]:
+                head = None
+        relation_items.append({"frame": frame, "relation": relation, "head": head})
+
+    if len(relation_items) < 2:
+        return None
+
+    selected = relation_items[:: max(1, int(frame_stride))]
+    if selected[-1] is not relation_items[-1]:
+        selected.append(relation_items[-1])
+
+    rel_all = np.concatenate([item["relation"] for item in relation_items], axis=0)
+    rel_projector = _fit_pca2(rel_all)
+    rel_coords = [rel_projector(item["relation"]) for item in relation_items]
+    rel_bounds = _coord_bounds(rel_coords)
+
+    has_head = all(item["head"] is not None for item in relation_items)
+    if has_head:
+        head_all = np.concatenate([item["head"] for item in relation_items], axis=0)
+        head_projector = _fit_pca2(head_all)
+        head_coords = [head_projector(item["head"]) for item in relation_items]
+        head_bounds = _coord_bounds(head_coords)
+    else:
+        head_coords = None
+        head_bounds = None
+
+    item_to_index = {id(item): idx for idx, item in enumerate(relation_items)}
+    frame_dir = os.path.join(output_dir, "{}_relation_frames".format(prefix))
+    os.makedirs(frame_dir, exist_ok=True)
+    png_paths = []
+
+    for out_idx, item in enumerate(selected):
+        item_idx = item_to_index[id(item)]
+        fig, axes = plt.subplots(2, 2, figsize=(11.5, 9.0))
+        _draw_projection_panel(
+            axes[0, 0],
+            rel_coords,
+            item_idx,
+            rel_bounds,
+            title="Relation pattern in 2D",
+            subtitle="Each point = one agent at current timestep",
+        )
+        _draw_agent_similarity_panel(
+            axes[0, 1],
+            item["relation"],
+            title="Relation similarity between agents",
+        )
+        if has_head:
+            _draw_projection_panel(
+                axes[1, 0],
+                head_coords,
+                item_idx,
+                head_bounds,
+                title="Generated MLP head in 2D",
+                subtitle="Agent head-parameter trajectory",
+            )
+            _draw_agent_similarity_panel(
+                axes[1, 1],
+                item["head"],
+                title="MLP-head similarity between agents",
+            )
+        else:
+            axes[1, 0].axis("off")
+            axes[1, 1].axis("off")
+            axes[1, 0].text(0.5, 0.5, "No generated MLP-head parameters\nfor this model.", ha="center", va="center")
+
+        fig.suptitle("Relation/head dynamics at timestep {}".format(item["frame"].get("t", 0)), fontsize=15)
+        fig.tight_layout()
+        png_path = os.path.join(frame_dir, "{:04d}.png".format(out_idx))
+        fig.savefig(png_path, dpi=140)
+        plt.close(fig)
+        png_paths.append(png_path)
+
+    images = [imageio.imread(path) for path in png_paths]
+    mp4_path = os.path.join(output_dir, "{}_relation_head_dynamics.mp4".format(prefix))
+    try:
+        imageio.mimsave(mp4_path, images, fps=fps)
+        return mp4_path
+    except Exception:
+        gif_path = os.path.join(output_dir, "{}_relation_head_dynamics.gif".format(prefix))
+        try:
+            imageio.mimsave(gif_path, images, fps=fps)
+            return gif_path
+        except Exception:
+            return None
+
+
+def _fit_pca2(x):
+    x = np.asarray(x, dtype=np.float32)
+    mean = x.mean(axis=0, keepdims=True)
+    centered = x - mean
+    if centered.shape[0] < 2:
+        components = np.zeros((2, centered.shape[1]), dtype=np.float32)
+    else:
+        _, _, vt = np.linalg.svd(centered, full_matrices=False)
+        components = vt[:2]
+        if components.shape[0] == 1:
+            components = np.concatenate([components, np.zeros_like(components)], axis=0)
+
+    def project(values):
+        projected = (np.asarray(values, dtype=np.float32) - mean).dot(components.T)
+        if projected.shape[1] < 2:
+            projected = np.pad(projected, ((0, 0), (0, 2 - projected.shape[1])))
+        return projected[:, :2]
+
+    return project
+
+
+def _coord_bounds(coord_by_frame):
+    coords = np.concatenate(coord_by_frame, axis=0)
+    x_min, y_min = coords.min(axis=0)
+    x_max, y_max = coords.max(axis=0)
+    x_pad = max((x_max - x_min) * 0.12, 1e-3)
+    y_pad = max((y_max - y_min) * 0.12, 1e-3)
+    return x_min - x_pad, x_max + x_pad, y_min - y_pad, y_max + y_pad
+
+
+def _draw_projection_panel(ax, coord_by_frame, frame_idx, bounds, title, subtitle):
+    agent_count = coord_by_frame[frame_idx].shape[0]
+    colors = _agent_colors(agent_count)
+    all_coords = np.concatenate(coord_by_frame, axis=0)
+    ax.scatter(all_coords[:, 0], all_coords[:, 1], s=7, color="#d1d5db", alpha=0.22, label="all timesteps")
+    for agent_idx in range(agent_count):
+        history = np.asarray([coords[agent_idx] for coords in coord_by_frame[: frame_idx + 1] if agent_idx < coords.shape[0]])
+        if history.size > 0:
+            ax.plot(history[:, 0], history[:, 1], color=colors[agent_idx], linewidth=1.6, alpha=0.58)
+        current = coord_by_frame[frame_idx][agent_idx]
+        ax.scatter([current[0]], [current[1]], s=95, color=colors[agent_idx], edgecolor="black", linewidth=0.7)
+        ax.text(current[0], current[1], " A{}".format(agent_idx), fontsize=9, weight="bold", color=colors[agent_idx])
+    ax.set_title(title, fontsize=12)
+    ax.set_xlabel("PC1")
+    ax.set_ylabel("PC2")
+    ax.set_xlim(bounds[0], bounds[1])
+    ax.set_ylim(bounds[2], bounds[3])
+    ax.grid(True, linestyle="--", alpha=0.25)
+    ax.text(
+        0.02,
+        0.02,
+        subtitle,
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=9,
+        bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "#bbbbbb", "alpha": 0.78},
+    )
+
+
+def _draw_agent_similarity_panel(ax, values, title):
+    sim = _cosine_sim(values)
+    im = ax.imshow(sim, vmin=-1.0, vmax=1.0, cmap="coolwarm")
+    agent_count = values.shape[0]
+    labels = ["A{}".format(idx) for idx in range(agent_count)]
+    ax.set_xticks(np.arange(agent_count))
+    ax.set_yticks(np.arange(agent_count))
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.set_yticklabels(labels)
+    ax.set_title(title, fontsize=12)
+    ax.figure.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="cosine similarity")
+
+
+def _agent_colors(agent_count):
+    palette = [
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
+        "#bcbd22",
+        "#17becf",
+    ]
+    return [palette[idx % len(palette)] for idx in range(agent_count)]
+
+
+def _draw_battle_frame(ax, frame, bounds, prev_frame=None):
     snapshot = frame.get("snapshot", {})
     allies = snapshot.get("allies", [])
     enemies = snapshot.get("enemies", [])
     actions = frame.get("actions") or []
     enemy_by_id = {unit["id"]: unit for unit in enemies}
+    ally_by_tag = {unit["tag"]: unit for unit in allies}
+    enemy_by_tag = {unit["tag"]: unit for unit in enemies}
 
     ax.set_facecolor("#f7f5ef")
     ax.set_xlim(bounds[0], bounds[1])
     ax.set_ylim(bounds[2], bounds[3])
     ax.grid(True, color="#ddd6c8", linewidth=0.7, alpha=0.7)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_title("t={}  env={}".format(frame.get("t", 0), frame.get("t_env", 0)), fontsize=10)
+    ax.set_title("Battle intent at timestep {}  (env step {})".format(frame.get("t", 0), frame.get("t_env", 0)), fontsize=12)
 
     for unit in enemies:
         _draw_unit(ax, unit, color="#c0392b", label_prefix="E", marker="s")
@@ -166,6 +374,10 @@ def _draw_battle_frame(ax, frame, bounds):
         if not source.get("alive", False):
             continue
         _draw_action(ax, source, int(action), enemy_by_id, snapshot.get("n_actions_no_attack", 6))
+
+    _draw_enemy_orders(ax, enemies, ally_by_tag)
+    _draw_inferred_enemy_damage(ax, frame, prev_frame, enemies)
+    _draw_intent_text(ax, frame, prev_frame, enemy_by_id, ally_by_tag, enemy_by_tag)
 
     ax.set_xlabel("x")
     ax.set_ylabel("y")
@@ -200,19 +412,165 @@ def _draw_action(ax, source, action, enemy_by_id, n_actions_no_attack):
     sx, sy = source["x"], source["y"]
     if action in move_delta:
         dx, dy = move_delta[action]
-        ax.arrow(sx, sy, dx, dy, color="#2b6cb0", width=0.025, head_width=0.22, alpha=0.65)
+        ax.arrow(sx, sy, dx, dy, color="#2563eb", width=0.035, head_width=0.28, alpha=0.78)
     elif action >= n_actions_no_attack:
         target_id = action - n_actions_no_attack
         target = enemy_by_id.get(target_id)
         if target is None:
             return
         tx, ty = target["x"], target["y"]
-        ax.annotate(
-            "",
-            xy=(tx, ty),
-            xytext=(sx, sy),
-            arrowprops={"arrowstyle": "->", "color": "#9e2f2f", "lw": 1.1, "alpha": 0.72},
+        _annotate_arrow(ax, source, target, color="#f97316", linestyle="-", linewidth=2.2, alpha=0.88)
+        ax.text(
+            (sx + tx) / 2,
+            (sy + ty) / 2,
+            "A{}->E{}".format(source["id"], target_id),
+            color="#9a3412",
+            fontsize=8,
+            weight="bold",
+            bbox={"boxstyle": "round,pad=0.16", "facecolor": "white", "edgecolor": "none", "alpha": 0.68},
         )
+
+
+def _draw_enemy_orders(ax, enemies, ally_by_tag):
+    for enemy in enemies:
+        if not enemy.get("alive", False):
+            continue
+        for order in enemy.get("orders", []):
+            target = ally_by_tag.get(order.get("target_unit_tag"))
+            if target is None or not target.get("alive", False):
+                continue
+            _annotate_arrow(ax, enemy, target, color="#dc2626", linestyle="-", linewidth=2.0, alpha=0.72)
+            ax.text(
+                (enemy["x"] + target["x"]) / 2,
+                (enemy["y"] + target["y"]) / 2,
+                "E{}->A{}".format(enemy["id"], target["id"]),
+                color="#991b1b",
+                fontsize=8,
+                bbox={"boxstyle": "round,pad=0.16", "facecolor": "white", "edgecolor": "none", "alpha": 0.68},
+            )
+
+
+def _draw_inferred_enemy_damage(ax, frame, prev_frame, enemies):
+    if prev_frame is None:
+        return
+    prev_allies = {
+        unit["id"]: unit
+        for unit in (prev_frame.get("snapshot", {}) or {}).get("allies", [])
+    }
+    current_allies = (frame.get("snapshot", {}) or {}).get("allies", [])
+    for ally in current_allies:
+        prev_ally = prev_allies.get(ally["id"])
+        if prev_ally is None:
+            continue
+        hp_now = float(ally.get("health", 0.0)) + float(ally.get("shield", 0.0))
+        hp_prev = float(prev_ally.get("health", 0.0)) + float(prev_ally.get("shield", 0.0))
+        if hp_prev - hp_now <= 1e-4:
+            continue
+        nearest_enemy = _nearest_alive_unit(ally, enemies)
+        if nearest_enemy is None:
+            continue
+        _annotate_arrow(ax, nearest_enemy, ally, color="#7f1d1d", linestyle="--", linewidth=1.4, alpha=0.55)
+
+
+def _annotate_arrow(ax, source, target, color, linestyle="-", linewidth=1.8, alpha=0.8):
+    ax.annotate(
+        "",
+        xy=(target["x"], target["y"]),
+        xytext=(source["x"], source["y"]),
+        arrowprops={
+            "arrowstyle": "->",
+            "color": color,
+            "lw": linewidth,
+            "linestyle": linestyle,
+            "alpha": alpha,
+            "shrinkA": 8,
+            "shrinkB": 8,
+        },
+    )
+
+
+def _nearest_alive_unit(source, candidates):
+    alive = [unit for unit in candidates if unit.get("alive", False)]
+    if not alive:
+        return None
+    return min(alive, key=lambda unit: (unit["x"] - source["x"]) ** 2 + (unit["y"] - source["y"]) ** 2)
+
+
+def _draw_intent_text(ax, frame, prev_frame, enemy_by_id, ally_by_tag, enemy_by_tag):
+    snapshot = frame.get("snapshot", {})
+    allies = snapshot.get("allies", [])
+    enemies = snapshot.get("enemies", [])
+    actions = frame.get("actions") or []
+    n_actions_no_attack = snapshot.get("n_actions_no_attack", 6)
+
+    ally_lines = []
+    for agent_id, action in enumerate(actions):
+        if agent_id >= len(allies):
+            continue
+        ally_lines.append("A{}: {}".format(agent_id, _action_text(int(action), enemy_by_id, n_actions_no_attack)))
+
+    enemy_lines = []
+    for enemy in enemies:
+        target_texts = []
+        for order in enemy.get("orders", []):
+            target_tag = order.get("target_unit_tag")
+            target = ally_by_tag.get(target_tag)
+            prefix = "A"
+            if target is None:
+                target = enemy_by_tag.get(target_tag)
+                prefix = "E"
+            if target is not None:
+                target_texts.append("{}{}".format(prefix, target["id"]))
+        if target_texts:
+            enemy_lines.append("E{}: target {}".format(enemy["id"], ",".join(target_texts)))
+
+    damage_lines = _damage_text(prev_frame, frame)
+    text = "Ally chosen actions\n{}\n\nEnemy visible orders\n{}\n\nObserved ally damage\n{}".format(
+        "\n".join(ally_lines[:10]) if ally_lines else "None",
+        "\n".join(enemy_lines[:10]) if enemy_lines else "No raw order / not visible",
+        "\n".join(damage_lines[:6]) if damage_lines else "None",
+    )
+    ax.text(
+        1.02,
+        0.98,
+        text,
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=8.4,
+        family="monospace",
+        bbox={"boxstyle": "round,pad=0.45", "facecolor": "white", "edgecolor": "#999999", "alpha": 0.9},
+    )
+
+
+def _action_text(action, enemy_by_id, n_actions_no_attack):
+    move_names = {0: "noop", 1: "stop", 2: "move north", 3: "move south", 4: "move east", 5: "move west"}
+    if action in move_names:
+        return move_names[action]
+    target_id = action - n_actions_no_attack
+    if target_id in enemy_by_id:
+        return "attack E{}".format(target_id)
+    return "attack target {}".format(target_id)
+
+
+def _damage_text(prev_frame, frame):
+    if prev_frame is None:
+        return []
+    prev_allies = {
+        unit["id"]: unit
+        for unit in (prev_frame.get("snapshot", {}) or {}).get("allies", [])
+    }
+    lines = []
+    for ally in (frame.get("snapshot", {}) or {}).get("allies", []):
+        prev_ally = prev_allies.get(ally["id"])
+        if prev_ally is None:
+            continue
+        hp_now = float(ally.get("health", 0.0)) + float(ally.get("shield", 0.0))
+        hp_prev = float(prev_ally.get("health", 0.0)) + float(prev_ally.get("shield", 0.0))
+        delta = hp_prev - hp_now
+        if delta > 1e-4:
+            lines.append("A{} -{:.1f} hp".format(ally["id"], delta))
+    return lines
 
 
 def _plot_similarity(frames, output_path, plt, sample_size):

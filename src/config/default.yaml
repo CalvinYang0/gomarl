@@ -45,7 +45,7 @@ battle_trace_interval: 1000000 # Trace/upload interval in environment steps
 battle_trace_dir: "" # Empty means results/battle_traces/<unique_token>
 battle_trace_upload_wandb: True # Upload trace media when W&B is enabled
 battle_trace_make_video: True # Try to render mp4/gif in addition to PNG summaries
-battle_trace_frame_stride: 4 # Render every Nth environment frame into video
+battle_trace_frame_stride: 1 # Render every Nth environment frame into video
 battle_trace_fps: 6 # Video playback FPS
 battle_trace_similarity_sample_size: 256 # Max agent-time samples for similarity heatmaps
 

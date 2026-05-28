@@ -795,7 +795,23 @@ class StarCraft2Env(MultiAgentEnv):
             "shield": float(shield),
             "shield_max": float(shield_max),
             "alive": bool(unit.health > 0),
+            "orders": StarCraft2Env._unit_orders_snapshot(unit),
         }
+
+    @staticmethod
+    def _unit_orders_snapshot(unit):
+        orders = []
+        for order in getattr(unit, "orders", []):
+            target_pos = getattr(order, "target_world_space_pos", None)
+            order_data = {
+                "ability_id": int(getattr(order, "ability_id", 0)),
+                "target_unit_tag": int(getattr(order, "target_unit_tag", 0)),
+            }
+            if target_pos is not None:
+                order_data["target_x"] = float(getattr(target_pos, "x", 0.0))
+                order_data["target_y"] = float(getattr(target_pos, "y", 0.0))
+            orders.append(order_data)
+        return orders
 
     def unit_max_shield(self, unit):
         """Returns maximal shield for a given unit."""
