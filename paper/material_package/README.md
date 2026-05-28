@@ -6,13 +6,14 @@ Recommended use:
 
 1. Start with `00_full_research_lineage.md` when reconstructing the full research story, including failed attempts and conversation-derived reasoning.
 2. Use `00_literature_and_variant_inspiration_map.md` when reconstructing external literature inspirations behind hypernetworks, graph variants, FiLM, MoE, residual heads, smoothness, and failed variants.
-3. Use `01_chatgpt_context.md` when asking ChatGPT to draft or polish text.
-4. Use `02_method_and_code_inventory.md` when the writing needs exact model details.
-5. Use `03_experiment_plan.md` when planning runs, ablations, or result analysis.
-6. Use `04_visualization_plan.md` when explaining relation-pattern/head-parameter visualization.
-7. Use `05_writing_prompts.md` as reusable prompts.
-8. Use `06_run_command_templates.md` when launching the current main experiments.
-9. Use `07_ai_writing_workflow.md` to coordinate Codex, ChatGPT, and human revision.
+3. Use `00_git_history_failed_ideas.md` when reconstructing deleted, renamed, or superseded variants from Git history.
+4. Use `01_chatgpt_context.md` when asking ChatGPT to draft or polish text.
+5. Use `02_method_and_code_inventory.md` when the writing needs exact model details.
+6. Use `03_experiment_plan.md` when planning runs, ablations, or result analysis.
+7. Use `04_visualization_plan.md` when explaining relation-pattern/head-parameter visualization.
+8. Use `05_writing_prompts.md` as reusable prompts.
+9. Use `06_run_command_templates.md` when launching the current main experiments.
+10. Use `07_ai_writing_workflow.md` to coordinate Codex, ChatGPT, and human revision.
 
 Important boundary:
 
