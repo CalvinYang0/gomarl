@@ -1,0 +1,68 @@
+# V100-16GB profile. It keeps rollout parallelism but enables AMP so learner
+# activations use less memory during recurrent full-episode backprop.
+
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 100000
+
+runner: "parallel"
+run: "default"
+batch_size_run: 8
+buffer_size: 5000
+batch_size: 96
+optimizer: "adam"
+
+use_cuda: True
+use_amp: True
+buffer_cpu_only: True
+torch_num_threads: 2
+torch_num_interop_threads: 2
+cuda_benchmark: True
+cuda_deterministic: False
+cuda_allow_tf32: False
+float32_matmul_precision: "high"
+
+save_battle_trace: False
+battle_trace_interval: 1000000
+battle_trace_upload_wandb: True
+battle_trace_make_video: True
+battle_trace_frame_stride: 4
+battle_trace_fps: 6
+battle_trace_similarity_sample_size: 256
+
+t_max: 10050000
+target_update_interval: 200
+
+mac: "clean_mac"
+agent: "clean_hyper"
+agent_output_type: q
+learner: "clean_learner"
+mixer: "qmix"
+mixing_embed_dim: 32
+hypernet_embed: 64
+hypernet_layers: 2
+
+clean_model_type: "baseline"
+clean_apply_hypermarl_init: False
+clean_condition_dim: 64
+clean_id_embed_dim: 64
+clean_hyper_mlp_hidden_dim: 64
+clean_rpg_interaction_hidden_dim: 16
+clean_rpg_interaction_experts: 4
+clean_rpg_residual_gate_bias: -1.0
+clean_smooth_head_loss_coef: 0.01
+clean_smooth_head_knn: 4
+clean_smooth_head_sample_size: 256
+clean_relation_mixer_gate: False
+clean_route_num: 4
+clean_route_temperature: 1.0
+clean_rpg_relation_dim: 64
+clean_graph_node_dim: 64
+clean_graph_layers: 1
+clean_graph_topk: null
+
+lr: 0.001
+td_lambda: 0.6
+
+name: "clean_hyper_gpu_v100_baseline"

@@ -21,6 +21,7 @@ cuda_benchmark: True # Let cuDNN autotune kernels when CUDA is enabled
 cuda_deterministic: False # Set True only when strict deterministic CUDA behavior is needed
 cuda_allow_tf32: True # Use TensorFloat-32 matmul/convolution on Ampere+ GPUs
 float32_matmul_precision: "high" # PyTorch 2.x matmul precision hint
+use_amp: False # Enable CUDA mixed precision for learner forward/backward
 
 # --- Logging options ---
 use_tensorboard: False # Log results to tensorboard
