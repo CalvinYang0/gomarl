@@ -22,6 +22,24 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 python3 src/main.py --config=clean_hyper_gpu_v100 --env-config=sc2 with env_args.map_name=corridor clean_model_type=rpg_linear_interaction_hypercond seed=1 use_cuda=True use_wandb=True wandb_mode=online batch_size=64 name=corridor_rpg_linear_interaction_hypercond_v100_amp64_s1 wandb_run_name=corridor_rpg_linear_interaction_hypercond_v100_amp64_s1
 ```
 
+## V100-16GB Local-Condition Linear Control on Corridor
+
+```bash
+tmux new -s local_linear_v100_amp_s1
+cd /home/vipuser/code/clone/gomarl
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+git rev-parse --short HEAD
+conda activate benchmark
+export CUDA_VISIBLE_DEVICES=0
+export OMP_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+export WANDB_MODE=online
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+python3 src/main.py --config=clean_hyper_gpu_v100 --env-config=sc2 with env_args.map_name=corridor clean_model_type=local_linear_interaction_hypercond seed=1 use_cuda=True use_wandb=True wandb_mode=online batch_size=64 name=corridor_local_linear_interaction_hypercond_v100_amp64_s1 wandb_run_name=corridor_local_linear_interaction_hypercond_v100_amp64_s1
+```
+
 ## V100-16GB Fixed Linear Control on Corridor
 
 ```bash
@@ -147,4 +165,3 @@ export WANDB_MODE=online
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 python3 src/main.py --config=clean_hyper_gpu_v100 --env-config=sc2 with env_args.map_name=corridor clean_model_type=rpg_linear_interaction_hypercond seed=1 use_cuda=True use_wandb=True wandb_mode=online batch_size=64 save_battle_trace=True battle_trace_interval=1000000 battle_trace_frame_stride=1 name=corridor_rpg_linear_interaction_hypercond_v100_trace_s1 wandb_run_name=corridor_rpg_linear_interaction_hypercond_v100_trace_s1
 ```
-

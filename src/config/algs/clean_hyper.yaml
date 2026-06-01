@@ -40,6 +40,14 @@ hypernet_layers: 2
 #                               enemy-interaction maker split used by
 #                               rpg_structured_hypercond. It does NOT use the
 #                               RPG relation capturer.
+# - local_linear_interaction_hypercond: control model for isolating the relation
+#                                       pattern input in the current lightweight
+#                                       interaction maker. It keeps the baseline
+#                                       local condition source
+#                                       (obs + prev_action + h), uses the same
+#                                       generated ego branch, and generates the
+#                                       same one-layer interaction scorer as
+#                                       rpg_linear_interaction_hypercond.
 # - rpg_relation_hypercond: RPG-inspired single-task CTDE adaptation. It uses
 #                           observation-only self/teammate/other relation capture,
 #                           first-person cross-attention, and a separate relation GRU

@@ -608,6 +608,7 @@ class CleanHyperAgent(nn.Module):
         "hypermarl_fullnet": {"uses_hypernet": True, "execution_scope": "ctde"},
         "dynamic_route": {"uses_hypernet": True, "execution_scope": "ctde"},
         "local_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "local_linear_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_route": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -689,6 +690,7 @@ class CleanHyperAgent(nn.Module):
 
         if self.model_type in {
             "local_structured_hypercond",
+            "local_linear_interaction_hypercond",
             "rpg_relation_hypercond",
             "rpg_relation_route",
             "rpg_structured_hypercond",
@@ -784,6 +786,7 @@ class CleanHyperAgent(nn.Module):
         if self.MODEL_SPECS[self.model_type]["uses_hypernet"] and self.model_type not in {
             "hypermarl_fullnet",
             "local_structured_hypercond",
+            "local_linear_interaction_hypercond",
             "rpg_structured_hypercond",
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
@@ -816,6 +819,7 @@ class CleanHyperAgent(nn.Module):
 
         if self.model_type in {
             "local_structured_hypercond",
+            "local_linear_interaction_hypercond",
             "rpg_structured_hypercond",
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
@@ -866,7 +870,7 @@ class CleanHyperAgent(nn.Module):
                     nn.ELU(inplace=True),
                 )
                 self.rpg_interaction_scorer = None
-            elif self.model_type == "rpg_linear_interaction_hypercond":
+            elif self.model_type in {"local_linear_interaction_hypercond", "rpg_linear_interaction_hypercond"}:
                 self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
                 self.rpg_interaction_bottleneck_w = None
                 self.rpg_interaction_bottleneck_b = None
@@ -979,6 +983,11 @@ class CleanHyperAgent(nn.Module):
                     nn.init.zeros_(self.rpg_interaction_out_b.weight)
                     nn.init.zeros_(self.rpg_interaction_out_b.bias)
                 elif self.model_type == "rpg_linear_interaction_hypercond":
+                    nn.init.orthogonal_(self.rpg_interaction_out_w.weight, gain=1.0)
+                    nn.init.zeros_(self.rpg_interaction_out_w.bias)
+                    nn.init.zeros_(self.rpg_interaction_out_b.weight)
+                    nn.init.zeros_(self.rpg_interaction_out_b.bias)
+                elif self.model_type == "local_linear_interaction_hypercond":
                     nn.init.orthogonal_(self.rpg_interaction_out_w.weight, gain=1.0)
                     nn.init.zeros_(self.rpg_interaction_out_w.bias)
                     nn.init.zeros_(self.rpg_interaction_out_b.weight)
@@ -1208,6 +1217,7 @@ class CleanHyperAgent(nn.Module):
             condition = self._route_from_logits(route_logits, test_mode=test_mode)
         elif self.model_type in {
             "local_structured_hypercond",
+            "local_linear_interaction_hypercond",
             "rpg_relation_hypercond",
             "rpg_relation_route",
             "rpg_structured_hypercond",
@@ -1389,7 +1399,7 @@ class CleanHyperAgent(nn.Module):
             )
             q_attack = th.bmm(flat_interaction_feat, interaction_out_w) + interaction_out_b
             q_attack = q_attack.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"])
-        elif self.model_type == "rpg_linear_interaction_hypercond":
+        elif self.model_type in {"local_linear_interaction_hypercond", "rpg_linear_interaction_hypercond"}:
             interaction_input = th.cat([hidden_rep, enemy_tokens], dim=-1)
             flat_interaction_input = interaction_input.reshape(
                 batch_size * n_agents, self.rpg_obs_layout["n_enemies"], self.rpg_interaction_input_dim
@@ -1490,7 +1500,7 @@ class CleanHyperAgent(nn.Module):
         else:
             if context is None:
                 raise ValueError("{} requires context with obs/prev_action.".format(self.model_type))
-            if self.model_type == "local_structured_hypercond":
+            if self.model_type in {"local_structured_hypercond", "local_linear_interaction_hypercond"}:
                 condition, enemy_tokens, enemy_mask = self._build_local_structured_condition(hidden, context)
                 self.latest_condition = condition.detach()
                 q = self._apply_rpg_structured_maker(hidden, condition, enemy_tokens, enemy_mask)

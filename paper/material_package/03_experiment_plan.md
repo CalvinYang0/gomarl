@@ -16,6 +16,7 @@ Minimum comparison set:
 
 - `qmix_minimal`: clean minimal QMIX baseline.
 - `rpg_fixed_linear_structured_maker`: fixed relation-conditioned structured control.
+- `local_linear_interaction_hypercond`: ordinary local-observation condition with the same generated one-layer interaction head.
 - `rpg_linear_interaction_hypercond`: current main dynamic interaction-head model.
 
 Improvement variants:
@@ -90,6 +91,7 @@ Map | Model | Final win mean/std | AUC mean/std | Steps to 90% mean/std
 ## Ablation Questions
 
 - Does relation pattern alone help? Compare `qmix_minimal` vs `rpg_fixed_linear_structured_maker`.
+- Does relation pattern help as the hypernetwork input? Compare `local_linear_interaction_hypercond` vs `rpg_linear_interaction_hypercond`.
 - Does generated interaction head help beyond fixed relation conditioning? Compare `rpg_fixed_linear_structured_maker` vs `rpg_linear_interaction_hypercond`.
 - Does constrained dynamic adaptation help? Compare linear dynamic vs residual/FiLM/MoE.
 - Does relation-head smoothness help? Compare linear dynamic vs smooth linear dynamic.
@@ -100,4 +102,3 @@ Map | Model | Final win mean/std | AUC mean/std | Steps to 90% mean/std
 Do not run every variant on every map first. That burns budget and creates noisy evidence. Use `corridor` as the screening map, then expand only the promising variants.
 
 The current single-seed figures are enough for direction finding, not enough for final claims.
-
