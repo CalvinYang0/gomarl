@@ -47,10 +47,26 @@ If needed, narrow the sync target:
 PATTERN='wandb/offline-run-20260604*' bash scripts/ozstar_sync_wandb.sh
 ```
 
-## 4. Notes
+## 4. Optional Near-live W&B Sync
+
+Compute nodes may be offline, but the login/test node can periodically upload W&B offline files while training is still running. Start this watcher from a network-enabled login/test node:
+
+```bash
+cd /home/kyang/code/gomarl
+bash scripts/ozstar_live_sync_wandb.sh
+```
+
+Use a longer interval if the filesystem or W&B upload is noisy:
+
+```bash
+INTERVAL_SECONDS=600 bash scripts/ozstar_live_sync_wandb.sh
+```
+
+The watcher uses `wandb sync --sync-all --include-offline --include-synced --no-mark-synced`, so it can retry incomplete/offline runs without marking an active run as finally synced. Stop the watcher with `Ctrl+C`; Slurm training jobs continue independently.
+
+## 5. Notes
 
 - The script directly uses `/home/kyang/.conda/envs/marl_cpu/bin/python`, so it does not require `conda activate` or `mamba` on compute nodes.
 - The default `SC2PATH` is `/home/kyang/StarCraftII`.
 - Compute nodes should use `WANDB_MODE=offline`; use the login/test node to upload results later.
 - If `SC2 binary exists` prints `False`, fix the StarCraft II installation before submitting long jobs.
-
