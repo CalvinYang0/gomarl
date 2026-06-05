@@ -18,6 +18,11 @@ class CleanMAC(BasicMAC):
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
             "rpg_smooth_linear_interaction_hypercond",
+            "rpg_semantic_selfattn_relation_hypercond",
+            "rpg_entity_selfattn_relation_hypercond",
+            "rpg_delta_relation_hypercond",
+            "rpg_relation_coarse_self_fine_head",
+            "rpg_relation_prototype_single_head",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
             "two_graph_gat_hypercond",
@@ -49,8 +54,12 @@ class CleanMAC(BasicMAC):
         prev_action = batch["actions_onehot"][:, t - 1] if t > 0 else batch["actions_onehot"][:, t].new_zeros(
             batch["actions_onehot"][:, t].shape
         )
+        prev_obs = batch["obs"][:, t - 1] if t > 0 else batch["obs"][:, t].new_zeros(
+            batch["obs"][:, t].shape
+        )
         return {
             "obs": batch["obs"][:, t].reshape(batch_size, self.n_agents, -1),
+            "prev_obs": prev_obs.reshape(batch_size, self.n_agents, -1),
             "prev_action": prev_action.reshape(batch_size, self.n_agents, -1),
         }
 

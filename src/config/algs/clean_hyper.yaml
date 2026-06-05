@@ -107,6 +107,37 @@ hypernet_layers: 2
 #                                            encouraging nearby relation
 #                                            patterns to generate nearby
 #                                            interaction heads.
+# - rpg_semantic_selfattn_relation_hypercond: relation-generator ablation.
+#                                             It factorizes obs into feature
+#                                             semantic fields such as health,
+#                                             shield, spatial features, unit
+#                                             type, and interaction indicators.
+#                                             Each field has its own encoder;
+#                                             only owner embeddings identify
+#                                             self/ally/enemy ownership before
+#                                             masked self-attention.
+# - rpg_entity_selfattn_relation_hypercond: relation-generator ablation. It
+#                                           keeps self/ally/enemy entity tokens,
+#                                           but replaces RPG-style self-to-ally
+#                                           and self-to-enemy cross attention
+#                                           with one masked entity self-attention
+#                                           block.
+# - rpg_delta_relation_hypercond: relation-generator ablation. It removes the
+#                                 relation GRU and instead combines the instant
+#                                 relation pattern with an explicit
+#                                 obs_t - obs_{t-1} embedding. The policy GRU
+#                                 is unchanged.
+# - rpg_relation_coarse_self_fine_head: decision-maker ablation. It removes the
+#                                       ego/interaction split and uses the
+#                                       relation pattern to generate a coarse
+#                                       full MLP Q-head, while self features
+#                                       generate a small final-layer delta for
+#                                       fine-grained agent-specific tuning.
+# - rpg_relation_prototype_single_head: decision-maker ablation. It removes the
+#                                       ego/interaction split and routes each
+#                                       relation pattern to one of K learned
+#                                       prototype conditions before generating
+#                                       a full MLP Q-head.
 # - rpg_fixed_structured_maker: relation-pattern structured maker with no
 #                               generated decision parameters. The ego branch
 #                               and enemy-interaction branch are both fixed
@@ -148,6 +179,8 @@ clean_hyper_mlp_hidden_dim: 64
 clean_rpg_interaction_hidden_dim: 16
 clean_rpg_interaction_experts: 4
 clean_rpg_residual_gate_bias: -1.0
+clean_self_fine_delta_scale: 0.1
+clean_relation_prototypes: 4
 clean_smooth_head_loss_coef: 0.01
 clean_smooth_head_knn: 4
 clean_smooth_head_sample_size: 256
