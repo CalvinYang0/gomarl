@@ -1564,11 +1564,11 @@ class CleanHyperAgent(nn.Module):
                 self.rpg_interaction_scorer = None
             elif self.model_type == "rpg_private_interaction_input_hypercond":
                 self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
-                private_input_dim = (
-                    self.rpg_obs_layout["move_dim"]
-                    + self.rpg_obs_layout["own_dim"]
-                    + self.rpg_obs_layout["enemy_feat_dim"]
-                )
+                # Private target input keeps observer-dependent information:
+                # movement/action context plus target availability and relative
+                # geometry. Observer-invariant entity state such as health,
+                # shield, and unit type is deliberately excluded.
+                private_input_dim = self.rpg_obs_layout["move_dim"] + 4
                 self.rpg_interaction_bottleneck_w = None
                 self.rpg_interaction_bottleneck_b = None
                 self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.rpg_interaction_input_dim)
@@ -2491,10 +2491,10 @@ class CleanHyperAgent(nn.Module):
         elif self.model_type == "rpg_private_interaction_input_hypercond":
             if context is None:
                 raise ValueError("rpg_private_interaction_input_hypercond requires context for private MLP inputs.")
-            move_feat, raw_enemy_feat, _, own_feat = self._split_rpg_obs(context["obs"])
-            self_feat = th.cat([move_feat, own_feat], dim=-1)
-            self_rep = self_feat.unsqueeze(2).expand(-1, -1, self.rpg_obs_layout["n_enemies"], -1)
-            private_input = th.cat([self_rep, raw_enemy_feat], dim=-1)
+            move_feat, raw_enemy_feat, _, _ = self._split_rpg_obs(context["obs"])
+            move_rep = move_feat.unsqueeze(2).expand(-1, -1, self.rpg_obs_layout["n_enemies"], -1)
+            target_private_feat = raw_enemy_feat[:, :, :, :4]
+            private_input = th.cat([move_rep, target_private_feat], dim=-1)
             interaction_input = self.rpg_interaction_encoder(private_input)
             flat_interaction_input = interaction_input.reshape(
                 batch_size * n_agents, self.rpg_obs_layout["n_enemies"], self.rpg_interaction_input_dim

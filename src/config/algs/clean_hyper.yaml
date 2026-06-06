@@ -99,8 +99,10 @@ hypernet_layers: 2
 #                                            rpg_linear_interaction_hypercond,
 #                                            but the generated interaction head
 #                                            is applied to a private target
-#                                            token encoded from own/move features
-#                                            and the local enemy slot.
+#                                            token encoded from movement context,
+#                                            target attack availability, and
+#                                            target relative geometry. It drops
+#                                            public health/shield/type fields.
 # - rpg_global_filled_obs_hypercond: same model structure as
 #                                    rpg_linear_interaction_hypercond, but
 #                                    during non-test training it replaces the
