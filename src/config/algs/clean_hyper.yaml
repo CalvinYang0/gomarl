@@ -154,6 +154,12 @@ hypernet_layers: 2
 #                                           and self-to-enemy cross attention
 #                                           with one masked entity self-attention
 #                                           block.
+# - rpg_topk_entity_relation_hypercond: relation-generator ablation. It uses
+#                                       the entity self-attention block, then
+#                                       lets the self token select the top-k
+#                                       observed entities for relation-pattern
+#                                       pooling. Attack Q-values are still
+#                                       produced for every enemy action slot.
 # - rpg_delta_relation_hypercond: relation-generator ablation. It removes the
 #                                 relation GRU and instead combines the instant
 #                                 relation pattern with an explicit
@@ -213,6 +219,7 @@ clean_rpg_interaction_experts: 4
 clean_rpg_residual_gate_bias: -1.0
 clean_self_fine_delta_scale: 0.1
 clean_relation_prototypes: 4
+clean_relation_topk: 5
 clean_relation_distill_coef: 0.05
 clean_relation_teacher_td_coef: 0.2
 clean_smooth_head_loss_coef: 0.01

@@ -770,6 +770,85 @@ class EntitySelfAttentionRelationCapturer(nn.Module):
         return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
 
 
+class TopKEntitySelfAttentionRelationCapturer(EntitySelfAttentionRelationCapturer):
+    # Entity self-attention with an explicit top-k readout bottleneck. All
+    # observed entities exchange information through self-attention, but only
+    # the k entities most attended by the self token are pooled into the
+    # relation pattern. Enemy action scores are still produced for every enemy
+    # slot, so the SMAC action dimension remains unchanged.
+    def __init__(
+        self,
+        move_dim,
+        own_dim,
+        ally_feat_dim,
+        enemy_feat_dim,
+        relation_dim,
+        output_dim,
+        topk=5,
+    ):
+        super().__init__(
+            move_dim=move_dim,
+            own_dim=own_dim,
+            ally_feat_dim=ally_feat_dim,
+            enemy_feat_dim=enemy_feat_dim,
+            relation_dim=relation_dim,
+            output_dim=output_dim,
+        )
+        self.topk = int(topk)
+
+    def _topk_entity_mask(self, scores, entity_mask):
+        if scores.size(-1) == 0:
+            return entity_mask
+        topk = max(1, min(self.topk, scores.size(-1)))
+        masked_scores = scores.masked_fill(~entity_mask.bool(), _neg_inf_like(scores))
+        _, indices = th.topk(masked_scores, k=topk, dim=-1)
+        gathered_valid = th.gather(entity_mask.bool(), dim=-1, index=indices)
+        selected = scores.new_zeros(scores.shape)
+        selected.scatter_(dim=-1, index=indices, src=gathered_valid.float())
+        return selected.bool() & entity_mask.bool()
+
+    def forward(self, self_feat, ally_feat, enemy_feat, prev_relation_hidden):
+        batch_size, n_agents, _ = self_feat.shape
+        self_mask = th.ones(batch_size, n_agents, 1, device=self_feat.device, dtype=th.bool)
+        ally_mask = ally_feat.abs().sum(dim=-1) > 0
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+
+        self_token = self.self_encoder(self_feat).unsqueeze(2)
+        ally_tokens = self.ally_encoder(ally_feat) * ally_mask.unsqueeze(-1).float()
+        enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
+
+        self_owner = self.owner_embedding.weight[0].view(1, 1, 1, -1)
+        ally_owner = self.owner_embedding.weight[1].view(1, 1, 1, -1)
+        enemy_owner = self.owner_embedding.weight[2].view(1, 1, 1, -1)
+        tokens = th.cat([self_token + self_owner, ally_tokens + ally_owner, enemy_tokens + enemy_owner], dim=2)
+        token_mask = th.cat([self_mask, ally_mask, enemy_mask], dim=2)
+        updated, pair_attn = self.self_attention(tokens, token_mask)
+
+        ally_start = 1
+        enemy_start = ally_start + ally_feat.size(2)
+        entity_scores = pair_attn[:, :, 0, 1:]
+        entity_mask = th.cat([ally_mask, enemy_mask], dim=-1)
+        selected_entity_mask = self._topk_entity_mask(entity_scores, entity_mask)
+        selected_ally_mask = selected_entity_mask[:, :, : ally_feat.size(2)]
+        selected_enemy_mask = selected_entity_mask[:, :, ally_feat.size(2) :]
+
+        self_context = updated[:, :, 0]
+        ally_context = self._masked_mean(updated[:, :, ally_start:enemy_start], selected_ally_mask)
+        enemy_context = self._masked_mean(updated[:, :, enemy_start:], selected_enemy_mask)
+        instant = self.instant_pattern(th.cat([self_context, ally_context, enemy_context], dim=-1))
+        temporal_input = th.cat([self_context, instant], dim=-1)
+
+        flat_input = temporal_input.reshape(batch_size * n_agents, -1)
+        flat_prev = prev_relation_hidden.reshape(batch_size * n_agents, -1)
+        relation_hidden = self.temporal_gru(flat_input, flat_prev).view(batch_size, n_agents, self.relation_dim)
+        condition = self.output_encoder(relation_hidden)
+
+        self_attn = pair_attn[:, :, 0]
+        ally_attn = self_attn[:, :, ally_start:enemy_start] * selected_ally_mask.float()
+        enemy_attn = self_attn[:, :, enemy_start:] * selected_enemy_mask.float()
+        return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
+
+
 class DeltaObservationRelationCapturer(nn.Module):
     # Temporal relation variant that removes the relation GRU. It combines the
     # current instant relation pattern with an explicit obs_t - obs_{t-1}
@@ -1261,6 +1340,7 @@ class CleanHyperAgent(nn.Module):
         "rpg_smooth_linear_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_semantic_selfattn_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_entity_selfattn_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_topk_entity_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_delta_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_coarse_self_fine_head": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_prototype_single_head": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -1319,6 +1399,7 @@ class CleanHyperAgent(nn.Module):
         self.smooth_head_loss_coef = float(getattr(args, "clean_smooth_head_loss_coef", 0.0))
         self.smooth_head_knn = int(getattr(args, "clean_smooth_head_knn", 4))
         self.smooth_head_sample_size = int(getattr(args, "clean_smooth_head_sample_size", 256))
+        self.relation_topk = int(getattr(args, "clean_relation_topk", 5))
 
         self.obs_dim = input_shape
         if getattr(args, "obs_last_action", False):
@@ -1356,6 +1437,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_smooth_linear_interaction_hypercond",
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
+            "rpg_topk_entity_relation_hypercond",
             "rpg_delta_relation_hypercond",
             "rpg_relation_coarse_self_fine_head",
             "rpg_relation_prototype_single_head",
@@ -1460,6 +1542,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_smooth_linear_interaction_hypercond",
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
+            "rpg_topk_entity_relation_hypercond",
             "rpg_delta_relation_hypercond",
             "rpg_relation_coarse_self_fine_head",
             "rpg_relation_prototype_single_head",
@@ -1502,6 +1585,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_smooth_linear_interaction_hypercond",
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
+            "rpg_topk_entity_relation_hypercond",
             "rpg_delta_relation_hypercond",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
@@ -1553,6 +1637,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_relation_distill_hypercond",
                 "rpg_semantic_selfattn_relation_hypercond",
                 "rpg_entity_selfattn_relation_hypercond",
+                "rpg_topk_entity_relation_hypercond",
                 "rpg_delta_relation_hypercond",
             }:
                 self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
@@ -1692,6 +1777,7 @@ class CleanHyperAgent(nn.Module):
                     "rpg_relation_distill_hypercond",
                     "rpg_semantic_selfattn_relation_hypercond",
                     "rpg_entity_selfattn_relation_hypercond",
+                    "rpg_topk_entity_relation_hypercond",
                     "rpg_delta_relation_hypercond",
                 }:
                     nn.init.orthogonal_(self.rpg_interaction_out_w.weight, gain=1.0)
@@ -1816,6 +1902,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_smooth_linear_interaction_hypercond",
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
+            "rpg_topk_entity_relation_hypercond",
             "rpg_relation_coarse_self_fine_head",
             "rpg_relation_prototype_single_head",
             "rpg_fixed_structured_maker",
@@ -1902,6 +1989,8 @@ class CleanHyperAgent(nn.Module):
             capturer_cls = SemanticSelfAttentionRelationCapturer
         elif self.model_type == "rpg_entity_selfattn_relation_hypercond":
             capturer_cls = EntitySelfAttentionRelationCapturer
+        elif self.model_type == "rpg_topk_entity_relation_hypercond":
+            capturer_cls = TopKEntitySelfAttentionRelationCapturer
         elif self.model_type == "rpg_delta_relation_hypercond":
             layout_obs_dim = (
                 self.rpg_obs_layout["move_dim"]
@@ -1949,6 +2038,8 @@ class CleanHyperAgent(nn.Module):
                 obs_timestep_number=self.rpg_obs_layout["obs_timestep_number"],
                 n_actions=self.n_actions,
             )
+        elif capturer_cls is TopKEntitySelfAttentionRelationCapturer:
+            capturer_kwargs.update(topk=self.relation_topk)
         self.rpg_relation_capturer = capturer_cls(**capturer_kwargs)
 
     def _split_rpg_obs(self, obs):
@@ -2222,6 +2313,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_smooth_linear_interaction_hypercond",
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
+            "rpg_topk_entity_relation_hypercond",
             "rpg_delta_relation_hypercond",
             "rpg_relation_coarse_self_fine_head",
             "rpg_relation_prototype_single_head",
@@ -2479,6 +2571,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_relation_distill_hypercond",
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
+            "rpg_topk_entity_relation_hypercond",
             "rpg_delta_relation_hypercond",
         }:
             interaction_input = th.cat([hidden_rep, enemy_tokens], dim=-1)
@@ -2582,6 +2675,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_smooth_linear_interaction_hypercond",
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
+            "rpg_topk_entity_relation_hypercond",
             "rpg_relation_coarse_self_fine_head",
             "rpg_relation_prototype_single_head",
             "rpg_fixed_structured_maker",
@@ -2631,6 +2725,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_smooth_linear_interaction_hypercond",
                 "rpg_semantic_selfattn_relation_hypercond",
                 "rpg_entity_selfattn_relation_hypercond",
+                "rpg_topk_entity_relation_hypercond",
                 "rpg_relation_coarse_self_fine_head",
                 "rpg_relation_prototype_single_head",
                 "rpg_fixed_structured_maker",
