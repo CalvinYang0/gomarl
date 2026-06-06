@@ -86,6 +86,17 @@ hypernet_layers: 2
 #                                     pattern, applied to [agent hidden,
 #                                     enemy token]. This removes the generated
 #                                     interaction bottleneck layer.
+# - rpg_public_relation_hypercond: same maker as rpg_linear_interaction_hypercond,
+#                                  but the relation pattern is generated from
+#                                  public ally/enemy entity summaries instead
+#                                  of private self/move/own features.
+# - rpg_private_interaction_input_hypercond: same relation generator and
+#                                            hypernetwork as
+#                                            rpg_linear_interaction_hypercond,
+#                                            but the generated interaction head
+#                                            is applied to a private target
+#                                            token encoded from own/move features
+#                                            and the local enemy slot.
 # - rpg_global_filled_obs_hypercond: same model structure as
 #                                    rpg_linear_interaction_hypercond, but
 #                                    during non-test training it replaces the

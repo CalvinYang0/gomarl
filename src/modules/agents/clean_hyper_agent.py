@@ -217,6 +217,103 @@ class RPGInspiredRelationCapturer(nn.Module):
         return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
 
 
+class PublicRPGRelationCapturer(nn.Module):
+    # Public-information relation generator. It removes private self features
+    # from the relation query and builds the condition from visible ally/enemy
+    # entity summaries. The downstream maker remains unchanged.
+    def __init__(
+        self,
+        move_dim,
+        own_dim,
+        ally_feat_dim,
+        enemy_feat_dim,
+        relation_dim,
+        output_dim,
+    ):
+        super().__init__()
+        del move_dim, own_dim
+        self.ally_feat_dim = ally_feat_dim
+        self.enemy_feat_dim = enemy_feat_dim
+        self.relation_dim = relation_dim
+
+        self.ally_encoder = nn.Sequential(
+            nn.Linear(ally_feat_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.enemy_encoder = nn.Sequential(
+            nn.Linear(enemy_feat_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.public_query_encoder = nn.Sequential(
+            nn.Linear(relation_dim * 2, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+
+        self.query = nn.Linear(relation_dim, relation_dim)
+        self.ally_key = nn.Linear(relation_dim, relation_dim)
+        self.ally_value = nn.Linear(relation_dim, relation_dim)
+        self.enemy_key = nn.Linear(relation_dim, relation_dim)
+        self.enemy_value = nn.Linear(relation_dim, relation_dim)
+        self.instant_pattern = nn.Sequential(
+            nn.Linear(relation_dim * 3, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.temporal_gru = nn.GRUCell(relation_dim * 2, relation_dim)
+        self.output_encoder = nn.Sequential(
+            nn.Linear(relation_dim, output_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(output_dim, output_dim),
+        )
+
+    def _masked_mean(self, tokens, mask):
+        denom = mask.sum(dim=2, keepdim=True).clamp(min=1).float()
+        return (tokens * mask.unsqueeze(-1).float()).sum(dim=2) / denom
+
+    def _masked_attention(self, query, tokens, mask, key_proj, value_proj):
+        scale = math.sqrt(float(self.relation_dim))
+        key = key_proj(tokens)
+        value = value_proj(tokens)
+        logits = th.matmul(self.query(query).unsqueeze(2), key.transpose(-1, -2)).squeeze(2) / scale
+        valid_mask = mask.bool()
+        valid_any = valid_mask.any(dim=-1, keepdim=True)
+        masked_logits = logits.masked_fill(~valid_mask, _neg_inf_like(logits))
+        attn = F.softmax(masked_logits, dim=-1)
+        attn = th.where(valid_any, attn, th.zeros_like(attn))
+        context = th.matmul(attn.unsqueeze(2), value).squeeze(2)
+        return context, attn
+
+    def forward(self, self_feat, ally_feat, enemy_feat, prev_relation_hidden):
+        del self_feat
+        ally_mask = ally_feat.abs().sum(dim=-1) > 0
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        ally_tokens = self.ally_encoder(ally_feat) * ally_mask.unsqueeze(-1).float()
+        enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
+
+        ally_mean = self._masked_mean(ally_tokens, ally_mask)
+        enemy_mean = self._masked_mean(enemy_tokens, enemy_mask)
+        public_query = self.public_query_encoder(th.cat([ally_mean, enemy_mean], dim=-1))
+
+        ally_context, ally_attn = self._masked_attention(
+            public_query, ally_tokens, ally_mask, self.ally_key, self.ally_value
+        )
+        enemy_context, enemy_attn = self._masked_attention(
+            public_query, enemy_tokens, enemy_mask, self.enemy_key, self.enemy_value
+        )
+        instant = self.instant_pattern(th.cat([public_query, ally_context, enemy_context], dim=-1))
+        temporal_input = th.cat([public_query, instant], dim=-1)
+
+        batch_size, n_agents, _ = temporal_input.shape
+        flat_input = temporal_input.reshape(batch_size * n_agents, -1)
+        flat_prev = prev_relation_hidden.reshape(batch_size * n_agents, -1)
+        relation_hidden = self.temporal_gru(flat_input, flat_prev).view(batch_size, n_agents, self.relation_dim)
+        condition = self.output_encoder(relation_hidden)
+        return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
+
+
 class MaskedSelfAttentionBlock(nn.Module):
     def __init__(self, relation_dim):
         super().__init__()
@@ -1070,6 +1167,8 @@ class CleanHyperAgent(nn.Module):
         "rpg_full_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_readout_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_linear_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_public_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_private_interaction_input_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_global_filled_obs_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_distill_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_residual_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -1163,6 +1262,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_public_relation_hypercond",
+            "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
@@ -1265,6 +1366,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_public_relation_hypercond",
+            "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
@@ -1305,6 +1408,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_public_relation_hypercond",
+            "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
@@ -1359,6 +1464,7 @@ class CleanHyperAgent(nn.Module):
             elif self.model_type in {
                 "local_linear_interaction_hypercond",
                 "rpg_linear_interaction_hypercond",
+                "rpg_public_relation_hypercond",
                 "rpg_global_filled_obs_hypercond",
                 "rpg_relation_distill_hypercond",
                 "rpg_semantic_selfattn_relation_hypercond",
@@ -1371,6 +1477,24 @@ class CleanHyperAgent(nn.Module):
                 self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.rpg_interaction_input_dim)
                 self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
                 self.rpg_interaction_encoder = None
+                self.rpg_interaction_scorer = None
+            elif self.model_type == "rpg_private_interaction_input_hypercond":
+                self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
+                private_input_dim = (
+                    self.rpg_obs_layout["move_dim"]
+                    + self.rpg_obs_layout["own_dim"]
+                    + self.rpg_obs_layout["enemy_feat_dim"]
+                )
+                self.rpg_interaction_bottleneck_w = None
+                self.rpg_interaction_bottleneck_b = None
+                self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.rpg_interaction_input_dim)
+                self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
+                self.rpg_interaction_encoder = nn.Sequential(
+                    nn.Linear(private_input_dim, self.rpg_interaction_input_dim),
+                    nn.ELU(inplace=True),
+                    nn.Linear(self.rpg_interaction_input_dim, self.rpg_interaction_input_dim),
+                    nn.ELU(inplace=True),
+                )
                 self.rpg_interaction_scorer = None
             elif self.model_type == "rpg_smooth_linear_interaction_hypercond":
                 self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
@@ -1478,6 +1602,8 @@ class CleanHyperAgent(nn.Module):
                     nn.init.zeros_(self.rpg_interaction_out_b.bias)
                 elif self.model_type in {
                     "rpg_linear_interaction_hypercond",
+                    "rpg_public_relation_hypercond",
+                    "rpg_private_interaction_input_hypercond",
                     "rpg_global_filled_obs_hypercond",
                     "rpg_relation_distill_hypercond",
                     "rpg_semantic_selfattn_relation_hypercond",
@@ -1596,6 +1722,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_public_relation_hypercond",
+            "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
@@ -1684,6 +1812,8 @@ class CleanHyperAgent(nn.Module):
             capturer_cls = TwoGraphGATRelationCapturer
         elif self.model_type == "hetero_gat_hypercond":
             capturer_cls = HeteroGATRelationCapturer
+        elif self.model_type == "rpg_public_relation_hypercond":
+            capturer_cls = PublicRPGRelationCapturer
         elif self.model_type == "rpg_semantic_selfattn_relation_hypercond":
             capturer_cls = SemanticSelfAttentionRelationCapturer
         elif self.model_type == "rpg_entity_selfattn_relation_hypercond":
@@ -1988,6 +2118,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_public_relation_hypercond",
+            "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
@@ -2182,7 +2314,7 @@ class CleanHyperAgent(nn.Module):
         head_sim = (head.unsqueeze(1) * neighbor_head).sum(dim=-1)
         return (1.0 - head_sim).mean()
 
-    def _apply_rpg_structured_maker(self, hidden, relation_condition, enemy_tokens, enemy_mask):
+    def _apply_rpg_structured_maker(self, hidden, relation_condition, enemy_tokens, enemy_mask, context=None):
         batch_size, n_agents, _ = hidden.shape
         flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
         flat_condition = relation_condition.reshape(batch_size * n_agents, -1)
@@ -2248,6 +2380,7 @@ class CleanHyperAgent(nn.Module):
         elif self.model_type in {
             "local_linear_interaction_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_public_relation_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_semantic_selfattn_relation_hypercond",
@@ -2255,6 +2388,20 @@ class CleanHyperAgent(nn.Module):
             "rpg_delta_relation_hypercond",
         }:
             interaction_input = th.cat([hidden_rep, enemy_tokens], dim=-1)
+            flat_interaction_input = interaction_input.reshape(
+                batch_size * n_agents, self.rpg_obs_layout["n_enemies"], self.rpg_interaction_input_dim
+            )
+            q_attack, _ = self._linear_generated_interaction(
+                flat_interaction_input, flat_condition, batch_size, n_agents
+            )
+        elif self.model_type == "rpg_private_interaction_input_hypercond":
+            if context is None:
+                raise ValueError("rpg_private_interaction_input_hypercond requires context for private MLP inputs.")
+            move_feat, raw_enemy_feat, _, own_feat = self._split_rpg_obs(context["obs"])
+            self_feat = th.cat([move_feat, own_feat], dim=-1)
+            self_rep = self_feat.unsqueeze(2).expand(-1, -1, self.rpg_obs_layout["n_enemies"], -1)
+            private_input = th.cat([self_rep, raw_enemy_feat], dim=-1)
+            interaction_input = self.rpg_interaction_encoder(private_input)
             flat_interaction_input = interaction_input.reshape(
                 batch_size * n_agents, self.rpg_obs_layout["n_enemies"], self.rpg_interaction_input_dim
             )
@@ -2331,6 +2478,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_public_relation_hypercond",
+            "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
@@ -2378,6 +2527,8 @@ class CleanHyperAgent(nn.Module):
                 "rpg_full_structured_hypercond",
                 "rpg_readout_structured_hypercond",
                 "rpg_linear_interaction_hypercond",
+                "rpg_public_relation_hypercond",
+                "rpg_private_interaction_input_hypercond",
                 "rpg_global_filled_obs_hypercond",
                 "rpg_relation_distill_hypercond",
                 "rpg_residual_interaction_hypercond",
@@ -2417,7 +2568,9 @@ class CleanHyperAgent(nn.Module):
                     elif self.model_type == "rpg_relation_prototype_single_head":
                         q = self._apply_relation_prototype_single_head(hidden, relation_condition, test_mode)
                     else:
-                        q = self._apply_rpg_structured_maker(hidden, relation_condition, enemy_tokens, enemy_mask)
+                        q = self._apply_rpg_structured_maker(
+                            hidden, relation_condition, enemy_tokens, enemy_mask, context=context
+                        )
                     if (
                         self.model_type == "rpg_relation_distill_hypercond"
                         and th.is_grad_enabled()
@@ -2426,7 +2579,7 @@ class CleanHyperAgent(nn.Module):
                         teacher_condition = self._build_relation_teacher_condition(context)
                         if teacher_condition is not None:
                             self.latest_teacher_q = self._apply_rpg_structured_maker(
-                                hidden, teacher_condition, enemy_tokens, enemy_mask
+                                hidden, teacher_condition, enemy_tokens, enemy_mask, context=context
                             )
                             self.latest_aux_loss = self.relation_distill_coef * self._relation_distill_loss(
                                 relation_condition, teacher_condition
