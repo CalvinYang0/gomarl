@@ -218,9 +218,10 @@ class RPGInspiredRelationCapturer(nn.Module):
 
 
 class PublicRPGRelationCapturer(nn.Module):
-    # Public-information relation generator. It removes private self features
-    # from the relation query and builds the condition from visible ally/enemy
-    # entity summaries. The downstream maker remains unchanged.
+    # Public-information relation generator. It keeps observer-invariant entity
+    # state such as health/shield/type, and removes private self-view fields
+    # such as movement context, relative position, and attack availability. The
+    # downstream maker remains unchanged.
     def __init__(
         self,
         move_dim,
@@ -233,6 +234,7 @@ class PublicRPGRelationCapturer(nn.Module):
         shield_bits_ally=0,
         shield_bits_enemy=0,
         obs_all_health=True,
+        obs_own_health=True,
         obs_last_action=False,
         n_actions=0,
     ):
@@ -245,17 +247,27 @@ class PublicRPGRelationCapturer(nn.Module):
         self.shield_bits_ally = shield_bits_ally
         self.shield_bits_enemy = shield_bits_enemy
         self.obs_all_health = obs_all_health
+        self.obs_own_health = obs_own_health
         self.obs_last_action = obs_last_action
         self.n_actions = n_actions
 
+        self.public_self_dim = 1
         self.public_ally_dim = 1
         self.public_enemy_dim = 1
+        if obs_own_health:
+            self.public_self_dim += 1 + shield_bits_ally
         if obs_all_health:
             self.public_ally_dim += 1 + shield_bits_ally
             self.public_enemy_dim += 1 + shield_bits_enemy
+        self.public_self_dim += unit_type_bits
         self.public_ally_dim += unit_type_bits
         self.public_enemy_dim += unit_type_bits
 
+        self.self_encoder = nn.Sequential(
+            nn.Linear(self.public_self_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
         self.ally_encoder = nn.Sequential(
             nn.Linear(self.public_ally_dim, relation_dim),
             nn.ReLU(inplace=True),
@@ -272,7 +284,7 @@ class PublicRPGRelationCapturer(nn.Module):
             nn.Linear(relation_dim, relation_dim),
         )
         self.public_query_encoder = nn.Sequential(
-            nn.Linear(relation_dim * 2, relation_dim),
+            nn.Linear(relation_dim * 3, relation_dim),
             nn.ReLU(inplace=True),
             nn.Linear(relation_dim, relation_dim),
         )
@@ -311,6 +323,20 @@ class PublicRPGRelationCapturer(nn.Module):
         context = th.matmul(attn.unsqueeze(2), value).squeeze(2)
         return context, attn
 
+    def _self_public_features(self, self_feat):
+        batch_size, n_agents, _ = self_feat.shape
+        features = [self_feat.new_ones(batch_size, n_agents, 1)]
+        idx = 0
+        if self.obs_own_health:
+            features.append(self_feat[:, :, idx : idx + 1])
+            idx += 1
+            if self.shield_bits_ally > 0:
+                features.append(self_feat[:, :, idx : idx + 1])
+                idx += 1
+        if self.unit_type_bits > 0:
+            features.append(self_feat[:, :, idx : idx + self.unit_type_bits])
+        return th.cat(features, dim=-1)
+
     def _enemy_public_features(self, enemy_feat, enemy_mask):
         features = [enemy_mask.unsqueeze(-1).float()]
         idx = 4
@@ -341,18 +367,19 @@ class PublicRPGRelationCapturer(nn.Module):
         return th.cat(features, dim=-1)
 
     def forward(self, self_feat, ally_feat, enemy_feat, prev_relation_hidden):
-        del self_feat
         ally_mask = ally_feat.abs().sum(dim=-1) > 0
         enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        self_public = self._self_public_features(self_feat)
         ally_public = self._ally_public_features(ally_feat, ally_mask)
         enemy_public = self._enemy_public_features(enemy_feat, enemy_mask)
+        self_token = self.self_encoder(self_public)
         ally_tokens = self.ally_encoder(ally_public) * ally_mask.unsqueeze(-1).float()
         public_enemy_tokens = self.public_enemy_encoder(enemy_public) * enemy_mask.unsqueeze(-1).float()
         enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
 
         ally_mean = self._masked_mean(ally_tokens, ally_mask)
         enemy_mean = self._masked_mean(public_enemy_tokens, enemy_mask)
-        public_query = self.public_query_encoder(th.cat([ally_mean, enemy_mean], dim=-1))
+        public_query = self.public_query_encoder(th.cat([self_token, ally_mean, enemy_mean], dim=-1))
 
         ally_context, ally_attn = self._masked_attention(
             public_query, ally_tokens, ally_mask, self.ally_key, self.ally_value
@@ -1907,6 +1934,7 @@ class CleanHyperAgent(nn.Module):
                 shield_bits_ally=self.rpg_obs_layout["shield_bits_ally"],
                 shield_bits_enemy=self.rpg_obs_layout["shield_bits_enemy"],
                 obs_all_health=self.rpg_obs_layout["obs_all_health"],
+                obs_own_health=self.rpg_obs_layout["obs_own_health"],
                 obs_last_action=self.rpg_obs_layout["obs_last_action"],
                 n_actions=self.n_actions,
             )
