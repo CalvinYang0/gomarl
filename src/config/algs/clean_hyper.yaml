@@ -88,8 +88,10 @@ hypernet_layers: 2
 #                                     interaction bottleneck layer.
 # - rpg_public_relation_hypercond: same maker as rpg_linear_interaction_hypercond,
 #                                  but the relation pattern is generated from
-#                                  public ally/enemy entity summaries instead
-#                                  of private self/move/own features.
+#                                  public fields extracted from local ally/enemy
+#                                  slots. It drops private/self-view fields such
+#                                  as self/move/own features, relative position,
+#                                  attack availability, and ally last action.
 # - rpg_private_interaction_input_hypercond: same relation generator and
 #                                            hypernetwork as
 #                                            rpg_linear_interaction_hypercond,

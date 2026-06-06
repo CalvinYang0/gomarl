@@ -229,15 +229,40 @@ class PublicRPGRelationCapturer(nn.Module):
         enemy_feat_dim,
         relation_dim,
         output_dim,
+        unit_type_bits=0,
+        shield_bits_ally=0,
+        shield_bits_enemy=0,
+        obs_all_health=True,
+        obs_last_action=False,
+        n_actions=0,
     ):
         super().__init__()
         del move_dim, own_dim
         self.ally_feat_dim = ally_feat_dim
         self.enemy_feat_dim = enemy_feat_dim
         self.relation_dim = relation_dim
+        self.unit_type_bits = unit_type_bits
+        self.shield_bits_ally = shield_bits_ally
+        self.shield_bits_enemy = shield_bits_enemy
+        self.obs_all_health = obs_all_health
+        self.obs_last_action = obs_last_action
+        self.n_actions = n_actions
+
+        self.public_ally_dim = 1
+        self.public_enemy_dim = 1
+        if obs_all_health:
+            self.public_ally_dim += 1 + shield_bits_ally
+            self.public_enemy_dim += 1 + shield_bits_enemy
+        self.public_ally_dim += unit_type_bits
+        self.public_enemy_dim += unit_type_bits
 
         self.ally_encoder = nn.Sequential(
-            nn.Linear(ally_feat_dim, relation_dim),
+            nn.Linear(self.public_ally_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.public_enemy_encoder = nn.Sequential(
+            nn.Linear(self.public_enemy_dim, relation_dim),
             nn.ReLU(inplace=True),
             nn.Linear(relation_dim, relation_dim),
         )
@@ -286,22 +311,54 @@ class PublicRPGRelationCapturer(nn.Module):
         context = th.matmul(attn.unsqueeze(2), value).squeeze(2)
         return context, attn
 
+    def _enemy_public_features(self, enemy_feat, enemy_mask):
+        features = [enemy_mask.unsqueeze(-1).float()]
+        idx = 4
+        if self.obs_all_health:
+            features.append(enemy_feat[:, :, :, idx : idx + 1])
+            idx += 1
+            if self.shield_bits_enemy > 0:
+                features.append(enemy_feat[:, :, :, idx : idx + 1])
+                idx += 1
+        if self.unit_type_bits > 0:
+            features.append(enemy_feat[:, :, :, idx : idx + self.unit_type_bits])
+        return th.cat(features, dim=-1)
+
+    def _ally_public_features(self, ally_feat, ally_mask):
+        features = [ally_mask.unsqueeze(-1).float()]
+        idx = 4
+        if self.obs_all_health:
+            features.append(ally_feat[:, :, :, idx : idx + 1])
+            idx += 1
+            if self.shield_bits_ally > 0:
+                features.append(ally_feat[:, :, :, idx : idx + 1])
+                idx += 1
+        if self.unit_type_bits > 0:
+            features.append(ally_feat[:, :, :, idx : idx + self.unit_type_bits])
+            idx += self.unit_type_bits
+        # Deliberately skip ally last action: it is agent-specific execution
+        # context, not the public situation signal for head generation.
+        return th.cat(features, dim=-1)
+
     def forward(self, self_feat, ally_feat, enemy_feat, prev_relation_hidden):
         del self_feat
         ally_mask = ally_feat.abs().sum(dim=-1) > 0
         enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
-        ally_tokens = self.ally_encoder(ally_feat) * ally_mask.unsqueeze(-1).float()
+        ally_public = self._ally_public_features(ally_feat, ally_mask)
+        enemy_public = self._enemy_public_features(enemy_feat, enemy_mask)
+        ally_tokens = self.ally_encoder(ally_public) * ally_mask.unsqueeze(-1).float()
+        public_enemy_tokens = self.public_enemy_encoder(enemy_public) * enemy_mask.unsqueeze(-1).float()
         enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
 
         ally_mean = self._masked_mean(ally_tokens, ally_mask)
-        enemy_mean = self._masked_mean(enemy_tokens, enemy_mask)
+        enemy_mean = self._masked_mean(public_enemy_tokens, enemy_mask)
         public_query = self.public_query_encoder(th.cat([ally_mean, enemy_mean], dim=-1))
 
         ally_context, ally_attn = self._masked_attention(
             public_query, ally_tokens, ally_mask, self.ally_key, self.ally_value
         )
         enemy_context, enemy_attn = self._masked_attention(
-            public_query, enemy_tokens, enemy_mask, self.enemy_key, self.enemy_value
+            public_query, public_enemy_tokens, enemy_mask, self.enemy_key, self.enemy_value
         )
         instant = self.instant_pattern(th.cat([public_query, ally_context, enemy_context], dim=-1))
         temporal_input = th.cat([public_query, instant], dim=-1)
@@ -1844,7 +1901,16 @@ class CleanHyperAgent(nn.Module):
             "relation_dim": self.rpg_relation_dim,
             "output_dim": self.cond_dim,
         }
-        if capturer_cls is SemanticSelfAttentionRelationCapturer:
+        if capturer_cls is PublicRPGRelationCapturer:
+            capturer_kwargs.update(
+                unit_type_bits=self.rpg_obs_layout["unit_type_bits"],
+                shield_bits_ally=self.rpg_obs_layout["shield_bits_ally"],
+                shield_bits_enemy=self.rpg_obs_layout["shield_bits_enemy"],
+                obs_all_health=self.rpg_obs_layout["obs_all_health"],
+                obs_last_action=self.rpg_obs_layout["obs_last_action"],
+                n_actions=self.n_actions,
+            )
+        elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(
                 unit_type_bits=self.rpg_obs_layout["unit_type_bits"],
                 shield_bits_ally=self.rpg_obs_layout["shield_bits_ally"],
