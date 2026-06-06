@@ -86,6 +86,13 @@ hypernet_layers: 2
 #                                     pattern, applied to [agent hidden,
 #                                     enemy token]. This removes the generated
 #                                     interaction bottleneck layer.
+# - rpg_global_filled_obs_hypercond: same model structure as
+#                                    rpg_linear_interaction_hypercond, but
+#                                    during non-test training it replaces the
+#                                    relation-generator observation with an
+#                                    obs-shaped globally filled observation.
+#                                    Decentralized test execution still uses
+#                                    the original local observation.
 # - rpg_relation_distill_hypercond: same execution path as
 #                                   rpg_linear_interaction_hypercond, plus a
 #                                   training-only centralized relation teacher.

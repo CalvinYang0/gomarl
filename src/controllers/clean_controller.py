@@ -14,6 +14,7 @@ class CleanMAC(BasicMAC):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",

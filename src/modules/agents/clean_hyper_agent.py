@@ -1070,6 +1070,7 @@ class CleanHyperAgent(nn.Module):
         "rpg_full_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_readout_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_linear_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_global_filled_obs_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_distill_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_residual_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_film_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -1162,6 +1163,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
@@ -1263,6 +1265,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
@@ -1302,6 +1305,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
@@ -1355,6 +1359,7 @@ class CleanHyperAgent(nn.Module):
             elif self.model_type in {
                 "local_linear_interaction_hypercond",
                 "rpg_linear_interaction_hypercond",
+                "rpg_global_filled_obs_hypercond",
                 "rpg_relation_distill_hypercond",
                 "rpg_semantic_selfattn_relation_hypercond",
                 "rpg_entity_selfattn_relation_hypercond",
@@ -1473,6 +1478,7 @@ class CleanHyperAgent(nn.Module):
                     nn.init.zeros_(self.rpg_interaction_out_b.bias)
                 elif self.model_type in {
                     "rpg_linear_interaction_hypercond",
+                    "rpg_global_filled_obs_hypercond",
                     "rpg_relation_distill_hypercond",
                     "rpg_semantic_selfattn_relation_hypercond",
                     "rpg_entity_selfattn_relation_hypercond",
@@ -1590,6 +1596,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
@@ -1743,6 +1750,122 @@ class CleanHyperAgent(nn.Module):
         own = obs[:, :, idx : idx + layout["own_dim"]]
         return move, enemy, ally, own
 
+    def _split_sc2_state(self, state):
+        if getattr(self.args, "env_args", {}).get("obs_instead_of_state", False):
+            raise ValueError(
+                "rpg_global_filled_obs_hypercond requires the standard SMAC global state, "
+                "but env_args.obs_instead_of_state=True."
+            )
+        layout = self.rpg_obs_layout
+        batch_size = state.size(0)
+        state_ally_dim = 4 + layout["shield_bits_ally"] + layout["unit_type_bits"]
+        state_enemy_dim = 3 + layout["shield_bits_enemy"] + layout["unit_type_bits"]
+
+        idx = 0
+        ally_total = self.n_agents * state_ally_dim
+        ally_state = state[:, idx : idx + ally_total].view(batch_size, self.n_agents, state_ally_dim)
+        idx += ally_total
+
+        enemy_total = layout["n_enemies"] * state_enemy_dim
+        enemy_state = state[:, idx : idx + enemy_total].view(batch_size, layout["n_enemies"], state_enemy_dim)
+        idx += enemy_total
+
+        last_action = None
+        env_args = getattr(self.args, "env_args", {})
+        if env_args.get("state_last_action", True):
+            action_total = self.n_agents * self.n_actions
+            if state.size(-1) >= idx + action_total:
+                last_action = state[:, idx : idx + action_total].view(batch_size, self.n_agents, self.n_actions)
+        return ally_state, enemy_state, last_action
+
+    def _build_global_filled_obs(self, context):
+        state = context.get("state")
+        if state is None:
+            return context["obs"]
+
+        obs = context["obs"]
+        move_feat, local_enemy, local_ally, own_feat = self._split_rpg_obs(obs)
+        ally_state, enemy_state, state_last_action = self._split_sc2_state(state.reshape(state.size(0), -1))
+        layout = self.rpg_obs_layout
+        batch_size, n_agents, _ = move_feat.shape
+        device = obs.device
+
+        self_state = ally_state[:, :n_agents]
+        self_alive = self_state[:, :, 0] > 0
+        self_x = self_state[:, :, 2]
+        self_y = self_state[:, :, 3]
+
+        enemy_alive = enemy_state[:, :, 0] > 0
+        enemy_dx = enemy_state[:, None, :, 1] - self_x[:, :, None]
+        enemy_dy = enemy_state[:, None, :, 2] - self_y[:, :, None]
+        enemy_dist = th.sqrt(enemy_dx.pow(2) + enemy_dy.pow(2)).clamp(max=10.0)
+        enemy_valid = (self_alive[:, :, None] & enemy_alive[:, None, :]).float()
+
+        enemy_feat = local_enemy.clone()
+        # Keep the local attack-availability flag; fill only relational entity
+        # information from centralized state so action availability semantics do
+        # not become privileged.
+        enemy_feat[:, :, :, 1] = enemy_dist * enemy_valid
+        enemy_feat[:, :, :, 2] = enemy_dx * enemy_valid
+        enemy_feat[:, :, :, 3] = enemy_dy * enemy_valid
+        obs_idx = 4
+        state_idx = 3
+        if layout["obs_all_health"]:
+            enemy_feat[:, :, :, obs_idx] = enemy_state[:, None, :, 0] * enemy_valid
+            obs_idx += 1
+            if layout["shield_bits_enemy"] > 0:
+                enemy_feat[:, :, :, obs_idx] = enemy_state[:, None, :, state_idx] * enemy_valid
+                obs_idx += 1
+                state_idx += 1
+        if layout["unit_type_bits"] > 0:
+            enemy_type = enemy_state[:, None, :, state_idx : state_idx + layout["unit_type_bits"]]
+            enemy_feat[:, :, :, obs_idx : obs_idx + layout["unit_type_bits"]] = enemy_type * enemy_valid.unsqueeze(-1)
+
+        ally_feat = local_ally.clone()
+        ally_ids = th.arange(n_agents, device=device)
+        other_agent_ids = []
+        for agent_id in range(n_agents):
+            other_agent_ids.append(ally_ids[ally_ids != agent_id])
+        other_agent_ids = th.stack(other_agent_ids, dim=0)
+
+        gathered_ally = ally_state[:, other_agent_ids]
+        ally_alive = gathered_ally[:, :, :, 0] > 0
+        ally_dx = gathered_ally[:, :, :, 2] - self_x[:, :, None]
+        ally_dy = gathered_ally[:, :, :, 3] - self_y[:, :, None]
+        ally_dist = th.sqrt(ally_dx.pow(2) + ally_dy.pow(2)).clamp(max=10.0)
+        ally_valid = (self_alive[:, :, None] & ally_alive).float()
+
+        ally_feat[:, :, :, 0] = ally_valid
+        ally_feat[:, :, :, 1] = ally_dist * ally_valid
+        ally_feat[:, :, :, 2] = ally_dx * ally_valid
+        ally_feat[:, :, :, 3] = ally_dy * ally_valid
+        obs_idx = 4
+        state_idx = 4
+        if layout["obs_all_health"]:
+            ally_feat[:, :, :, obs_idx] = gathered_ally[:, :, :, 0] * ally_valid
+            obs_idx += 1
+            if layout["shield_bits_ally"] > 0:
+                ally_feat[:, :, :, obs_idx] = gathered_ally[:, :, :, state_idx] * ally_valid
+                obs_idx += 1
+                state_idx += 1
+        if layout["unit_type_bits"] > 0:
+            ally_type = gathered_ally[:, :, :, state_idx : state_idx + layout["unit_type_bits"]]
+            ally_feat[:, :, :, obs_idx : obs_idx + layout["unit_type_bits"]] = ally_type * ally_valid.unsqueeze(-1)
+            obs_idx += layout["unit_type_bits"]
+        if layout["obs_last_action"] and state_last_action is not None:
+            gathered_action = state_last_action[:, other_agent_ids]
+            ally_feat[:, :, :, obs_idx : obs_idx + self.n_actions] = gathered_action * ally_valid.unsqueeze(-1)
+
+        return th.cat(
+            [
+                move_feat.reshape(batch_size, n_agents, -1),
+                enemy_feat.reshape(batch_size, n_agents, -1),
+                ally_feat.reshape(batch_size, n_agents, -1),
+                own_feat.reshape(batch_size, n_agents, -1),
+            ],
+            dim=-1,
+        )
+
     def _build_local_structured_condition(self, hidden, context):
         condition = self.local_condition_encoder(self._build_local_source(hidden, context))
         _, enemy_feat, _, _ = self._split_rpg_obs(context["obs"])
@@ -1750,8 +1873,12 @@ class CleanHyperAgent(nn.Module):
         enemy_tokens = self.rpg_relation_capturer.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
         return condition, enemy_tokens, enemy_mask
 
-    def _build_rpg_condition(self, context, relation_hidden):
-        obs = context["obs"]
+    def _build_rpg_condition(self, context, relation_hidden, test_mode=False):
+        obs = (
+            self._build_global_filled_obs(context)
+            if self.model_type == "rpg_global_filled_obs_hypercond" and not test_mode
+            else context["obs"]
+        )
         move_feat, enemy_feat, ally_feat, own_feat = self._split_rpg_obs(obs)
         self_feat = th.cat([move_feat, own_feat], dim=-1)
         (
@@ -1861,6 +1988,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
@@ -2120,6 +2248,7 @@ class CleanHyperAgent(nn.Module):
         elif self.model_type in {
             "local_linear_interaction_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
@@ -2202,6 +2331,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
@@ -2248,6 +2378,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_full_structured_hypercond",
                 "rpg_readout_structured_hypercond",
                 "rpg_linear_interaction_hypercond",
+                "rpg_global_filled_obs_hypercond",
                 "rpg_relation_distill_hypercond",
                 "rpg_residual_interaction_hypercond",
                 "rpg_film_interaction_hypercond",
@@ -2263,7 +2394,7 @@ class CleanHyperAgent(nn.Module):
                 "hetero_gat_hypercond",
             }:
                 relation_condition, next_relation_hidden, enemy_tokens, enemy_mask = self._build_rpg_condition(
-                    context, relation_hidden_state
+                    context, relation_hidden_state, test_mode=test_mode
                 )
                 if self.model_type in {
                     "rpg_relation_hypercond",
