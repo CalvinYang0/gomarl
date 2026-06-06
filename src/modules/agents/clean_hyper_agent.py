@@ -1070,6 +1070,7 @@ class CleanHyperAgent(nn.Module):
         "rpg_full_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_readout_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_linear_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_relation_distill_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_residual_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_film_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_moe_interaction_head": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -1129,6 +1130,8 @@ class CleanHyperAgent(nn.Module):
         self.rpg_residual_gate_bias = float(getattr(args, "clean_rpg_residual_gate_bias", -1.0))
         self.self_fine_delta_scale = float(getattr(args, "clean_self_fine_delta_scale", 0.1))
         self.relation_prototypes = int(getattr(args, "clean_relation_prototypes", self.route_num))
+        self.relation_distill_coef = float(getattr(args, "clean_relation_distill_coef", 0.05))
+        self.relation_teacher_td_coef = float(getattr(args, "clean_relation_teacher_td_coef", 0.2))
         self.smooth_head_loss_coef = float(getattr(args, "clean_smooth_head_loss_coef", 0.0))
         self.smooth_head_knn = int(getattr(args, "clean_smooth_head_knn", 4))
         self.smooth_head_sample_size = int(getattr(args, "clean_smooth_head_sample_size", 256))
@@ -1159,6 +1162,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -1259,6 +1263,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -1297,6 +1302,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -1349,6 +1355,7 @@ class CleanHyperAgent(nn.Module):
             elif self.model_type in {
                 "local_linear_interaction_hypercond",
                 "rpg_linear_interaction_hypercond",
+                "rpg_relation_distill_hypercond",
                 "rpg_semantic_selfattn_relation_hypercond",
                 "rpg_entity_selfattn_relation_hypercond",
                 "rpg_delta_relation_hypercond",
@@ -1466,6 +1473,7 @@ class CleanHyperAgent(nn.Module):
                     nn.init.zeros_(self.rpg_interaction_out_b.bias)
                 elif self.model_type in {
                     "rpg_linear_interaction_hypercond",
+                    "rpg_relation_distill_hypercond",
                     "rpg_semantic_selfattn_relation_hypercond",
                     "rpg_entity_selfattn_relation_hypercond",
                     "rpg_delta_relation_hypercond",
@@ -1544,8 +1552,27 @@ class CleanHyperAgent(nn.Module):
         else:
             self.prototype_head_hypernet = None
 
+        if self.model_type == "rpg_relation_distill_hypercond":
+            state_shape = getattr(args, "state_shape", 0)
+            if isinstance(state_shape, (tuple, list)):
+                self.teacher_state_dim = int(math.prod(state_shape))
+            else:
+                self.teacher_state_dim = int(state_shape)
+            self.teacher_agent_embeddings = nn.Embedding(self.n_agents, self.cond_dim)
+            nn.init.orthogonal_(self.teacher_agent_embeddings.weight)
+            self.relation_teacher_encoder = nn.Sequential(
+                nn.Linear(self.teacher_state_dim + self.cond_dim, self.cond_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.cond_dim, self.cond_dim),
+            )
+        else:
+            self.teacher_state_dim = None
+            self.teacher_agent_embeddings = None
+            self.relation_teacher_encoder = None
+
         self.latest_condition = None
         self.latest_aux_loss = None
+        self.latest_teacher_q = None
         self.latest_generated_interaction_head = None
         self.latest_route_logits = None
         self.latest_route_indices = None
@@ -1563,6 +1590,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -1766,6 +1794,28 @@ class CleanHyperAgent(nn.Module):
         self_feat = th.cat([move_feat, own_feat], dim=-1)
         return self.global_graph_relation_encoder(self_feat, enemy_feat)
 
+    def _build_relation_teacher_condition(self, context):
+        state = context.get("state")
+        if state is None:
+            return None
+        batch_size = state.size(0)
+        flat_state = state.reshape(batch_size, -1)
+        if flat_state.size(-1) != self.teacher_state_dim:
+            raise ValueError(
+                "rpg_relation_distill_hypercond expected state_dim={}, got {}.".format(
+                    self.teacher_state_dim, flat_state.size(-1)
+                )
+            )
+        state_rep = flat_state.unsqueeze(1).expand(-1, self.n_agents, -1)
+        agent_ids = th.arange(self.n_agents, device=state.device).view(1, self.n_agents).expand(batch_size, -1)
+        agent_embed = self.teacher_agent_embeddings(agent_ids)
+        return self.relation_teacher_encoder(th.cat([state_rep, agent_embed], dim=-1))
+
+    def _relation_distill_loss(self, student_condition, teacher_condition):
+        student = F.normalize(student_condition, p=2, dim=-1)
+        teacher = F.normalize(teacher_condition.detach(), p=2, dim=-1)
+        return F.mse_loss(student, teacher)
+
     def _route_from_logits(self, route_logits, test_mode):
         route_num = self.route_codebook.size(0)
         if test_mode:
@@ -1811,6 +1861,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -2069,6 +2120,7 @@ class CleanHyperAgent(nn.Module):
         elif self.model_type in {
             "local_linear_interaction_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_relation_distill_hypercond",
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_delta_relation_hypercond",
@@ -2138,6 +2190,7 @@ class CleanHyperAgent(nn.Module):
         self.latest_relation_enemy_attn = None
         self.latest_condition = None
         self.latest_aux_loss = None
+        self.latest_teacher_q = None
         self.latest_generated_interaction_head = None
 
         if hidden_state is None:
@@ -2149,6 +2202,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_relation_distill_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -2194,6 +2248,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_full_structured_hypercond",
                 "rpg_readout_structured_hypercond",
                 "rpg_linear_interaction_hypercond",
+                "rpg_relation_distill_hypercond",
                 "rpg_residual_interaction_hypercond",
                 "rpg_film_interaction_hypercond",
                 "rpg_moe_interaction_head",
@@ -2232,6 +2287,19 @@ class CleanHyperAgent(nn.Module):
                         q = self._apply_relation_prototype_single_head(hidden, relation_condition, test_mode)
                     else:
                         q = self._apply_rpg_structured_maker(hidden, relation_condition, enemy_tokens, enemy_mask)
+                    if (
+                        self.model_type == "rpg_relation_distill_hypercond"
+                        and th.is_grad_enabled()
+                        and not test_mode
+                    ):
+                        teacher_condition = self._build_relation_teacher_condition(context)
+                        if teacher_condition is not None:
+                            self.latest_teacher_q = self._apply_rpg_structured_maker(
+                                hidden, teacher_condition, enemy_tokens, enemy_mask
+                            )
+                            self.latest_aux_loss = self.relation_distill_coef * self._relation_distill_loss(
+                                relation_condition, teacher_condition
+                            )
                 next_hidden = th.cat([hidden, next_relation_hidden], dim=-1)
             else:
                 condition = self._build_condition(hidden, context, test_mode=test_mode)

@@ -86,6 +86,14 @@ hypernet_layers: 2
 #                                     pattern, applied to [agent hidden,
 #                                     enemy token]. This removes the generated
 #                                     interaction bottleneck layer.
+# - rpg_relation_distill_hypercond: same execution path as
+#                                   rpg_linear_interaction_hypercond, plus a
+#                                   training-only centralized relation teacher.
+#                                   The teacher uses global state and agent id
+#                                   to generate auxiliary relation conditions,
+#                                   learns through an auxiliary Q-learning loss,
+#                                   and distills local relation conditions
+#                                   without changing decentralized execution.
 # - rpg_residual_interaction_hypercond: keeps the same generated ego branch,
 #                                       then combines a fixed linear
 #                                       interaction scorer with a
@@ -181,6 +189,8 @@ clean_rpg_interaction_experts: 4
 clean_rpg_residual_gate_bias: -1.0
 clean_self_fine_delta_scale: 0.1
 clean_relation_prototypes: 4
+clean_relation_distill_coef: 0.05
+clean_relation_teacher_td_coef: 0.2
 clean_smooth_head_loss_coef: 0.01
 clean_smooth_head_knn: 4
 clean_smooth_head_sample_size: 256

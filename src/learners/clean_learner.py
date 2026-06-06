@@ -75,6 +75,7 @@ class CleanLearner:
 
         with self._amp_context():
             mac_out = []
+            teacher_mac_out = []
             relation_conditions = [] if self.relation_mixer_gate is not None else None
             aux_losses = []
             self.mac.init_hidden(batch.batch_size)
@@ -88,7 +89,15 @@ class CleanLearner:
                 aux_loss = getattr(self.mac, "latest_aux_loss", None)
                 if aux_loss is not None:
                     aux_losses.append(aux_loss)
+                teacher_q = getattr(self.mac, "latest_teacher_q", None)
+                if teacher_q is not None:
+                    teacher_mac_out.append(teacher_q)
             mac_out = th.stack(mac_out, dim=1)
+            teacher_mac_out = (
+                th.stack(teacher_mac_out, dim=1)
+                if len(teacher_mac_out) == batch.max_seq_length
+                else None
+            )
             if relation_conditions is not None:
                 relation_conditions = th.stack(relation_conditions, dim=1)
 
@@ -146,7 +155,15 @@ class CleanLearner:
             masked_td_error = td_error * td_mask
             td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
             aux_loss = th.stack(aux_losses).mean() if aux_losses else td_loss.new_zeros(())
-            loss = td_loss + aux_loss
+            teacher_td_loss = td_loss.new_zeros(())
+            if teacher_mac_out is not None:
+                teacher_chosen_qvals = th.gather(teacher_mac_out[:, :-1], dim=3, index=actions).squeeze(3)
+                if self.mixer is not None:
+                    teacher_chosen_qvals = self.mixer(teacher_chosen_qvals, batch["state"][:, :-1])
+                teacher_td_error = teacher_chosen_qvals - targets.detach()
+                teacher_masked_td_error = teacher_td_error * td_mask
+                teacher_td_loss = (teacher_masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
+            loss = td_loss + aux_loss + float(getattr(self.args, "clean_relation_teacher_td_coef", 0.0)) * teacher_td_loss
 
         self.optimiser.zero_grad()
         if self.use_amp:
@@ -168,6 +185,8 @@ class CleanLearner:
             self.logger.log_stat("loss_td", td_loss.item(), t_env)
             if aux_losses:
                 self.logger.log_stat("loss_aux", aux_loss.item(), t_env)
+            if teacher_mac_out is not None:
+                self.logger.log_stat("loss_teacher_td", teacher_td_loss.item(), t_env)
             if self.latest_relation_gate_mean is not None:
                 self.logger.log_stat("relation_gate_mean", self.latest_relation_gate_mean, t_env)
                 self.logger.log_stat("relation_gate_std", self.latest_relation_gate_std, t_env)
