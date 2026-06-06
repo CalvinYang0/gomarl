@@ -1614,6 +1614,8 @@ class CleanHyperAgent(nn.Module):
         "rpg_action_edge_graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_delta_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_coarse_self_fine_head": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_relation_coarse_fine_four_layer_head": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_relation_coarse_q_fine_gate_head": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_prototype_single_head": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_fixed_structured_maker": {"uses_hypernet": False, "execution_scope": "ctde"},
         "rpg_fixed_linear_structured_maker": {"uses_hypernet": False, "execution_scope": "ctde"},
@@ -1664,6 +1666,7 @@ class CleanHyperAgent(nn.Module):
         self.rpg_interaction_experts = int(getattr(args, "clean_rpg_interaction_experts", 4))
         self.rpg_residual_gate_bias = float(getattr(args, "clean_rpg_residual_gate_bias", -1.0))
         self.self_fine_delta_scale = float(getattr(args, "clean_self_fine_delta_scale", 0.1))
+        self.self_fine_gate_scale = float(getattr(args, "clean_self_fine_gate_scale", 1.0))
         self.relation_prototypes = int(getattr(args, "clean_relation_prototypes", self.route_num))
         self.relation_distill_coef = float(getattr(args, "clean_relation_distill_coef", 0.05))
         self.relation_teacher_td_coef = float(getattr(args, "clean_relation_teacher_td_coef", 0.2))
@@ -1713,6 +1716,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_graph_hypercond",
             "rpg_delta_relation_hypercond",
             "rpg_relation_coarse_self_fine_head",
+            "rpg_relation_coarse_fine_four_layer_head",
+            "rpg_relation_coarse_q_fine_gate_head",
             "rpg_relation_prototype_single_head",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
@@ -1819,6 +1824,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_graph_hypercond",
             "rpg_delta_relation_hypercond",
             "rpg_relation_coarse_self_fine_head",
+            "rpg_relation_coarse_fine_four_layer_head",
+            "rpg_relation_coarse_q_fine_gate_head",
             "rpg_relation_prototype_single_head",
         }:
             self.hyper_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
@@ -2094,16 +2101,31 @@ class CleanHyperAgent(nn.Module):
             self.rpg_interaction_expert_gate = None
             self.rpg_interaction_expert_heads = None
 
-        if self.model_type == "rpg_relation_coarse_self_fine_head":
-            self.relation_coarse_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
-            self.relation_coarse_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
-            self.relation_coarse_out_w = nn.Linear(self.cond_dim, self.hidden_dim * self.n_actions)
-            self.relation_coarse_out_b = nn.Linear(self.cond_dim, self.n_actions)
+        if self.model_type in {
+            "rpg_relation_coarse_self_fine_head",
+            "rpg_relation_coarse_fine_four_layer_head",
+            "rpg_relation_coarse_q_fine_gate_head",
+        }:
             self.self_fine_condition_encoder = nn.Sequential(
                 nn.Linear(self.rpg_obs_layout["move_dim"] + self.rpg_obs_layout["own_dim"], self.cond_dim),
                 nn.ReLU(inplace=True),
                 nn.Linear(self.cond_dim, self.cond_dim),
             )
+        else:
+            self.self_fine_condition_encoder = None
+
+        if self.model_type in {"rpg_relation_coarse_self_fine_head", "rpg_relation_coarse_q_fine_gate_head"}:
+            self.relation_coarse_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
+            self.relation_coarse_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
+            self.relation_coarse_out_w = nn.Linear(self.cond_dim, self.hidden_dim * self.n_actions)
+            self.relation_coarse_out_b = nn.Linear(self.cond_dim, self.n_actions)
+        else:
+            self.relation_coarse_bottleneck_w = None
+            self.relation_coarse_bottleneck_b = None
+            self.relation_coarse_out_w = None
+            self.relation_coarse_out_b = None
+
+        if self.model_type == "rpg_relation_coarse_self_fine_head":
             self.self_fine_out_w = nn.Linear(self.cond_dim, self.hidden_dim * self.n_actions)
             self.self_fine_out_b = nn.Linear(self.cond_dim, self.n_actions)
             nn.init.zeros_(self.self_fine_out_w.weight)
@@ -2111,13 +2133,46 @@ class CleanHyperAgent(nn.Module):
             nn.init.zeros_(self.self_fine_out_b.weight)
             nn.init.zeros_(self.self_fine_out_b.bias)
         else:
-            self.relation_coarse_bottleneck_w = None
-            self.relation_coarse_bottleneck_b = None
-            self.relation_coarse_out_w = None
-            self.relation_coarse_out_b = None
-            self.self_fine_condition_encoder = None
             self.self_fine_out_w = None
             self.self_fine_out_b = None
+
+        if self.model_type == "rpg_relation_coarse_fine_four_layer_head":
+            self.relation_coarse_layer1_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
+            self.relation_coarse_layer1_b = nn.Linear(self.cond_dim, self.hidden_dim)
+            self.relation_coarse_layer2_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
+            self.relation_coarse_layer2_b = nn.Linear(self.cond_dim, self.hidden_dim)
+            self.self_fine_layer3_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
+            self.self_fine_layer3_b = nn.Linear(self.cond_dim, self.hidden_dim)
+            self.self_fine_layer4_w = nn.Linear(self.cond_dim, self.hidden_dim * self.n_actions)
+            self.self_fine_layer4_b = nn.Linear(self.cond_dim, self.n_actions)
+        else:
+            self.relation_coarse_layer1_w = None
+            self.relation_coarse_layer1_b = None
+            self.relation_coarse_layer2_w = None
+            self.relation_coarse_layer2_b = None
+            self.self_fine_layer3_w = None
+            self.self_fine_layer3_b = None
+            self.self_fine_layer4_w = None
+            self.self_fine_layer4_b = None
+
+        if self.model_type == "rpg_relation_coarse_q_fine_gate_head":
+            self.self_fine_gate_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
+            self.self_fine_gate_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
+            self.self_fine_gate_out_w = nn.Linear(self.cond_dim, self.hidden_dim * self.n_actions)
+            self.self_fine_gate_out_b = nn.Linear(self.cond_dim, self.n_actions)
+            for module in (
+                self.self_fine_gate_bottleneck_w,
+                self.self_fine_gate_bottleneck_b,
+                self.self_fine_gate_out_w,
+                self.self_fine_gate_out_b,
+            ):
+                nn.init.zeros_(module.weight)
+                nn.init.zeros_(module.bias)
+        else:
+            self.self_fine_gate_bottleneck_w = None
+            self.self_fine_gate_bottleneck_b = None
+            self.self_fine_gate_out_w = None
+            self.self_fine_gate_out_b = None
 
         if self.model_type == "rpg_relation_prototype_single_head":
             self.prototype_head_hypernet = MLPHyperParameterGenerator(
@@ -2182,6 +2237,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_topk_entity_relation_hypercond",
             "rpg_action_edge_graph_hypercond",
             "rpg_relation_coarse_self_fine_head",
+            "rpg_relation_coarse_fine_four_layer_head",
+            "rpg_relation_coarse_q_fine_gate_head",
             "rpg_relation_prototype_single_head",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
@@ -2646,6 +2703,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_graph_hypercond",
             "rpg_delta_relation_hypercond",
             "rpg_relation_coarse_self_fine_head",
+            "rpg_relation_coarse_fine_four_layer_head",
+            "rpg_relation_coarse_q_fine_gate_head",
             "rpg_relation_prototype_single_head",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
@@ -2774,6 +2833,115 @@ class CleanHyperAgent(nn.Module):
                 coarse_out_b.reshape(batch_size * n_agents, -1),
                 fine_out_w.reshape(batch_size * n_agents, -1),
                 fine_out_b.reshape(batch_size * n_agents, -1),
+            ],
+            dim=-1,
+        )
+        self.latest_generated_interaction_head = generated_head.detach().view(batch_size, n_agents, -1)
+        return q.view(batch_size, n_agents, self.n_actions)
+
+    def _self_fine_condition(self, context, batch_size, n_agents):
+        move_feat, _, _, own_feat = self._split_rpg_obs(context["obs"])
+        self_feat = th.cat([move_feat, own_feat], dim=-1)
+        return self.self_fine_condition_encoder(self_feat).reshape(batch_size * n_agents, -1)
+
+    def _apply_relation_coarse_fine_four_layer_head(self, hidden, relation_condition, context):
+        batch_size, n_agents, _ = hidden.shape
+        flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
+        flat_condition = relation_condition.reshape(batch_size * n_agents, -1)
+        self_condition = self._self_fine_condition(context, batch_size, n_agents)
+
+        coarse_l1_w = self.relation_coarse_layer1_w(flat_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.hidden_dim
+        )
+        coarse_l1_b = self.relation_coarse_layer1_b(flat_condition).view(
+            batch_size * n_agents, 1, self.hidden_dim
+        )
+        coarse_l2_w = self.relation_coarse_layer2_w(flat_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.hidden_dim
+        )
+        coarse_l2_b = self.relation_coarse_layer2_b(flat_condition).view(
+            batch_size * n_agents, 1, self.hidden_dim
+        )
+        fine_l3_w = self.self_fine_layer3_w(self_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.hidden_dim
+        )
+        fine_l3_b = self.self_fine_layer3_b(self_condition).view(
+            batch_size * n_agents, 1, self.hidden_dim
+        )
+        fine_l4_w = self.self_fine_layer4_w(self_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.n_actions
+        )
+        fine_l4_b = self.self_fine_layer4_b(self_condition).view(
+            batch_size * n_agents, 1, self.n_actions
+        )
+
+        current = F.elu(th.bmm(flat_hidden, coarse_l1_w) + coarse_l1_b)
+        current = F.elu(th.bmm(current, coarse_l2_w) + coarse_l2_b)
+        current = F.elu(th.bmm(current, fine_l3_w) + fine_l3_b)
+        q = th.bmm(current, fine_l4_w) + fine_l4_b
+        generated_head = th.cat(
+            [
+                coarse_l1_w.reshape(batch_size * n_agents, -1),
+                coarse_l1_b.reshape(batch_size * n_agents, -1),
+                coarse_l2_w.reshape(batch_size * n_agents, -1),
+                coarse_l2_b.reshape(batch_size * n_agents, -1),
+                fine_l3_w.reshape(batch_size * n_agents, -1),
+                fine_l3_b.reshape(batch_size * n_agents, -1),
+                fine_l4_w.reshape(batch_size * n_agents, -1),
+                fine_l4_b.reshape(batch_size * n_agents, -1),
+            ],
+            dim=-1,
+        )
+        self.latest_generated_interaction_head = generated_head.detach().view(batch_size, n_agents, -1)
+        return q.view(batch_size, n_agents, self.n_actions)
+
+    def _apply_relation_coarse_q_fine_gate_head(self, hidden, relation_condition, context):
+        batch_size, n_agents, _ = hidden.shape
+        flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
+        flat_condition = relation_condition.reshape(batch_size * n_agents, -1)
+        self_condition = self._self_fine_condition(context, batch_size, n_agents)
+
+        coarse_bottleneck_w = self.relation_coarse_bottleneck_w(flat_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.hidden_dim
+        )
+        coarse_bottleneck_b = self.relation_coarse_bottleneck_b(flat_condition).view(
+            batch_size * n_agents, 1, self.hidden_dim
+        )
+        coarse_out_w = self.relation_coarse_out_w(flat_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.n_actions
+        )
+        coarse_out_b = self.relation_coarse_out_b(flat_condition).view(
+            batch_size * n_agents, 1, self.n_actions
+        )
+        coarse_mid = F.elu(th.bmm(flat_hidden, coarse_bottleneck_w) + coarse_bottleneck_b)
+        coarse_q = th.bmm(coarse_mid, coarse_out_w) + coarse_out_b
+
+        gate_bottleneck_w = self.self_fine_gate_bottleneck_w(self_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.hidden_dim
+        )
+        gate_bottleneck_b = self.self_fine_gate_bottleneck_b(self_condition).view(
+            batch_size * n_agents, 1, self.hidden_dim
+        )
+        gate_out_w = self.self_fine_gate_out_w(self_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.n_actions
+        )
+        gate_out_b = self.self_fine_gate_out_b(self_condition).view(
+            batch_size * n_agents, 1, self.n_actions
+        )
+        gate_mid = F.elu(th.bmm(flat_hidden, gate_bottleneck_w) + gate_bottleneck_b)
+        gate = th.sigmoid(th.bmm(gate_mid, gate_out_w) + gate_out_b)
+        q = coarse_q + self.self_fine_gate_scale * th.log((2.0 * gate).clamp(min=1e-6))
+
+        generated_head = th.cat(
+            [
+                coarse_bottleneck_w.reshape(batch_size * n_agents, -1),
+                coarse_bottleneck_b.reshape(batch_size * n_agents, -1),
+                coarse_out_w.reshape(batch_size * n_agents, -1),
+                coarse_out_b.reshape(batch_size * n_agents, -1),
+                gate_bottleneck_w.reshape(batch_size * n_agents, -1),
+                gate_bottleneck_b.reshape(batch_size * n_agents, -1),
+                gate_out_w.reshape(batch_size * n_agents, -1),
+                gate_out_b.reshape(batch_size * n_agents, -1),
             ],
             dim=-1,
         )
@@ -3009,6 +3177,8 @@ class CleanHyperAgent(nn.Module):
             "rpg_topk_entity_relation_hypercond",
             "rpg_action_edge_graph_hypercond",
             "rpg_relation_coarse_self_fine_head",
+            "rpg_relation_coarse_fine_four_layer_head",
+            "rpg_relation_coarse_q_fine_gate_head",
             "rpg_relation_prototype_single_head",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
@@ -3068,6 +3238,8 @@ class CleanHyperAgent(nn.Module):
                 "rpg_entity_selfattn_relation_hypercond",
                 "rpg_topk_entity_relation_hypercond",
                 "rpg_relation_coarse_self_fine_head",
+                "rpg_relation_coarse_fine_four_layer_head",
+                "rpg_relation_coarse_q_fine_gate_head",
                 "rpg_relation_prototype_single_head",
                 "rpg_fixed_structured_maker",
                 "rpg_fixed_linear_structured_maker",
@@ -3095,6 +3267,10 @@ class CleanHyperAgent(nn.Module):
                     self.latest_condition = condition.detach()
                     if self.model_type == "rpg_relation_coarse_self_fine_head":
                         q = self._apply_relation_coarse_self_fine_head(hidden, relation_condition, context)
+                    elif self.model_type == "rpg_relation_coarse_fine_four_layer_head":
+                        q = self._apply_relation_coarse_fine_four_layer_head(hidden, relation_condition, context)
+                    elif self.model_type == "rpg_relation_coarse_q_fine_gate_head":
+                        q = self._apply_relation_coarse_q_fine_gate_head(hidden, relation_condition, context)
                     elif self.model_type == "rpg_relation_prototype_single_head":
                         q = self._apply_relation_prototype_single_head(hidden, relation_condition, test_mode)
                     else:

@@ -178,6 +178,18 @@ hypernet_layers: 2
 #                                       full MLP Q-head, while self features
 #                                       generate a small final-layer delta for
 #                                       fine-grained agent-specific tuning.
+# - rpg_relation_coarse_fine_four_layer_head: decision-maker ablation. It uses
+#                                             relation pattern to generate the
+#                                             first two MLP layers and self
+#                                             features to generate the last two
+#                                             layers, avoiding direct weight
+#                                             addition between coarse and fine
+#                                             generators.
+# - rpg_relation_coarse_q_fine_gate_head: decision-maker ablation. It first
+#                                         uses relation pattern to generate a
+#                                         coarse Q-head, then uses self features
+#                                         to generate an action-wise gate that
+#                                         suppresses less relevant actions.
 # - rpg_relation_prototype_single_head: decision-maker ablation. It removes the
 #                                       ego/interaction split and routes each
 #                                       relation pattern to one of K learned
@@ -225,6 +237,7 @@ clean_rpg_interaction_hidden_dim: 16
 clean_rpg_interaction_experts: 4
 clean_rpg_residual_gate_bias: -1.0
 clean_self_fine_delta_scale: 0.1
+clean_self_fine_gate_scale: 1.0
 clean_relation_prototypes: 4
 clean_relation_topk: 5
 clean_action_pred_loss_coef: 0.05

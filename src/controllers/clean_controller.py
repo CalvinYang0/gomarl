@@ -28,6 +28,8 @@ class CleanMAC(BasicMAC):
             "rpg_action_edge_graph_hypercond",
             "rpg_delta_relation_hypercond",
             "rpg_relation_coarse_self_fine_head",
+            "rpg_relation_coarse_fine_four_layer_head",
+            "rpg_relation_coarse_q_fine_gate_head",
             "rpg_relation_prototype_single_head",
             "rpg_fixed_structured_maker",
             "rpg_fixed_linear_structured_maker",
