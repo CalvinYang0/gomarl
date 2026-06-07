@@ -186,6 +186,28 @@ hypernet_layers: 2
 #                                             removes the special self encoder;
 #                                             the acting agent is encoded as an
 #                                             ordinary ally node.
+# - rpg_action_edge_prev_oracle_graph_hypercond: oracle diagnostic using
+#                                                previous-step true actions as
+#                                                graph edges during training,
+#                                                avoiding current-action
+#                                                leakage before action choice.
+# - rpg_action_edge_public_pred_hypercond: action-edge graph variant whose
+#                                          action predictor reads only public
+#                                          entity state rather than full local
+#                                          observations.
+# - rpg_action_edge_public_memory_hypercond: public-predictor variant that
+#                                            fills currently missing public
+#                                            entity slots with their previous
+#                                            observed public values.
+# - rpg_action_edge_global_public_pred_hypercond: training diagnostic. During
+#                                                 non-test rollouts/training it
+#                                                 fills public entity state from
+#                                                 centralized state; test still
+#                                                 uses local observations.
+# - rpg_action_edge_target_context_hypercond: target-level graph variant. It
+#                                             adds graph-updated enemy tokens
+#                                             to attack-target tokens before
+#                                             the structured maker.
 # - rpg_action_edge_coarse_private_fine_gate_hypercond: decision-maker variant.
 #                                                       The action-edge graph
 #                                                       condition generates a
@@ -194,6 +216,16 @@ hypernet_layers: 2
 #                                                       information generates
 #                                                       an action-wise fine
 #                                                       gate.
+# - rpg_public_hyper_private_input_single_head: single-head ablation. Public
+#                                               entity information generates a
+#                                               full two-layer MLP Q-head while
+#                                               private local information is
+#                                               encoded into the head input.
+# - rpg_private_hyper_public_input_single_head: single-head ablation with the
+#                                               roles reversed: private local
+#                                               information generates the head
+#                                               while public entity information
+#                                               enters the head input.
 # - rpg_delta_relation_hypercond: relation-generator ablation. It removes the
 #                                 relation GRU and instead combines the instant
 #                                 relation pattern with an explicit

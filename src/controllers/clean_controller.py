@@ -30,7 +30,14 @@ class CleanMAC(BasicMAC):
             "rpg_action_edge_egcn_hypercond",
             "rpg_action_edge_oracle_graph_hypercond",
             "rpg_action_edge_oracle_no_self_hypercond",
+            "rpg_action_edge_prev_oracle_graph_hypercond",
+            "rpg_action_edge_public_pred_hypercond",
+            "rpg_action_edge_public_memory_hypercond",
+            "rpg_action_edge_global_public_pred_hypercond",
+            "rpg_action_edge_target_context_hypercond",
             "rpg_action_edge_coarse_private_fine_gate_hypercond",
+            "rpg_public_hyper_private_input_single_head",
+            "rpg_private_hyper_public_input_single_head",
             "rpg_delta_relation_hypercond",
             "rpg_relation_coarse_self_fine_head",
             "rpg_relation_coarse_fine_four_layer_head",
@@ -70,6 +77,9 @@ class CleanMAC(BasicMAC):
         prev_obs = batch["obs"][:, t - 1] if t > 0 else batch["obs"][:, t].new_zeros(
             batch["obs"][:, t].shape
         )
+        prev_state = batch["state"][:, t - 1] if t > 0 else batch["state"][:, t].new_zeros(
+            batch["state"][:, t].shape
+        )
         action_targets = action_target_mask = None
         if t < batch.max_seq_length - 1:
             action_targets = batch["actions"][:, t].reshape(batch_size, self.n_agents)
@@ -81,6 +91,7 @@ class CleanMAC(BasicMAC):
             "action_targets": action_targets,
             "action_target_mask": action_target_mask,
             "state": batch["state"][:, t],
+            "prev_state": prev_state,
         }
 
     def forward(self, ep_batch, t, test_mode=False):
