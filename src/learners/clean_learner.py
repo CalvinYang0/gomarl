@@ -78,6 +78,7 @@ class CleanLearner:
             teacher_mac_out = []
             relation_conditions = [] if self.relation_mixer_gate is not None else None
             aux_losses = []
+            aux_stat_values = {}
             self.mac.init_hidden(batch.batch_size)
             for t in range(batch.max_seq_length):
                 mac_out.append(self.mac.forward(batch, t=t))
@@ -89,6 +90,12 @@ class CleanLearner:
                 aux_loss = getattr(self.mac, "latest_aux_loss", None)
                 if aux_loss is not None:
                     aux_losses.append(aux_loss)
+                for stat_name, stat_value in getattr(self.mac, "latest_aux_stats", {}).items():
+                    if stat_value is None:
+                        continue
+                    if not th.is_tensor(stat_value):
+                        stat_value = th.as_tensor(stat_value, device=batch.device, dtype=th.float32)
+                    aux_stat_values.setdefault(stat_name, []).append(stat_value.detach().float())
                 teacher_q = getattr(self.mac, "latest_teacher_q", None)
                 if teacher_q is not None:
                     teacher_mac_out.append(teacher_q)
@@ -185,6 +192,9 @@ class CleanLearner:
             self.logger.log_stat("loss_td", td_loss.item(), t_env)
             if aux_losses:
                 self.logger.log_stat("loss_aux", aux_loss.item(), t_env)
+            for stat_name, values in aux_stat_values.items():
+                if values:
+                    self.logger.log_stat(stat_name, th.stack(values).mean().item(), t_env)
             if teacher_mac_out is not None:
                 self.logger.log_stat("loss_teacher_td", teacher_td_loss.item(), t_env)
             if self.latest_relation_gate_mean is not None:

@@ -26,6 +26,11 @@ class CleanMAC(BasicMAC):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             "rpg_action_edge_graph_hypercond",
+            "rpg_action_edge_rgcn_hypercond",
+            "rpg_action_edge_egcn_hypercond",
+            "rpg_action_edge_oracle_graph_hypercond",
+            "rpg_action_edge_oracle_no_self_hypercond",
+            "rpg_action_edge_coarse_private_fine_gate_hypercond",
             "rpg_delta_relation_hypercond",
             "rpg_relation_coarse_self_fine_head",
             "rpg_relation_coarse_fine_four_layer_head",
@@ -93,6 +98,7 @@ class CleanMAC(BasicMAC):
         self.latest_graph_nodes = getattr(self.agent, "latest_graph_nodes", None)
         self.latest_condition = getattr(self.agent, "latest_condition", None)
         self.latest_aux_loss = getattr(self.agent, "latest_aux_loss", None)
+        self.latest_aux_stats = getattr(self.agent, "latest_aux_stats", {})
         self.latest_teacher_q = getattr(self.agent, "latest_teacher_q", None)
         self.latest_generated_interaction_head = getattr(self.agent, "latest_generated_interaction_head", None)
         self.latest_relation_ally_attn = getattr(self.agent, "latest_relation_ally_attn", None)

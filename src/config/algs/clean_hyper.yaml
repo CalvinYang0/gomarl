@@ -167,6 +167,33 @@ hypernet_layers: 2
 #                                    obs_{t-1}, obs_t, and delta obs, and is
 #                                    supervised by current actions as an
 #                                    auxiliary loss.
+# - rpg_action_edge_rgcn_hypercond: action-edge graph variant. It keeps the
+#                                   same nodes and predicted action edges, but
+#                                   extracts graph information with an
+#                                   R-GCN-style relation transform where action
+#                                   ids define edge relation types.
+# - rpg_action_edge_egcn_hypercond: action-edge graph variant. It keeps the
+#                                   same nodes and predicted action edges, but
+#                                   uses edge-conditioned message gates so
+#                                   action probabilities and action embeddings
+#                                   directly modulate graph messages.
+# - rpg_action_edge_oracle_graph_hypercond: oracle diagnostic. During training
+#                                           only, true current actions replace
+#                                           predicted actions when constructing
+#                                           graph edges. Test execution falls
+#                                           back to predicted edges.
+# - rpg_action_edge_oracle_no_self_hypercond: oracle diagnostic that also
+#                                             removes the special self encoder;
+#                                             the acting agent is encoded as an
+#                                             ordinary ally node.
+# - rpg_action_edge_coarse_private_fine_gate_hypercond: decision-maker variant.
+#                                                       The action-edge graph
+#                                                       condition generates a
+#                                                       coarse full Q-head, and
+#                                                       private self/local
+#                                                       information generates
+#                                                       an action-wise fine
+#                                                       gate.
 # - rpg_delta_relation_hypercond: relation-generator ablation. It removes the
 #                                 relation GRU and instead combines the instant
 #                                 relation pattern with an explicit
