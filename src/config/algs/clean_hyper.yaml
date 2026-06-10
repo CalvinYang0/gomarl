@@ -204,6 +204,18 @@ hypernet_layers: 2
 #                                          action predictor reads only public
 #                                          entity state rather than full local
 #                                          observations.
+# - rpg_action_edge_public_pred_public_hyper_private_input_single_head:
+#     action-edge public-pred condition generates a full single Q-head, while
+#     private local information enters the generated head input.
+# - rpg_action_edge_public_pred_private_hyper_public_input_single_head:
+#     private local information generates a full single Q-head, while the
+#     action-edge public-pred condition enters the generated head input.
+# - rpg_action_edge_public_pred_coarse_fine_four_layer_head:
+#     action-edge public-pred condition generates the first two MLP layers and
+#     self/private information generates the last two layers.
+# - rpg_action_edge_public_pred_coarse_q_fine_gate_head:
+#     action-edge public-pred condition generates coarse Q-values and
+#     self/private information generates an action-wise fine gate.
 # - rpg_action_edge_public_memory_hypercond: public-predictor variant that
 #                                            fills currently missing public
 #                                            entity slots with their previous

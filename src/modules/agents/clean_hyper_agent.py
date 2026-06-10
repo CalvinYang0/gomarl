@@ -7,6 +7,19 @@ import torch.nn.functional as F
 from envs.starcraft.smac_maps import get_map_params
 
 
+ACTION_EDGE_PUBLIC_PRED_SINGLE_HEAD_VARIANTS = {
+    "rpg_action_edge_public_pred_public_hyper_private_input_single_head",
+    "rpg_action_edge_public_pred_private_hyper_public_input_single_head",
+}
+ACTION_EDGE_PUBLIC_PRED_COARSE_HEAD_VARIANTS = {
+    "rpg_action_edge_public_pred_coarse_fine_four_layer_head",
+    "rpg_action_edge_public_pred_coarse_q_fine_gate_head",
+}
+ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS = (
+    ACTION_EDGE_PUBLIC_PRED_SINGLE_HEAD_VARIANTS | ACTION_EDGE_PUBLIC_PRED_COARSE_HEAD_VARIANTS
+)
+
+
 def _neg_inf_like(tensor):
     if tensor.is_floating_point():
         return th.finfo(tensor.dtype).min
@@ -1921,6 +1934,22 @@ class CleanHyperAgent(nn.Module):
         "rpg_action_edge_oracle_no_self_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_prev_oracle_graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_public_pred_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_action_edge_public_pred_public_hyper_private_input_single_head": {
+            "uses_hypernet": True,
+            "execution_scope": "ctde",
+        },
+        "rpg_action_edge_public_pred_private_hyper_public_input_single_head": {
+            "uses_hypernet": True,
+            "execution_scope": "ctde",
+        },
+        "rpg_action_edge_public_pred_coarse_fine_four_layer_head": {
+            "uses_hypernet": True,
+            "execution_scope": "ctde",
+        },
+        "rpg_action_edge_public_pred_coarse_q_fine_gate_head": {
+            "uses_hypernet": True,
+            "execution_scope": "ctde",
+        },
         "rpg_action_edge_public_memory_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_global_public_pred_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_target_context_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -2042,6 +2071,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
+            *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -2161,6 +2191,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
+            *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -2481,6 +2512,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_relation_coarse_fine_four_layer_head",
             "rpg_relation_coarse_q_fine_gate_head",
             "rpg_action_edge_coarse_private_fine_gate_hypercond",
+            *ACTION_EDGE_PUBLIC_PRED_COARSE_HEAD_VARIANTS,
         }:
             self.self_fine_condition_encoder = nn.Sequential(
                 nn.Linear(self.rpg_obs_layout["move_dim"] + self.rpg_obs_layout["own_dim"], self.cond_dim),
@@ -2494,6 +2526,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_relation_coarse_self_fine_head",
             "rpg_relation_coarse_q_fine_gate_head",
             "rpg_action_edge_coarse_private_fine_gate_hypercond",
+            "rpg_action_edge_public_pred_coarse_q_fine_gate_head",
         }:
             self.relation_coarse_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
             self.relation_coarse_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
@@ -2516,7 +2549,10 @@ class CleanHyperAgent(nn.Module):
             self.self_fine_out_w = None
             self.self_fine_out_b = None
 
-        if self.model_type == "rpg_relation_coarse_fine_four_layer_head":
+        if self.model_type in {
+            "rpg_relation_coarse_fine_four_layer_head",
+            "rpg_action_edge_public_pred_coarse_fine_four_layer_head",
+        }:
             self.relation_coarse_layer1_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
             self.relation_coarse_layer1_b = nn.Linear(self.cond_dim, self.hidden_dim)
             self.relation_coarse_layer2_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
@@ -2538,6 +2574,7 @@ class CleanHyperAgent(nn.Module):
         if self.model_type in {
             "rpg_relation_coarse_q_fine_gate_head",
             "rpg_action_edge_coarse_private_fine_gate_hypercond",
+            "rpg_action_edge_public_pred_coarse_q_fine_gate_head",
         }:
             self.self_fine_gate_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
             self.self_fine_gate_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
@@ -2572,14 +2609,21 @@ class CleanHyperAgent(nn.Module):
         if self.model_type in {
             "rpg_public_hyper_private_input_single_head",
             "rpg_private_hyper_public_input_single_head",
+            *ACTION_EDGE_PUBLIC_PRED_SINGLE_HEAD_VARIANTS,
         }:
-            public_source_dim = self._public_private_public_source_dim()
             private_source_dim = self._public_private_private_source_dim()
-            self.public_single_condition_encoder = nn.Sequential(
-                nn.Linear(public_source_dim, self.cond_dim),
-                nn.ReLU(inplace=True),
-                nn.Linear(self.cond_dim, self.cond_dim),
-            )
+            if self.model_type in {
+                "rpg_public_hyper_private_input_single_head",
+                "rpg_private_hyper_public_input_single_head",
+            }:
+                public_source_dim = self._public_private_public_source_dim()
+                self.public_single_condition_encoder = nn.Sequential(
+                    nn.Linear(public_source_dim, self.cond_dim),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(self.cond_dim, self.cond_dim),
+                )
+            else:
+                self.public_single_condition_encoder = None
             self.private_single_condition_encoder = nn.Sequential(
                 nn.Linear(private_source_dim, self.cond_dim),
                 nn.ReLU(inplace=True),
@@ -2656,6 +2700,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
+            *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -2845,6 +2890,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
+            *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -2934,6 +2980,7 @@ class CleanHyperAgent(nn.Module):
                     "public"
                     if self.model_type in {
                         "rpg_action_edge_public_pred_hypercond",
+                        *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
                         "rpg_action_edge_public_memory_hypercond",
                         "rpg_action_edge_global_public_pred_hypercond",
                         "rpg_action_edge_egcn_plus_public_pred_hypercond",
@@ -3267,6 +3314,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
+            *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -3397,6 +3445,22 @@ class CleanHyperAgent(nn.Module):
         else:
             generator_condition = private_condition
             input_condition = public_condition
+        self.latest_condition = generator_condition.detach()
+        head_input = th.cat([hidden, input_condition], dim=-1)
+        return self._apply_generated_mlp_head_from_input(
+            head_input, generator_condition, self.public_private_single_head_hypernet
+        )
+
+    def _apply_action_edge_public_pred_single_head(self, hidden, relation_condition, context):
+        private_condition = self.private_single_condition_encoder(
+            self._public_private_private_features(context)
+        )
+        if self.model_type == "rpg_action_edge_public_pred_public_hyper_private_input_single_head":
+            generator_condition = relation_condition
+            input_condition = private_condition
+        else:
+            generator_condition = private_condition
+            input_condition = relation_condition
         self.latest_condition = generator_condition.detach()
         head_input = th.cat([hidden, input_condition], dim=-1)
         return self._apply_generated_mlp_head_from_input(
@@ -3689,6 +3753,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
+            *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -3805,6 +3870,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
+            *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -3847,6 +3913,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_action_edge_oracle_no_self_hypercond",
                 "rpg_action_edge_prev_oracle_graph_hypercond",
                 "rpg_action_edge_public_pred_hypercond",
+                *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
                 "rpg_action_edge_public_memory_hypercond",
                 "rpg_action_edge_global_public_pred_hypercond",
                 "rpg_action_edge_target_context_hypercond",
@@ -3859,7 +3926,14 @@ class CleanHyperAgent(nn.Module):
                 self.latest_aux_stats = getattr(self.rpg_relation_capturer, "latest_aux_stats", {})
                 if th.is_grad_enabled() and not test_mode:
                     self.latest_aux_loss = self.action_pred_loss_coef * action_loss
-                if self.model_type == "rpg_action_edge_coarse_private_fine_gate_hypercond":
+                if self.model_type in ACTION_EDGE_PUBLIC_PRED_SINGLE_HEAD_VARIANTS:
+                    q = self._apply_action_edge_public_pred_single_head(hidden, relation_condition, context)
+                elif self.model_type == "rpg_action_edge_public_pred_coarse_fine_four_layer_head":
+                    q = self._apply_relation_coarse_fine_four_layer_head(hidden, relation_condition, context)
+                elif self.model_type in {
+                    "rpg_action_edge_coarse_private_fine_gate_hypercond",
+                    "rpg_action_edge_public_pred_coarse_q_fine_gate_head",
+                }:
                     q = self._apply_relation_coarse_q_fine_gate_head(hidden, relation_condition, context)
                 else:
                     if self.model_type in {
