@@ -983,6 +983,29 @@ class ActionEdgeGraphRelationCapturer(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(relation_dim, relation_dim),
         )
+        self.egcn_plus_actor_value = nn.Linear(relation_dim, relation_dim, bias=False)
+        self.egcn_plus_actor_gate = nn.Sequential(
+            nn.Linear(n_actions + 1, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+            nn.Sigmoid(),
+        )
+        self.egcn_plus_attack_value = nn.Sequential(
+            nn.Linear(relation_dim * 2, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.egcn_plus_attack_gate = nn.Sequential(
+            nn.Linear(n_enemies + 2, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+            nn.Sigmoid(),
+        )
+        self.egcn_plus_node_update = nn.Sequential(
+            nn.Linear(relation_dim * 2, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
         self.private_encoder = nn.Sequential(
             nn.Linear(move_dim + 4, relation_dim),
             nn.ReLU(inplace=True),
@@ -1145,6 +1168,9 @@ class ActionEdgeGraphRelationCapturer(nn.Module):
             "action_edge_encoder_pool": actor_logits.new_tensor(1.0 if self.graph_encoder_type == "pool" else 0.0),
             "action_edge_encoder_rgcn": actor_logits.new_tensor(1.0 if self.graph_encoder_type == "rgcn" else 0.0),
             "action_edge_encoder_egcn": actor_logits.new_tensor(1.0 if self.graph_encoder_type == "egcn" else 0.0),
+            "action_edge_encoder_egcn_plus": actor_logits.new_tensor(
+                1.0 if self.graph_encoder_type == "egcn_plus" else 0.0
+            ),
             "action_edge_oracle": actor_logits.new_tensor(1.0 if self.use_oracle_edges else 0.0),
             "action_edge_prev_oracle": actor_logits.new_tensor(
                 1.0 if self.use_oracle_edges and self.oracle_edge_mode == "previous" else 0.0
@@ -1254,6 +1280,34 @@ class ActionEdgeGraphRelationCapturer(nn.Module):
         enemy_context = self._masked_mean(enemy_updated, enemy_mask)
         return actor_context, enemy_context, attack_probs
 
+    def _egcn_plus_graph_context(self, actor_tokens, actor_mask, public_enemy_tokens, enemy_mask, actor_probs):
+        ego_mass = actor_probs[:, :, :, : self.n_ego_actions].sum(dim=-1, keepdim=True)
+        actor_edge_feat = th.cat([actor_probs, ego_mass], dim=-1)
+        actor_msg = self.egcn_plus_actor_value(actor_tokens) * self.egcn_plus_actor_gate(actor_edge_feat)
+        actor_msg = actor_msg * actor_mask.unsqueeze(-1).float()
+        actor_updated = self.egcn_plus_node_update(th.cat([actor_tokens, actor_msg], dim=-1))
+        actor_context = self._masked_mean(actor_updated, actor_mask)
+
+        attack_probs = actor_probs[:, :, :, self.n_ego_actions : self.n_ego_actions + self.n_enemies]
+        actor_exp = actor_tokens.unsqueeze(3).expand(-1, -1, -1, self.n_enemies, -1)
+        enemy_exp = public_enemy_tokens.unsqueeze(2).expand(-1, -1, self.n_agents, -1, -1)
+        target_attack_prob = attack_probs.unsqueeze(-1)
+        attack_dist = attack_probs.unsqueeze(3).expand(-1, -1, -1, self.n_enemies, -1)
+        ego_mass_exp = ego_mass.unsqueeze(3).expand(-1, -1, -1, self.n_enemies, -1)
+        attack_edge_feat = th.cat([attack_dist, target_attack_prob, ego_mass_exp], dim=-1)
+        attack_value = self.egcn_plus_attack_value(th.cat([actor_exp, enemy_exp], dim=-1))
+        attack_msg = attack_value * self.egcn_plus_attack_gate(attack_edge_feat)
+        edge_weight = (
+            target_attack_prob
+            * actor_mask.unsqueeze(-1).unsqueeze(-1).float()
+            * enemy_mask.unsqueeze(2).unsqueeze(-1).float()
+        )
+        enemy_received = (attack_msg * edge_weight).sum(dim=2) / edge_weight.sum(dim=2).clamp(min=1.0)
+        enemy_updated = self.egcn_plus_node_update(th.cat([public_enemy_tokens, enemy_received], dim=-1))
+        self.latest_enemy_graph_tokens = enemy_updated * enemy_mask.unsqueeze(-1).float()
+        enemy_context = self._masked_mean(enemy_updated, enemy_mask)
+        return actor_context, enemy_context, attack_probs
+
     def forward(
         self,
         self_feat,
@@ -1331,6 +1385,10 @@ class ActionEdgeGraphRelationCapturer(nn.Module):
         )
         if self.graph_encoder_type == "rgcn":
             actor_context, enemy_context, attack_probs = self._rgcn_graph_context(
+                actor_tokens, actor_mask, public_enemy_tokens, enemy_mask, edge_probs
+            )
+        elif self.graph_encoder_type == "egcn_plus":
+            actor_context, enemy_context, attack_probs = self._egcn_plus_graph_context(
                 actor_tokens, actor_mask, public_enemy_tokens, enemy_mask, edge_probs
             )
         elif self.graph_encoder_type == "egcn":
@@ -1858,6 +1916,7 @@ class CleanHyperAgent(nn.Module):
         "rpg_action_edge_graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_rgcn_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_egcn_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_action_edge_egcn_plus_public_pred_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_oracle_graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_oracle_no_self_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_prev_oracle_graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -1978,6 +2037,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
+            "rpg_action_edge_egcn_plus_public_pred_hypercond",
             "rpg_action_edge_oracle_graph_hypercond",
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
@@ -2096,6 +2156,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
+            "rpg_action_edge_egcn_plus_public_pred_hypercond",
             "rpg_action_edge_oracle_graph_hypercond",
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
@@ -2154,6 +2215,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
+            "rpg_action_edge_egcn_plus_public_pred_hypercond",
             "rpg_action_edge_oracle_graph_hypercond",
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
@@ -2216,6 +2278,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_action_edge_graph_hypercond",
                 "rpg_action_edge_rgcn_hypercond",
                 "rpg_action_edge_egcn_hypercond",
+                "rpg_action_edge_egcn_plus_public_pred_hypercond",
                 "rpg_action_edge_oracle_graph_hypercond",
                 "rpg_action_edge_oracle_no_self_hypercond",
                 "rpg_action_edge_prev_oracle_graph_hypercond",
@@ -2366,6 +2429,7 @@ class CleanHyperAgent(nn.Module):
                     "rpg_action_edge_graph_hypercond",
                     "rpg_action_edge_rgcn_hypercond",
                     "rpg_action_edge_egcn_hypercond",
+                    "rpg_action_edge_egcn_plus_public_pred_hypercond",
                     "rpg_action_edge_oracle_graph_hypercond",
                     "rpg_action_edge_oracle_no_self_hypercond",
                     "rpg_action_edge_prev_oracle_graph_hypercond",
@@ -2587,6 +2651,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
+            "rpg_action_edge_egcn_plus_public_pred_hypercond",
             "rpg_action_edge_oracle_graph_hypercond",
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
@@ -2775,6 +2840,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
+            "rpg_action_edge_egcn_plus_public_pred_hypercond",
             "rpg_action_edge_oracle_graph_hypercond",
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
@@ -2854,6 +2920,7 @@ class CleanHyperAgent(nn.Module):
                 graph_encoder_type={
                     "rpg_action_edge_rgcn_hypercond": "rgcn",
                     "rpg_action_edge_egcn_hypercond": "egcn",
+                    "rpg_action_edge_egcn_plus_public_pred_hypercond": "egcn_plus",
                 }.get(self.model_type, "pool"),
                 use_oracle_edges=self.model_type in {
                     "rpg_action_edge_oracle_graph_hypercond",
@@ -2869,11 +2936,13 @@ class CleanHyperAgent(nn.Module):
                         "rpg_action_edge_public_pred_hypercond",
                         "rpg_action_edge_public_memory_hypercond",
                         "rpg_action_edge_global_public_pred_hypercond",
+                        "rpg_action_edge_egcn_plus_public_pred_hypercond",
                     }
                     else "full"
                 ),
                 use_public_memory=self.model_type == "rpg_action_edge_public_memory_hypercond",
-                return_target_context=self.model_type == "rpg_action_edge_target_context_hypercond",
+                return_target_context=self.model_type
+                in {"rpg_action_edge_target_context_hypercond", "rpg_action_edge_egcn_plus_public_pred_hypercond"},
                 no_self_identity=self.model_type == "rpg_action_edge_oracle_no_self_hypercond",
             )
         self.rpg_relation_capturer = capturer_cls(**capturer_kwargs)
@@ -3193,6 +3262,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
+            "rpg_action_edge_egcn_plus_public_pred_hypercond",
             "rpg_action_edge_oracle_graph_hypercond",
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
@@ -3614,6 +3684,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
+            "rpg_action_edge_egcn_plus_public_pred_hypercond",
             "rpg_action_edge_oracle_graph_hypercond",
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
@@ -3729,6 +3800,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
+            "rpg_action_edge_egcn_plus_public_pred_hypercond",
             "rpg_action_edge_oracle_graph_hypercond",
             "rpg_action_edge_oracle_no_self_hypercond",
             "rpg_action_edge_prev_oracle_graph_hypercond",
@@ -3770,6 +3842,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_action_edge_graph_hypercond",
                 "rpg_action_edge_rgcn_hypercond",
                 "rpg_action_edge_egcn_hypercond",
+                "rpg_action_edge_egcn_plus_public_pred_hypercond",
                 "rpg_action_edge_oracle_graph_hypercond",
                 "rpg_action_edge_oracle_no_self_hypercond",
                 "rpg_action_edge_prev_oracle_graph_hypercond",
@@ -3789,7 +3862,10 @@ class CleanHyperAgent(nn.Module):
                 if self.model_type == "rpg_action_edge_coarse_private_fine_gate_hypercond":
                     q = self._apply_relation_coarse_q_fine_gate_head(hidden, relation_condition, context)
                 else:
-                    if self.model_type == "rpg_action_edge_target_context_hypercond":
+                    if self.model_type in {
+                        "rpg_action_edge_target_context_hypercond",
+                        "rpg_action_edge_egcn_plus_public_pred_hypercond",
+                    }:
                         graph_enemy_tokens = getattr(self.rpg_relation_capturer, "latest_enemy_graph_tokens", None)
                         if graph_enemy_tokens is not None:
                             enemy_tokens = enemy_tokens + graph_enemy_tokens

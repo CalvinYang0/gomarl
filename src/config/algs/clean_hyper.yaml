@@ -177,6 +177,15 @@ hypernet_layers: 2
 #                                   uses edge-conditioned message gates so
 #                                   action probabilities and action embeddings
 #                                   directly modulate graph messages.
+# - rpg_action_edge_egcn_plus_public_pred_hypercond: EGCN+ action-edge graph
+#                                                    variant. It predicts edges
+#                                                    from public entity state,
+#                                                    encodes edge features from
+#                                                    raw action probabilities
+#                                                    instead of action id
+#                                                    embeddings, and injects
+#                                                    graph-updated enemy tokens
+#                                                    into target scoring.
 # - rpg_action_edge_oracle_graph_hypercond: oracle diagnostic. During training
 #                                           only, true current actions replace
 #                                           predicted actions when constructing
