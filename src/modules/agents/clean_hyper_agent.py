@@ -18,10 +18,20 @@ ACTION_EDGE_PUBLIC_PRED_COARSE_HEAD_VARIANTS = {
 ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS = (
     ACTION_EDGE_PUBLIC_PRED_SINGLE_HEAD_VARIANTS | ACTION_EDGE_PUBLIC_PRED_COARSE_HEAD_VARIANTS
 )
-ACTION_EDGE_PUBLIC_PRED_REL_PRIVATE_VARIANTS = {
-    "rpg_action_edge_public_pred_relation_private_single_head",
-    "rpg_action_edge_public_pred_relation_private_decision_maker",
+ACTION_EDGE_STRUCT_TRANSFORMER_REL_PRIVATE_VARIANTS = {
+    "rpg_action_edge_graphormer_relation_private_single_head",
+    "rpg_action_edge_graphit_relation_private_single_head",
+    "rpg_action_edge_edgeset_relation_private_single_head",
+    "rpg_action_edge_motif_transformer_relation_private_single_head",
 }
+ACTION_EDGE_REL_PRIVATE_SINGLE_HEAD_VARIANTS = (
+    {"rpg_action_edge_public_pred_relation_private_single_head"}
+    | ACTION_EDGE_STRUCT_TRANSFORMER_REL_PRIVATE_VARIANTS
+)
+ACTION_EDGE_REL_PRIVATE_VARIANTS = (
+    ACTION_EDGE_REL_PRIVATE_SINGLE_HEAD_VARIANTS
+    | {"rpg_action_edge_public_pred_relation_private_decision_maker"}
+)
 
 
 def _neg_inf_like(tensor):
@@ -76,6 +86,55 @@ class MLPHyperParameterGenerator(nn.Module):
             weights.append(weight)
             biases.append(bias)
         return weights, biases
+
+
+class BiasMultiHeadSelfAttention(nn.Module):
+    def __init__(self, dim, num_heads):
+        super().__init__()
+        if dim % num_heads != 0:
+            raise ValueError("dim must be divisible by num_heads")
+        self.dim = dim
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.qkv = nn.Linear(dim, dim * 3)
+        self.out_proj = nn.Linear(dim, dim)
+
+    def forward(self, x, key_mask, attn_bias=None):
+        batch_size, n_tokens, _ = x.shape
+        qkv = self.qkv(x).view(batch_size, n_tokens, 3, self.num_heads, self.head_dim)
+        q, k, v = qkv.unbind(dim=2)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        scores = th.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        if attn_bias is not None:
+            scores = scores + attn_bias
+        if key_mask is not None:
+            scores = scores.masked_fill(~key_mask[:, None, None, :], -1e4)
+        attn = F.softmax(scores, dim=-1)
+        out = th.matmul(attn, v).transpose(1, 2).contiguous().view(batch_size, n_tokens, self.dim)
+        return self.out_proj(out)
+
+
+class BiasTransformerEncoderLayer(nn.Module):
+    def __init__(self, dim, num_heads):
+        super().__init__()
+        self.self_attn = BiasMultiHeadSelfAttention(dim, num_heads)
+        self.norm1 = nn.LayerNorm(dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(dim, dim * 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(dim * 2, dim),
+        )
+        self.norm2 = nn.LayerNorm(dim)
+
+    def forward(self, x, key_mask, attn_bias=None):
+        x = self.norm1(x + self.self_attn(x, key_mask, attn_bias=attn_bias))
+        x = self.norm2(x + self.ffn(x))
+        if key_mask is not None:
+            x = x * key_mask.unsqueeze(-1).float()
+        return x
 
 
 class StandardGraphConv(nn.Module):
@@ -1022,6 +1081,31 @@ class ActionEdgeGraphRelationCapturer(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(relation_dim, relation_dim),
         )
+        self.struct_num_heads = 4 if relation_dim % 4 == 0 else 1
+        self.struct_graph_token = nn.Parameter(th.zeros(1, 1, relation_dim))
+        self.struct_role_embedding = nn.Embedding(3, relation_dim)
+        self.struct_centrality_encoder = nn.Sequential(
+            nn.Linear(4, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.struct_pair_bias = nn.Sequential(
+            nn.Linear(6, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, self.struct_num_heads),
+        )
+        self.struct_kernel_scale = nn.Parameter(th.ones(self.struct_num_heads))
+        self.struct_transformer = nn.ModuleList(
+            [BiasTransformerEncoderLayer(relation_dim, self.struct_num_heads)]
+        )
+        self.edge_set_encoder = nn.Sequential(
+            nn.Linear(relation_dim * 2 + 1, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.edge_set_transformer = nn.ModuleList(
+            [BiasTransformerEncoderLayer(relation_dim, self.struct_num_heads)]
+        )
         self.private_encoder = nn.Sequential(
             nn.Linear(move_dim + 4, relation_dim),
             nn.ReLU(inplace=True),
@@ -1187,6 +1271,18 @@ class ActionEdgeGraphRelationCapturer(nn.Module):
             "action_edge_encoder_egcn_plus": actor_logits.new_tensor(
                 1.0 if self.graph_encoder_type == "egcn_plus" else 0.0
             ),
+            "action_edge_encoder_graphormer": actor_logits.new_tensor(
+                1.0 if self.graph_encoder_type == "graphormer" else 0.0
+            ),
+            "action_edge_encoder_graphit": actor_logits.new_tensor(
+                1.0 if self.graph_encoder_type == "graphit" else 0.0
+            ),
+            "action_edge_encoder_edgeset": actor_logits.new_tensor(
+                1.0 if self.graph_encoder_type == "edgeset" else 0.0
+            ),
+            "action_edge_encoder_motif_transformer": actor_logits.new_tensor(
+                1.0 if self.graph_encoder_type == "motif_transformer" else 0.0
+            ),
             "action_edge_oracle": actor_logits.new_tensor(1.0 if self.use_oracle_edges else 0.0),
             "action_edge_prev_oracle": actor_logits.new_tensor(
                 1.0 if self.use_oracle_edges and self.oracle_edge_mode == "previous" else 0.0
@@ -1328,6 +1424,204 @@ class ActionEdgeGraphRelationCapturer(nn.Module):
         enemy_context = self._masked_mean(enemy_updated, enemy_mask)
         return actor_context, enemy_context, attack_probs
 
+    def _structure_role_ids(self, device):
+        return th.tensor(
+            [0] + [1] * (self.n_agents - 1) + [2] * self.n_enemies,
+            device=device,
+            dtype=th.long,
+        )
+
+    def _masked_mean_flat(self, tokens, mask):
+        denom = mask.sum(dim=1, keepdim=True).clamp(min=1).float()
+        return (tokens * mask.unsqueeze(-1).float()).sum(dim=1) / denom
+
+    def _structure_node_inputs(self, actor_tokens, actor_mask, public_enemy_tokens, enemy_mask, attack_probs, motif=False):
+        batch_size, n_agents, _, _ = actor_tokens.shape
+        attack_weight = (
+            attack_probs
+            * actor_mask.unsqueeze(-1).float()
+            * enemy_mask.unsqueeze(2).float()
+        )
+        actor_sum = attack_weight.sum(dim=-1)
+        actor_max = attack_weight.max(dim=-1).values
+        enemy_sum = attack_weight.sum(dim=2)
+        enemy_max = attack_weight.max(dim=2).values
+
+        actor_extra = th.zeros_like(actor_sum)
+        actor_extra_max = th.zeros_like(actor_sum)
+        enemy_extra = th.zeros_like(enemy_sum)
+        enemy_extra_max = th.zeros_like(enemy_sum)
+        if motif:
+            flat_p = attack_weight.reshape(batch_size * n_agents, self.n_agents, self.n_enemies)
+            cofocus = th.bmm(flat_p, flat_p.transpose(1, 2)) / max(1, self.n_enemies)
+            pressure = th.bmm(flat_p.transpose(1, 2), flat_p) / max(1, self.n_agents)
+            actor_extra = cofocus.sum(dim=-1).view(batch_size, n_agents, self.n_agents)
+            actor_extra_max = cofocus.max(dim=-1).values.view(batch_size, n_agents, self.n_agents)
+            enemy_extra = pressure.sum(dim=-1).view(batch_size, n_agents, self.n_enemies)
+            enemy_extra_max = pressure.max(dim=-1).values.view(batch_size, n_agents, self.n_enemies)
+
+        actor_centrality = th.stack([actor_sum, actor_max, actor_extra, actor_extra_max], dim=-1)
+        enemy_centrality = th.stack([enemy_sum, enemy_max, enemy_extra, enemy_extra_max], dim=-1)
+        centrality = th.cat([actor_centrality, enemy_centrality], dim=2)
+        node_tokens = th.cat([actor_tokens, public_enemy_tokens], dim=2)
+        node_mask = th.cat([actor_mask, enemy_mask], dim=2)
+        role_emb = self.struct_role_embedding(self._structure_role_ids(node_tokens.device)).view(
+            1, 1, self.n_agents + self.n_enemies, -1
+        )
+        node_tokens = node_tokens + role_emb + self.struct_centrality_encoder(centrality)
+        node_tokens = node_tokens * node_mask.unsqueeze(-1).float()
+        return node_tokens, node_mask, attack_weight
+
+    def _directed_attack_adjacency(self, attack_weight):
+        batch_size, n_agents, _, _ = attack_weight.shape
+        n_nodes = self.n_agents + self.n_enemies
+        adj = attack_weight.new_zeros(batch_size * n_agents, n_nodes, n_nodes)
+        flat_p = attack_weight.reshape(batch_size * n_agents, self.n_agents, self.n_enemies)
+        adj[:, : self.n_agents, self.n_agents :] = flat_p
+        return adj, flat_p
+
+    def _graphormer_bias(self, attack_weight, motif=False):
+        directed, flat_p = self._directed_attack_adjacency(attack_weight)
+        n_flat, n_nodes, _ = directed.shape
+        sym_adj = directed + directed.transpose(1, 2)
+        degree = sym_adj.sum(dim=-1, keepdim=True).clamp(min=1.0)
+        norm_adj = sym_adj / degree
+        if motif:
+            two_hop = directed.new_zeros(n_flat, n_nodes, n_nodes)
+            two_hop[:, : self.n_agents, : self.n_agents] = th.bmm(
+                flat_p, flat_p.transpose(1, 2)
+            ) / max(1, self.n_enemies)
+            two_hop[:, self.n_agents :, self.n_agents :] = th.bmm(
+                flat_p.transpose(1, 2), flat_p
+            ) / max(1, self.n_agents)
+        else:
+            two_hop = th.bmm(norm_adj, norm_adj)
+
+        idx = th.arange(n_nodes, device=directed.device)
+        actor_node = idx < self.n_agents
+        enemy_node = ~actor_node
+        actor_actor = (actor_node[:, None] & actor_node[None, :]).to(dtype=directed.dtype)
+        enemy_enemy = (enemy_node[:, None] & enemy_node[None, :]).to(dtype=directed.dtype)
+        cross = (actor_node[:, None] ^ actor_node[None, :]).to(dtype=directed.dtype)
+        pair_feat = th.stack(
+            [
+                directed,
+                directed.transpose(1, 2),
+                two_hop,
+                actor_actor.expand_as(directed),
+                enemy_enemy.expand_as(directed),
+                cross.expand_as(directed),
+            ],
+            dim=-1,
+        )
+        node_bias = self.struct_pair_bias(pair_feat).permute(0, 3, 1, 2).contiguous()
+        full_bias = node_bias.new_zeros(n_flat, self.struct_num_heads, n_nodes + 1, n_nodes + 1)
+        full_bias[:, :, 1:, 1:] = node_bias
+        return full_bias
+
+    def _graphit_bias(self, attack_weight):
+        directed, _ = self._directed_attack_adjacency(attack_weight)
+        n_flat, n_nodes, _ = directed.shape
+        sym_adj = directed + directed.transpose(1, 2)
+        degree = sym_adj.sum(dim=-1, keepdim=True).clamp(min=1.0)
+        norm_adj = sym_adj / degree
+        identity = th.eye(n_nodes, device=directed.device, dtype=directed.dtype).unsqueeze(0)
+        two_hop = th.bmm(norm_adj, norm_adj)
+        kernel = (identity + 0.7 * norm_adj + 0.3 * two_hop).clamp(min=1e-4)
+        node_bias = kernel.log().unsqueeze(1) * self.struct_kernel_scale.view(1, -1, 1, 1)
+        full_bias = node_bias.new_zeros(n_flat, self.struct_num_heads, n_nodes + 1, n_nodes + 1)
+        full_bias[:, :, 1:, 1:] = node_bias
+        return full_bias
+
+    def _run_struct_transformer(self, node_tokens, node_mask, attn_bias):
+        batch_size, n_agents, n_nodes, _ = node_tokens.shape
+        flat_nodes = node_tokens.reshape(batch_size * n_agents, n_nodes, self.relation_dim)
+        flat_mask = node_mask.reshape(batch_size * n_agents, n_nodes)
+        graph_token = self.struct_graph_token.expand(batch_size * n_agents, -1, -1)
+        tokens = th.cat([graph_token, flat_nodes], dim=1)
+        token_mask = th.cat(
+            [th.ones(batch_size * n_agents, 1, device=node_mask.device, dtype=th.bool), flat_mask],
+            dim=1,
+        )
+        for layer in self.struct_transformer:
+            tokens = layer(tokens, token_mask, attn_bias=attn_bias)
+        graph_context = tokens[:, 0]
+        updated_nodes = tokens[:, 1:]
+        actor_updated = updated_nodes[:, : self.n_agents]
+        enemy_updated = updated_nodes[:, self.n_agents :]
+        actor_mean = self._masked_mean_flat(actor_updated, flat_mask[:, : self.n_agents])
+        enemy_mean = self._masked_mean_flat(enemy_updated, flat_mask[:, self.n_agents :])
+        self.latest_enemy_graph_tokens = (
+            enemy_updated.view(batch_size, n_agents, self.n_enemies, self.relation_dim)
+            * node_mask[:, :, self.n_agents :].unsqueeze(-1).float()
+        )
+        return (
+            (graph_context + actor_mean).view(batch_size, n_agents, self.relation_dim),
+            enemy_mean.view(batch_size, n_agents, self.relation_dim),
+        )
+
+    def _structure_transformer_graph_context(
+        self, actor_tokens, actor_mask, public_enemy_tokens, enemy_mask, actor_probs, mode
+    ):
+        attack_probs = actor_probs[:, :, :, self.n_ego_actions : self.n_ego_actions + self.n_enemies]
+        motif = mode == "motif_transformer"
+        node_tokens, node_mask, attack_weight = self._structure_node_inputs(
+            actor_tokens, actor_mask, public_enemy_tokens, enemy_mask, attack_probs, motif=motif
+        )
+        if mode == "graphit":
+            attn_bias = self._graphit_bias(attack_weight)
+        elif mode in {"graphormer", "motif_transformer"}:
+            attn_bias = self._graphormer_bias(attack_weight, motif=motif)
+        else:
+            attn_bias = None
+        actor_context, enemy_context = self._run_struct_transformer(node_tokens, node_mask, attn_bias)
+        return actor_context, enemy_context, attack_probs
+
+    def _edgeset_transformer_graph_context(self, actor_tokens, actor_mask, public_enemy_tokens, enemy_mask, actor_probs):
+        batch_size, n_agents, _, _ = actor_tokens.shape
+        attack_probs = actor_probs[:, :, :, self.n_ego_actions : self.n_ego_actions + self.n_enemies]
+        node_tokens, node_mask, attack_weight = self._structure_node_inputs(
+            actor_tokens, actor_mask, public_enemy_tokens, enemy_mask, attack_probs, motif=False
+        )
+        actor_exp = actor_tokens.unsqueeze(3).expand(-1, -1, -1, self.n_enemies, -1)
+        enemy_exp = public_enemy_tokens.unsqueeze(2).expand(-1, -1, self.n_agents, -1, -1)
+        edge_tokens = self.edge_set_encoder(
+            th.cat([actor_exp, enemy_exp, attack_weight.unsqueeze(-1)], dim=-1)
+        )
+        edge_mask = actor_mask.unsqueeze(-1) & enemy_mask.unsqueeze(2)
+        n_nodes = self.n_agents + self.n_enemies
+        flat_nodes = node_tokens.reshape(batch_size * n_agents, n_nodes, self.relation_dim)
+        flat_node_mask = node_mask.reshape(batch_size * n_agents, n_nodes)
+        flat_edges = edge_tokens.reshape(batch_size * n_agents, self.n_agents * self.n_enemies, self.relation_dim)
+        flat_edge_mask = edge_mask.reshape(batch_size * n_agents, self.n_agents * self.n_enemies)
+        graph_token = self.struct_graph_token.expand(batch_size * n_agents, -1, -1)
+        tokens = th.cat([graph_token, flat_nodes, flat_edges], dim=1)
+        token_mask = th.cat(
+            [
+                th.ones(batch_size * n_agents, 1, device=node_mask.device, dtype=th.bool),
+                flat_node_mask,
+                flat_edge_mask,
+            ],
+            dim=1,
+        )
+        for layer in self.edge_set_transformer:
+            tokens = layer(tokens, token_mask, attn_bias=None)
+        graph_context = tokens[:, 0]
+        updated_nodes = tokens[:, 1 : 1 + n_nodes]
+        actor_updated = updated_nodes[:, : self.n_agents]
+        enemy_updated = updated_nodes[:, self.n_agents :]
+        actor_mean = self._masked_mean_flat(actor_updated, flat_node_mask[:, : self.n_agents])
+        enemy_mean = self._masked_mean_flat(enemy_updated, flat_node_mask[:, self.n_agents :])
+        self.latest_enemy_graph_tokens = (
+            enemy_updated.view(batch_size, n_agents, self.n_enemies, self.relation_dim)
+            * enemy_mask.unsqueeze(-1).float()
+        )
+        return (
+            (graph_context + actor_mean).view(batch_size, n_agents, self.relation_dim),
+            enemy_mean.view(batch_size, n_agents, self.relation_dim),
+            attack_probs,
+        )
+
     def forward(
         self,
         self_feat,
@@ -1413,6 +1707,14 @@ class ActionEdgeGraphRelationCapturer(nn.Module):
             )
         elif self.graph_encoder_type == "egcn":
             actor_context, enemy_context, attack_probs = self._egcn_graph_context(
+                actor_tokens, actor_mask, public_enemy_tokens, enemy_mask, edge_probs
+            )
+        elif self.graph_encoder_type in {"graphormer", "graphit", "motif_transformer"}:
+            actor_context, enemy_context, attack_probs = self._structure_transformer_graph_context(
+                actor_tokens, actor_mask, public_enemy_tokens, enemy_mask, edge_probs, self.graph_encoder_type
+            )
+        elif self.graph_encoder_type == "edgeset":
+            actor_context, enemy_context, attack_probs = self._edgeset_transformer_graph_context(
                 actor_tokens, actor_mask, public_enemy_tokens, enemy_mask, edge_probs
             )
         else:
@@ -1965,6 +2267,22 @@ class CleanHyperAgent(nn.Module):
             "uses_hypernet": True,
             "execution_scope": "ctde",
         },
+        "rpg_action_edge_graphormer_relation_private_single_head": {
+            "uses_hypernet": True,
+            "execution_scope": "ctde",
+        },
+        "rpg_action_edge_graphit_relation_private_single_head": {
+            "uses_hypernet": True,
+            "execution_scope": "ctde",
+        },
+        "rpg_action_edge_edgeset_relation_private_single_head": {
+            "uses_hypernet": True,
+            "execution_scope": "ctde",
+        },
+        "rpg_action_edge_motif_transformer_relation_private_single_head": {
+            "uses_hypernet": True,
+            "execution_scope": "ctde",
+        },
         "rpg_action_edge_public_memory_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_global_public_pred_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_target_context_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -2087,7 +2405,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
             *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
-            *ACTION_EDGE_PUBLIC_PRED_REL_PRIVATE_VARIANTS,
+            *ACTION_EDGE_REL_PRIVATE_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -2208,7 +2526,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
             *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
-            *ACTION_EDGE_PUBLIC_PRED_REL_PRIVATE_VARIANTS,
+            *ACTION_EDGE_REL_PRIVATE_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -2662,7 +2980,7 @@ class CleanHyperAgent(nn.Module):
             self.private_single_condition_encoder = None
             self.public_private_single_head_hypernet = None
 
-        if self.model_type in ACTION_EDGE_PUBLIC_PRED_REL_PRIVATE_VARIANTS:
+        if self.model_type in ACTION_EDGE_REL_PRIVATE_VARIANTS:
             private_source_dim = self._public_private_private_source_dim()
             self.private_single_condition_encoder = nn.Sequential(
                 nn.Linear(private_source_dim, self.cond_dim),
@@ -2674,7 +2992,7 @@ class CleanHyperAgent(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Linear(self.cond_dim, self.cond_dim),
             )
-            if self.model_type == "rpg_action_edge_public_pred_relation_private_single_head":
+            if self.model_type in ACTION_EDGE_REL_PRIVATE_SINGLE_HEAD_VARIANTS:
                 self.relation_private_single_head_hypernet = MLPHyperParameterGenerator(
                     embed_dim=self.cond_dim,
                     output_dims=[
@@ -2748,7 +3066,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
             *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
-            *ACTION_EDGE_PUBLIC_PRED_REL_PRIVATE_VARIANTS,
+            *ACTION_EDGE_REL_PRIVATE_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -2939,7 +3257,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
             *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
-            *ACTION_EDGE_PUBLIC_PRED_REL_PRIVATE_VARIANTS,
+            *ACTION_EDGE_REL_PRIVATE_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -3016,6 +3334,10 @@ class CleanHyperAgent(nn.Module):
                     "rpg_action_edge_rgcn_hypercond": "rgcn",
                     "rpg_action_edge_egcn_hypercond": "egcn",
                     "rpg_action_edge_egcn_plus_public_pred_hypercond": "egcn_plus",
+                    "rpg_action_edge_graphormer_relation_private_single_head": "graphormer",
+                    "rpg_action_edge_graphit_relation_private_single_head": "graphit",
+                    "rpg_action_edge_edgeset_relation_private_single_head": "edgeset",
+                    "rpg_action_edge_motif_transformer_relation_private_single_head": "motif_transformer",
                 }.get(self.model_type, "pool"),
                 use_oracle_edges=self.model_type in {
                     "rpg_action_edge_oracle_graph_hypercond",
@@ -3030,7 +3352,7 @@ class CleanHyperAgent(nn.Module):
                     if self.model_type in {
                         "rpg_action_edge_public_pred_hypercond",
                         *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
-                        *ACTION_EDGE_PUBLIC_PRED_REL_PRIVATE_VARIANTS,
+                        *ACTION_EDGE_REL_PRIVATE_VARIANTS,
                         "rpg_action_edge_public_memory_hypercond",
                         "rpg_action_edge_global_public_pred_hypercond",
                         "rpg_action_edge_egcn_plus_public_pred_hypercond",
@@ -3365,7 +3687,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
             *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
-            *ACTION_EDGE_PUBLIC_PRED_REL_PRIVATE_VARIANTS,
+            *ACTION_EDGE_REL_PRIVATE_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -3938,7 +4260,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_prev_oracle_graph_hypercond",
             "rpg_action_edge_public_pred_hypercond",
             *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
-            *ACTION_EDGE_PUBLIC_PRED_REL_PRIVATE_VARIANTS,
+            *ACTION_EDGE_REL_PRIVATE_VARIANTS,
             "rpg_action_edge_public_memory_hypercond",
             "rpg_action_edge_global_public_pred_hypercond",
             "rpg_action_edge_target_context_hypercond",
@@ -3982,7 +4304,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_action_edge_prev_oracle_graph_hypercond",
                 "rpg_action_edge_public_pred_hypercond",
                 *ACTION_EDGE_PUBLIC_PRED_HEAD_VARIANTS,
-                *ACTION_EDGE_PUBLIC_PRED_REL_PRIVATE_VARIANTS,
+                *ACTION_EDGE_REL_PRIVATE_VARIANTS,
                 "rpg_action_edge_public_memory_hypercond",
                 "rpg_action_edge_global_public_pred_hypercond",
                 "rpg_action_edge_target_context_hypercond",
@@ -3995,7 +4317,7 @@ class CleanHyperAgent(nn.Module):
                 self.latest_aux_stats = getattr(self.rpg_relation_capturer, "latest_aux_stats", {})
                 if th.is_grad_enabled() and not test_mode:
                     self.latest_aux_loss = self.action_pred_loss_coef * action_loss
-                if self.model_type == "rpg_action_edge_public_pred_relation_private_single_head":
+                if self.model_type in ACTION_EDGE_REL_PRIVATE_SINGLE_HEAD_VARIANTS:
                     q = self._apply_action_edge_relation_private_single_head(hidden, relation_condition, context)
                 elif self.model_type == "rpg_action_edge_public_pred_relation_private_decision_maker":
                     relation_condition = self._action_edge_relation_private_condition(relation_condition, context)

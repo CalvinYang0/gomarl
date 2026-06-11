@@ -223,6 +223,18 @@ hypernet_layers: 2
 # - rpg_action_edge_public_pred_relation_private_decision_maker:
 #     uses the same relation+private generation condition as above, but keeps
 #     the structured ego-action / interaction-action decision maker.
+# - rpg_action_edge_graphormer_relation_private_single_head:
+#     replaces action-edge message passing with a Graphormer-style Transformer
+#     over self/ally/enemy nodes, using action-edge pair bias and centrality.
+# - rpg_action_edge_graphit_relation_private_single_head:
+#     replaces action-edge message passing with a GraphiT-style Transformer
+#     whose attention bias comes from a random-walk/diffusion graph kernel.
+# - rpg_action_edge_edgeset_relation_private_single_head:
+#     encodes action-edge structure by adding edge tokens
+#     [actor node, enemy node, attack probability] to a Transformer.
+# - rpg_action_edge_motif_transformer_relation_private_single_head:
+#     encodes higher-order action motifs, e.g. ally co-focus and enemy pressure,
+#     as Transformer attention bias and node structural features.
 # - rpg_action_edge_public_memory_hypercond: public-predictor variant that
 #                                            fills currently missing public
 #                                            entity slots with their previous
