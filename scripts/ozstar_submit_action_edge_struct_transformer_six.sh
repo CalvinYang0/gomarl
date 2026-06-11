@@ -40,17 +40,21 @@ echo "wandb_mode: $WANDB_MODE"
 echo "extra_args: $EXTRA_ARGS"
 
 for map_name in $MAPS; do
-  job_name="${map_name}_action_edge_struct6"
-  job_name="${job_name:0:60}"
-  echo "submit list job: map=$map_name models=6"
-  sbatch \
-    --cpus-per-task="$CPUS_PER_TASK" \
-    --mem="$MEM" \
-    --time="$TIME" \
-    --job-name="$job_name" \
-    --output=ozstar_logs/%x_%j.out \
-    --error=ozstar_logs/%x_%j.err \
-    --export=ALL,MAP_NAME="$map_name",MODELS="$MODELS",SEEDS="$SEEDS",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_PREFIX="$RUN_PREFIX",EXTRA_ARGS="$EXTRA_ARGS" \
-    scripts/ozstar_train_model_list_offline.sbatch
+  for model_type in $MODELS; do
+    for seed in $SEEDS; do
+      run_name="${map_name}_${model_type}_${RUN_PREFIX}_s${seed}"
+      job_name="${map_name}_${model_type}_s${seed}"
+      job_name="${job_name:0:60}"
+      echo "submit parallel job: map=$map_name model=$model_type seed=$seed run=$run_name"
+      sbatch \
+        --cpus-per-task="$CPUS_PER_TASK" \
+        --mem="$MEM" \
+        --time="$TIME" \
+        --job-name="$job_name" \
+        --output=ozstar_logs/%x_%j.out \
+        --error=ozstar_logs/%x_%j.err \
+        --export=ALL,MAP_NAME="$map_name",MODEL_TYPE="$model_type",SEED="$seed",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",EXTRA_ARGS="$EXTRA_ARGS" \
+        scripts/ozstar_train_offline.sbatch
+    done
+  done
 done
-
