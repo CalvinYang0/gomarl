@@ -216,6 +216,13 @@ hypernet_layers: 2
 # - rpg_action_edge_public_pred_coarse_q_fine_gate_head:
 #     action-edge public-pred condition generates coarse Q-values and
 #     self/private information generates an action-wise fine gate.
+# - rpg_action_edge_public_pred_relation_private_single_head:
+#     action-edge public-pred relation condition is concatenated with embedded
+#     private local view information to generate a full two-layer Q-head. This
+#     removes the structured decision maker.
+# - rpg_action_edge_public_pred_relation_private_decision_maker:
+#     uses the same relation+private generation condition as above, but keeps
+#     the structured ego-action / interaction-action decision maker.
 # - rpg_action_edge_public_memory_hypercond: public-predictor variant that
 #                                            fills currently missing public
 #                                            entity slots with their previous
