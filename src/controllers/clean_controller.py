@@ -18,6 +18,7 @@ class CleanMAC(BasicMAC):
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
+            "rpg_public_delta_aux_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -77,6 +78,12 @@ class CleanMAC(BasicMAC):
         prev_obs = batch["obs"][:, t - 1] if t > 0 else batch["obs"][:, t].new_zeros(
             batch["obs"][:, t].shape
         )
+        next_obs = batch["obs"][:, t + 1] if t < batch.max_seq_length - 1 else batch["obs"][:, t].new_zeros(
+            batch["obs"][:, t].shape
+        )
+        next_obs_mask = batch["filled"][:, t + 1] if t < batch.max_seq_length - 1 else batch["filled"][:, t].new_zeros(
+            batch["filled"][:, t].shape
+        )
         prev_state = batch["state"][:, t - 1] if t > 0 else batch["state"][:, t].new_zeros(
             batch["state"][:, t].shape
         )
@@ -87,6 +94,8 @@ class CleanMAC(BasicMAC):
         return {
             "obs": batch["obs"][:, t].reshape(batch_size, self.n_agents, -1),
             "prev_obs": prev_obs.reshape(batch_size, self.n_agents, -1),
+            "next_obs": next_obs.reshape(batch_size, self.n_agents, -1),
+            "next_obs_mask": next_obs_mask.reshape(batch_size, 1).expand(-1, self.n_agents),
             "prev_action": prev_action.reshape(batch_size, self.n_agents, -1),
             "action_targets": action_targets,
             "action_target_mask": action_target_mask,

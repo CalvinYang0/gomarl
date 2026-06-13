@@ -2228,6 +2228,7 @@ class CleanHyperAgent(nn.Module):
         "rpg_private_interaction_input_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_global_filled_obs_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_distill_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_public_delta_aux_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_residual_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_film_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_moe_interaction_head": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -2352,6 +2353,7 @@ class CleanHyperAgent(nn.Module):
         self.smooth_head_sample_size = int(getattr(args, "clean_smooth_head_sample_size", 256))
         self.relation_topk = int(getattr(args, "clean_relation_topk", 5))
         self.action_pred_loss_coef = float(getattr(args, "clean_action_pred_loss_coef", 0.05))
+        self.public_delta_loss_coef = float(getattr(args, "clean_public_delta_loss_coef", 0.05))
 
         self.obs_dim = input_shape
         if getattr(args, "obs_last_action", False):
@@ -2389,6 +2391,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
+            "rpg_public_delta_aux_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -2510,6 +2513,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
+            "rpg_public_delta_aux_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -2571,6 +2575,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
+            "rpg_public_delta_aux_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -2639,6 +2644,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_public_relation_hypercond",
                 "rpg_global_filled_obs_hypercond",
                 "rpg_relation_distill_hypercond",
+                "rpg_public_delta_aux_hypercond",
                 "rpg_semantic_selfattn_relation_hypercond",
                 "rpg_entity_selfattn_relation_hypercond",
                 "rpg_topk_entity_relation_hypercond",
@@ -2791,6 +2797,7 @@ class CleanHyperAgent(nn.Module):
                     "rpg_private_interaction_input_hypercond",
                     "rpg_global_filled_obs_hypercond",
                     "rpg_relation_distill_hypercond",
+                    "rpg_public_delta_aux_hypercond",
                     "rpg_semantic_selfattn_relation_hypercond",
                     "rpg_entity_selfattn_relation_hypercond",
                     "rpg_topk_entity_relation_hypercond",
@@ -3007,6 +3014,17 @@ class CleanHyperAgent(nn.Module):
             self.relation_private_condition_encoder = None
             self.relation_private_single_head_hypernet = None
 
+        if self.model_type == "rpg_public_delta_aux_hypercond":
+            self.public_delta_target_dim = self._public_delta_target_dim()
+            self.public_delta_predictor = nn.Sequential(
+                nn.Linear(self.rpg_relation_dim, self.rpg_relation_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.rpg_relation_dim, self.public_delta_target_dim),
+            )
+        else:
+            self.public_delta_target_dim = 0
+            self.public_delta_predictor = None
+
         if self.model_type == "rpg_relation_distill_hypercond":
             state_shape = getattr(args, "state_shape", 0)
             if isinstance(state_shape, (tuple, list)):
@@ -3050,6 +3068,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
+            "rpg_public_delta_aux_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -3219,6 +3238,89 @@ class CleanHyperAgent(nn.Module):
             ],
             dim=-1,
         )
+
+    def _public_delta_target_dim(self):
+        layout = self.rpg_obs_layout
+        target_dim = 0
+        if layout["obs_own_health"]:
+            target_dim += 1 + layout["shield_bits_ally"]
+        if layout["obs_all_health"]:
+            target_dim += layout["n_allies"] * (1 + layout["shield_bits_ally"])
+            target_dim += layout["n_enemies"] * (1 + layout["shield_bits_enemy"])
+        return target_dim
+
+    def _public_delta_values_and_mask(self, obs, next_obs, next_obs_mask):
+        layout = self.rpg_obs_layout
+        _, enemy_feat, ally_feat, own_feat = self._split_rpg_obs(obs)
+        _, next_enemy_feat, next_ally_feat, next_own_feat = self._split_rpg_obs(next_obs)
+        batch_size, n_agents, _ = obs.shape
+        next_valid = next_obs_mask.bool()
+        target_parts = []
+        mask_parts = []
+
+        if layout["obs_own_health"]:
+            self_dim = 1 + layout["shield_bits_ally"]
+            self_delta = next_own_feat[:, :, :self_dim] - own_feat[:, :, :self_dim]
+            target_parts.append(self_delta)
+            mask_parts.append(next_valid.unsqueeze(-1).expand_as(self_delta))
+
+        if layout["obs_all_health"]:
+            ally_dim = 1 + layout["shield_bits_ally"]
+            ally_idx = 4
+            ally_current = ally_feat[:, :, :, ally_idx : ally_idx + ally_dim]
+            ally_next = next_ally_feat[:, :, :, ally_idx : ally_idx + ally_dim]
+            ally_delta = ally_next - ally_current
+            ally_visible = ally_feat.abs().sum(dim=-1) > 0
+            ally_next_visible = next_ally_feat.abs().sum(dim=-1) > 0
+            ally_mask = (ally_visible & ally_next_visible & next_valid.unsqueeze(-1)).unsqueeze(-1)
+            target_parts.append(ally_delta.reshape(batch_size, n_agents, -1))
+            mask_parts.append(ally_mask.expand_as(ally_delta).reshape(batch_size, n_agents, -1))
+
+            enemy_dim = 1 + layout["shield_bits_enemy"]
+            enemy_idx = 4
+            enemy_current = enemy_feat[:, :, :, enemy_idx : enemy_idx + enemy_dim]
+            enemy_next = next_enemy_feat[:, :, :, enemy_idx : enemy_idx + enemy_dim]
+            enemy_delta = enemy_next - enemy_current
+            enemy_visible = enemy_feat.abs().sum(dim=-1) > 0
+            enemy_next_visible = next_enemy_feat.abs().sum(dim=-1) > 0
+            enemy_mask = (enemy_visible & enemy_next_visible & next_valid.unsqueeze(-1)).unsqueeze(-1)
+            target_parts.append(enemy_delta.reshape(batch_size, n_agents, -1))
+            mask_parts.append(enemy_mask.expand_as(enemy_delta).reshape(batch_size, n_agents, -1))
+
+        if not target_parts:
+            empty = obs.new_zeros(batch_size, n_agents, 0)
+            return empty, empty.bool()
+        return th.cat(target_parts, dim=-1), th.cat(mask_parts, dim=-1)
+
+    def _public_delta_aux_loss(self, relation_hidden, context):
+        next_obs = context.get("next_obs")
+        next_obs_mask = context.get("next_obs_mask")
+        if next_obs is None or next_obs_mask is None or self.public_delta_predictor is None:
+            zero = relation_hidden.new_zeros(())
+            return zero, {}
+
+        target, valid_mask = self._public_delta_values_and_mask(context["obs"], next_obs, next_obs_mask)
+        pred = self.public_delta_predictor(relation_hidden)
+        valid = valid_mask.float()
+        if valid.sum() <= 0:
+            zero = pred.new_zeros(())
+            return zero, {
+                "public_delta_loss_raw": zero.detach(),
+                "public_delta_mask_frac": zero.detach(),
+                "public_delta_target_abs": zero.detach(),
+                "public_delta_pred_abs": zero.detach(),
+            }
+
+        loss_each = F.smooth_l1_loss(pred, target, reduction="none")
+        loss = (loss_each * valid).sum() / valid.sum().clamp(min=1.0)
+        valid_denom = valid.sum().clamp(min=1.0)
+        stats = {
+            "public_delta_loss_raw": loss.detach(),
+            "public_delta_mask_frac": valid.mean().detach(),
+            "public_delta_target_abs": ((target.abs() * valid).sum() / valid_denom).detach(),
+            "public_delta_pred_abs": ((pred.abs() * valid).sum() / valid_denom).detach(),
+        }
+        return loss, stats
 
     def _public_private_private_features(self, context):
         move_feat, enemy_feat, ally_feat, _ = self._split_rpg_obs(context["obs"])
@@ -3671,6 +3773,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
+            "rpg_public_delta_aux_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -4130,6 +4233,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_public_relation_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
+            "rpg_public_delta_aux_hypercond",
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
@@ -4244,6 +4348,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
+            "rpg_public_delta_aux_hypercond",
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -4364,6 +4469,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_private_interaction_input_hypercond",
                 "rpg_global_filled_obs_hypercond",
                 "rpg_relation_distill_hypercond",
+                "rpg_public_delta_aux_hypercond",
                 "rpg_residual_interaction_hypercond",
                 "rpg_film_interaction_hypercond",
                 "rpg_moe_interaction_head",
@@ -4411,6 +4517,18 @@ class CleanHyperAgent(nn.Module):
                         q = self._apply_rpg_structured_maker(
                             hidden, relation_condition, enemy_tokens, enemy_mask, context=context
                         )
+                    if (
+                        self.model_type == "rpg_public_delta_aux_hypercond"
+                        and th.is_grad_enabled()
+                        and not test_mode
+                        and context.get("next_obs_mask") is not None
+                        and context["next_obs_mask"].bool().any()
+                    ):
+                        public_delta_loss, public_delta_stats = self._public_delta_aux_loss(
+                            next_relation_hidden, context
+                        )
+                        self.latest_aux_loss = self.public_delta_loss_coef * public_delta_loss
+                        self.latest_aux_stats.update(public_delta_stats)
                     if (
                         self.model_type == "rpg_relation_distill_hypercond"
                         and th.is_grad_enabled()

@@ -118,6 +118,13 @@ hypernet_layers: 2
 #                                   learns through an auxiliary Q-learning loss,
 #                                   and distills local relation conditions
 #                                   without changing decentralized execution.
+# - rpg_public_delta_aux_hypercond: same maker as rpg_linear_interaction_hypercond,
+#                                  plus a training-only auxiliary predictor from
+#                                  relation hidden state to next-step public
+#                                  health/shield deltas. Unit type is not
+#                                  predicted, and ally/enemy loss is computed
+#                                  only for entity slots visible at both t and
+#                                  t+1.
 # - rpg_residual_interaction_hypercond: keeps the same generated ego branch,
 #                                       then combines a fixed linear
 #                                       interaction scorer with a
@@ -340,6 +347,7 @@ clean_self_fine_gate_scale: 1.0
 clean_relation_prototypes: 4
 clean_relation_topk: 5
 clean_action_pred_loss_coef: 0.05
+clean_public_delta_loss_coef: 0.05
 clean_relation_distill_coef: 0.05
 clean_relation_teacher_td_coef: 0.2
 clean_smooth_head_loss_coef: 0.01
