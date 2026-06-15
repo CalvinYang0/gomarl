@@ -125,6 +125,39 @@ hypernet_layers: 2
 #                                  predicted, and ally/enemy loss is computed
 #                                  only for entity slots visible at both t and
 #                                  t+1.
+# - rpg_public_transformer_hypercond: same structured decision maker as
+#                                     rpg_linear_interaction_hypercond, but
+#                                     replaces RPG cross-attention relation
+#                                     generation with a public self/ally/enemy
+#                                     entity-token Transformer. Public tokens
+#                                     keep presence, health/shield, and unit
+#                                     type only.
+# - rpg_public_future_delta_token_transformer_hypercond: public Transformer
+#                                                        relation generator
+#                                                        with predicted
+#                                                        next-public delta
+#                                                        added as token
+#                                                        embeddings. The
+#                                                        predictor uses
+#                                                        obs_{t-1}, obs_t and a
+#                                                        GRU; true obs_{t+1}
+#                                                        is used only for an
+#                                                        auxiliary loss.
+# - rpg_public_future_delta_bias_transformer_hypercond: same future-delta
+#                                                       signal, injected as
+#                                                       attention bias.
+# - rpg_public_private_token_transformer_hypercond: public Transformer with
+#                                                   current private local fields
+#                                                   injected as token
+#                                                   embeddings.
+# - rpg_public_private_bias_transformer_hypercond: current private local fields
+#                                                  injected as attention bias.
+# - rpg_public_past_delta_token_transformer_hypercond: public Transformer with
+#                                                      obs_t - obs_{t-1} public
+#                                                      delta injected as token
+#                                                      embeddings.
+# - rpg_public_past_delta_bias_transformer_hypercond: past public delta injected
+#                                                     as attention bias.
 # - rpg_residual_interaction_hypercond: keeps the same generated ego branch,
 #                                       then combines a fixed linear
 #                                       interaction scorer with a
@@ -348,6 +381,9 @@ clean_relation_prototypes: 4
 clean_relation_topk: 5
 clean_action_pred_loss_coef: 0.05
 clean_public_delta_loss_coef: 0.05
+clean_public_transformer_layers: 1
+clean_public_transformer_heads: 4
+clean_public_transformer_delta_loss_coef: 0.05
 clean_relation_distill_coef: 0.05
 clean_relation_teacher_td_coef: 0.2
 clean_smooth_head_loss_coef: 0.01

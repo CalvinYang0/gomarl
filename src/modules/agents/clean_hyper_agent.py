@@ -32,6 +32,34 @@ ACTION_EDGE_REL_PRIVATE_VARIANTS = (
     ACTION_EDGE_REL_PRIVATE_SINGLE_HEAD_VARIANTS
     | {"rpg_action_edge_public_pred_relation_private_decision_maker"}
 )
+PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS = {
+    "rpg_public_future_delta_token_transformer_hypercond",
+    "rpg_public_future_delta_bias_transformer_hypercond",
+}
+PUBLIC_TRANSFORMER_PAST_DELTA_VARIANTS = {
+    "rpg_public_past_delta_token_transformer_hypercond",
+    "rpg_public_past_delta_bias_transformer_hypercond",
+}
+PUBLIC_TRANSFORMER_PRIVATE_VARIANTS = {
+    "rpg_public_private_token_transformer_hypercond",
+    "rpg_public_private_bias_transformer_hypercond",
+}
+PUBLIC_TRANSFORMER_TOKEN_VARIANTS = {
+    "rpg_public_future_delta_token_transformer_hypercond",
+    "rpg_public_past_delta_token_transformer_hypercond",
+    "rpg_public_private_token_transformer_hypercond",
+}
+PUBLIC_TRANSFORMER_BIAS_VARIANTS = {
+    "rpg_public_future_delta_bias_transformer_hypercond",
+    "rpg_public_past_delta_bias_transformer_hypercond",
+    "rpg_public_private_bias_transformer_hypercond",
+}
+PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
+    {"rpg_public_transformer_hypercond"}
+    | PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS
+    | PUBLIC_TRANSFORMER_PAST_DELTA_VARIANTS
+    | PUBLIC_TRANSFORMER_PRIVATE_VARIANTS
+)
 
 
 def _neg_inf_like(tensor):
@@ -471,6 +499,490 @@ class PublicRPGRelationCapturer(nn.Module):
         flat_prev = prev_relation_hidden.reshape(batch_size * n_agents, -1)
         relation_hidden = self.temporal_gru(flat_input, flat_prev).view(batch_size, n_agents, self.relation_dim)
         condition = self.output_encoder(relation_hidden)
+        return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
+
+
+class PublicTransformerRelationCapturer(nn.Module):
+    # Public-entity Transformer relation generator. It keeps the downstream RPG
+    # decision maker unchanged and only changes how the relation condition is
+    # formed from public entity tokens.
+    def __init__(
+        self,
+        move_dim,
+        own_dim,
+        ally_feat_dim,
+        enemy_feat_dim,
+        relation_dim,
+        output_dim,
+        unit_type_bits=0,
+        shield_bits_ally=0,
+        shield_bits_enemy=0,
+        obs_all_health=True,
+        obs_own_health=True,
+        obs_last_action=False,
+        n_actions=0,
+        mode="baseline",
+        num_heads=4,
+        num_layers=1,
+    ):
+        super().__init__()
+        del own_dim, obs_last_action, n_actions
+        self.move_dim = move_dim
+        self.ally_feat_dim = ally_feat_dim
+        self.enemy_feat_dim = enemy_feat_dim
+        self.relation_dim = relation_dim
+        self.output_dim = output_dim
+        self.unit_type_bits = unit_type_bits
+        self.shield_bits_ally = shield_bits_ally
+        self.shield_bits_enemy = shield_bits_enemy
+        self.obs_all_health = obs_all_health
+        self.obs_own_health = obs_own_health
+        self.mode = mode
+        self.num_heads = num_heads
+
+        self.public_self_dim = 1 + unit_type_bits
+        self.public_ally_dim = 1 + unit_type_bits
+        self.public_enemy_dim = 1 + unit_type_bits
+        self.self_value_dim = 0
+        self.ally_value_dim = 0
+        self.enemy_value_dim = 0
+        if obs_own_health:
+            self.self_value_dim = 1 + shield_bits_ally
+            self.public_self_dim += self.self_value_dim
+        if obs_all_health:
+            self.ally_value_dim = 1 + shield_bits_ally
+            self.enemy_value_dim = 1 + shield_bits_enemy
+            self.public_ally_dim += self.ally_value_dim
+            self.public_enemy_dim += self.enemy_value_dim
+
+        self.cls_token = nn.Parameter(th.zeros(1, 1, 1, relation_dim))
+        self.side_embedding = nn.Embedding(3, relation_dim)  # self, ally, enemy
+        self.side_pair_bias = nn.Embedding(9, num_heads)
+
+        self.self_public_encoder = self._make_encoder(self.public_self_dim)
+        self.ally_public_encoder = self._make_encoder(self.public_ally_dim)
+        self.enemy_public_encoder = self._make_encoder(self.public_enemy_dim)
+        self.enemy_encoder = nn.Sequential(
+            nn.Linear(enemy_feat_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+
+        self.self_delta_encoder = self._make_encoder(1 + self.self_value_dim)
+        self.ally_delta_encoder = self._make_encoder(1 + self.ally_value_dim)
+        self.enemy_delta_encoder = self._make_encoder(1 + self.enemy_value_dim)
+
+        self.self_private_encoder = self._make_encoder(move_dim)
+        self.ally_private_encoder = self._make_encoder(4)
+        self.enemy_private_encoder = self._make_encoder(4)
+
+        self.future_self_encoder = self._make_encoder(1 + self.self_value_dim)
+        self.future_ally_encoder = self._make_encoder(1 + self.ally_value_dim)
+        self.future_enemy_encoder = self._make_encoder(1 + self.enemy_value_dim)
+        self.future_self_gru = nn.GRUCell(relation_dim, relation_dim)
+        self.future_ally_gru = nn.GRUCell(relation_dim, relation_dim)
+        self.future_enemy_gru = nn.GRUCell(relation_dim, relation_dim)
+        self.future_self_decoder = nn.Linear(relation_dim, max(1, self.self_value_dim))
+        self.future_ally_decoder = nn.Linear(relation_dim, max(1, self.ally_value_dim))
+        self.future_enemy_decoder = nn.Linear(relation_dim, max(1, self.enemy_value_dim))
+
+        self.bias_mlp = nn.Sequential(
+            nn.Linear(relation_dim * 2, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, num_heads),
+        )
+        self.transformer_layers = nn.ModuleList(
+            BiasTransformerEncoderLayer(relation_dim, num_heads)
+            for _ in range(max(1, num_layers))
+        )
+        self.temporal_gru = nn.GRUCell(relation_dim * 2, relation_dim)
+        self.output_encoder = nn.Sequential(
+            nn.Linear(relation_dim, output_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(output_dim, output_dim),
+        )
+        self.latest_aux_loss = None
+        self.latest_aux_stats = {}
+
+    def _make_encoder(self, input_dim):
+        return nn.Sequential(
+            nn.Linear(max(1, input_dim), self.relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.relation_dim, self.relation_dim),
+        )
+
+    def _side(self, side_id, device):
+        return self.side_embedding(th.tensor(side_id, device=device, dtype=th.long))
+
+    def _own_feat(self, self_feat):
+        return self_feat[:, :, self.move_dim :]
+
+    def _self_public_features(self, self_feat):
+        own_feat = self._own_feat(self_feat)
+        batch_size, n_agents, _ = self_feat.shape
+        features = [self_feat.new_ones(batch_size, n_agents, 1)]
+        idx = 0
+        if self.obs_own_health:
+            features.append(own_feat[:, :, idx : idx + self.self_value_dim])
+            idx += self.self_value_dim
+        if self.unit_type_bits > 0:
+            features.append(own_feat[:, :, idx : idx + self.unit_type_bits])
+        return th.cat(features, dim=-1)
+
+    def _ally_public_features(self, ally_feat, ally_mask):
+        features = [ally_mask.unsqueeze(-1).float()]
+        idx = 4
+        if self.obs_all_health:
+            features.append(ally_feat[:, :, :, idx : idx + self.ally_value_dim])
+            idx += self.ally_value_dim
+        if self.unit_type_bits > 0:
+            features.append(ally_feat[:, :, :, idx : idx + self.unit_type_bits])
+        return th.cat(features, dim=-1) * ally_mask.unsqueeze(-1).float()
+
+    def _enemy_public_features(self, enemy_feat, enemy_mask):
+        features = [enemy_mask.unsqueeze(-1).float()]
+        idx = 4
+        if self.obs_all_health:
+            features.append(enemy_feat[:, :, :, idx : idx + self.enemy_value_dim])
+            idx += self.enemy_value_dim
+        if self.unit_type_bits > 0:
+            features.append(enemy_feat[:, :, :, idx : idx + self.unit_type_bits])
+        return th.cat(features, dim=-1) * enemy_mask.unsqueeze(-1).float()
+
+    def _self_values(self, self_feat):
+        own_feat = self._own_feat(self_feat)
+        if self.self_value_dim == 0:
+            return own_feat.new_zeros(own_feat.size(0), own_feat.size(1), 0)
+        return own_feat[:, :, : self.self_value_dim]
+
+    def _ally_values(self, ally_feat):
+        if self.ally_value_dim == 0:
+            return ally_feat.new_zeros(*ally_feat.shape[:-1], 0)
+        return ally_feat[:, :, :, 4 : 4 + self.ally_value_dim]
+
+    def _enemy_values(self, enemy_feat):
+        if self.enemy_value_dim == 0:
+            return enemy_feat.new_zeros(*enemy_feat.shape[:-1], 0)
+        return enemy_feat[:, :, :, 4 : 4 + self.enemy_value_dim]
+
+    def _encode_delta(self, values_delta, valid_mask, encoder):
+        delta_input = th.cat(
+            [valid_mask.unsqueeze(-1).float(), values_delta * valid_mask.unsqueeze(-1).float()],
+            dim=-1,
+        )
+        return encoder(delta_input) * valid_mask.unsqueeze(-1).float()
+
+    def _predict_next_values(self, prev_values, curr_values, prev_mask, curr_mask, encoder, gru, decoder, value_dim):
+        if value_dim == 0:
+            return curr_values
+        prev_input = th.cat(
+            [prev_mask.unsqueeze(-1).float(), prev_values * prev_mask.unsqueeze(-1).float()],
+            dim=-1,
+        )
+        curr_input = th.cat(
+            [curr_mask.unsqueeze(-1).float(), curr_values * curr_mask.unsqueeze(-1).float()],
+            dim=-1,
+        )
+        prev_embed = encoder(prev_input)
+        curr_embed = encoder(curr_input)
+        flat_curr = curr_embed.reshape(-1, self.relation_dim)
+        flat_prev = prev_embed.reshape(-1, self.relation_dim)
+        pred_embed = gru(flat_curr, flat_prev)
+        pred = decoder(pred_embed).view(*curr_values.shape[:-1], -1)[..., :value_dim]
+        return pred * curr_mask.unsqueeze(-1).float()
+
+    def _future_delta_embeddings(
+        self,
+        self_feat,
+        ally_feat,
+        enemy_feat,
+        ally_mask,
+        enemy_mask,
+        prev_self_feat,
+        prev_ally_feat,
+        prev_enemy_feat,
+        prev_ally_mask,
+        prev_enemy_mask,
+        next_self_feat,
+        next_ally_feat,
+        next_enemy_feat,
+        next_ally_mask,
+        next_enemy_mask,
+        next_obs_mask,
+    ):
+        batch_size, n_agents, _ = self_feat.shape
+        self_mask = self_feat.abs().sum(dim=-1) > 0
+        prev_self_mask = prev_self_feat.abs().sum(dim=-1) > 0
+        current_self_values = self._self_values(self_feat)
+        prev_self_values = self._self_values(prev_self_feat)
+        next_self_values = self._self_values(next_self_feat)
+        current_ally_values = self._ally_values(ally_feat)
+        prev_ally_values = self._ally_values(prev_ally_feat)
+        next_ally_values = self._ally_values(next_ally_feat)
+        current_enemy_values = self._enemy_values(enemy_feat)
+        prev_enemy_values = self._enemy_values(prev_enemy_feat)
+        next_enemy_values = self._enemy_values(next_enemy_feat)
+
+        pred_self = self._predict_next_values(
+            prev_self_values,
+            current_self_values,
+            prev_self_mask,
+            self_mask,
+            self.future_self_encoder,
+            self.future_self_gru,
+            self.future_self_decoder,
+            self.self_value_dim,
+        )
+        pred_ally = self._predict_next_values(
+            prev_ally_values,
+            current_ally_values,
+            prev_ally_mask,
+            ally_mask,
+            self.future_ally_encoder,
+            self.future_ally_gru,
+            self.future_ally_decoder,
+            self.ally_value_dim,
+        )
+        pred_enemy = self._predict_next_values(
+            prev_enemy_values,
+            current_enemy_values,
+            prev_enemy_mask,
+            enemy_mask,
+            self.future_enemy_encoder,
+            self.future_enemy_gru,
+            self.future_enemy_decoder,
+            self.enemy_value_dim,
+        )
+
+        self_delta = pred_self - current_self_values
+        ally_delta = pred_ally - current_ally_values
+        enemy_delta = pred_enemy - current_enemy_values
+        self_embed = self._encode_delta(self_delta, self_mask, self.self_delta_encoder)
+        ally_embed = self._encode_delta(ally_delta, ally_mask, self.ally_delta_encoder)
+        enemy_embed = self._encode_delta(enemy_delta, enemy_mask, self.enemy_delta_encoder)
+
+        loss_parts = []
+        denom_parts = []
+        valid_masks = []
+        valid_next = next_obs_mask.bool() if next_obs_mask is not None else self_mask.new_zeros(batch_size, n_agents)
+        if self.self_value_dim > 0:
+            mask = (self_mask & valid_next).unsqueeze(-1)
+            loss_parts.append(F.smooth_l1_loss(pred_self, next_self_values, reduction="none") * mask.float())
+            denom_parts.append(mask.float().sum())
+            valid_masks.append(mask)
+        if self.ally_value_dim > 0:
+            mask = (ally_mask & next_ally_mask & valid_next.unsqueeze(-1)).unsqueeze(-1)
+            loss_parts.append(F.smooth_l1_loss(pred_ally, next_ally_values, reduction="none") * mask.float())
+            denom_parts.append(mask.float().sum())
+            valid_masks.append(mask)
+        if self.enemy_value_dim > 0:
+            mask = (enemy_mask & next_enemy_mask & valid_next.unsqueeze(-1)).unsqueeze(-1)
+            loss_parts.append(F.smooth_l1_loss(pred_enemy, next_enemy_values, reduction="none") * mask.float())
+            denom_parts.append(mask.float().sum())
+            valid_masks.append(mask)
+
+        if loss_parts:
+            denom = th.stack(denom_parts).sum().clamp(min=1.0)
+            aux_loss = th.stack([part.sum() for part in loss_parts]).sum() / denom
+            mask_frac = th.stack([mask.float().mean() for mask in valid_masks]).mean()
+        else:
+            aux_loss = self_feat.new_zeros(())
+            mask_frac = self_feat.new_zeros(())
+
+        def _masked_abs_mean(delta, mask):
+            if delta.size(-1) == 0:
+                return delta.new_zeros(())
+            weight = mask.unsqueeze(-1).float()
+            return (delta.abs() * weight).sum() / weight.sum().clamp(min=1.0)
+
+        self.latest_aux_loss = aux_loss
+        self.latest_aux_stats = {
+            "public_future_loss_raw": aux_loss.detach(),
+            "public_future_mask_frac": mask_frac.detach(),
+            "public_future_delta_abs": th.stack(
+                [
+                    _masked_abs_mean(self_delta, self_mask),
+                    _masked_abs_mean(ally_delta, ally_mask),
+                    _masked_abs_mean(enemy_delta, enemy_mask),
+                ]
+            ).mean().detach(),
+        }
+        return self_embed, ally_embed, enemy_embed
+
+    def _past_delta_embeddings(
+        self,
+        self_feat,
+        ally_feat,
+        enemy_feat,
+        ally_mask,
+        enemy_mask,
+        prev_self_feat,
+        prev_ally_feat,
+        prev_enemy_feat,
+        prev_ally_mask,
+        prev_enemy_mask,
+    ):
+        self_mask = self_feat.abs().sum(dim=-1) > 0
+        prev_self_mask = prev_self_feat.abs().sum(dim=-1) > 0
+        self_valid = self_mask & prev_self_mask
+        ally_valid = ally_mask & prev_ally_mask
+        enemy_valid = enemy_mask & prev_enemy_mask
+        self_delta = self._self_values(self_feat) - self._self_values(prev_self_feat)
+        ally_delta = self._ally_values(ally_feat) - self._ally_values(prev_ally_feat)
+        enemy_delta = self._enemy_values(enemy_feat) - self._enemy_values(prev_enemy_feat)
+        return (
+            self._encode_delta(self_delta, self_valid, self.self_delta_encoder),
+            self._encode_delta(ally_delta, ally_valid, self.ally_delta_encoder),
+            self._encode_delta(enemy_delta, enemy_valid, self.enemy_delta_encoder),
+        )
+
+    def _private_embeddings(self, self_feat, ally_feat, enemy_feat, ally_mask, enemy_mask):
+        move_feat = self_feat[:, :, : self.move_dim]
+        self_embed = self.self_private_encoder(move_feat)
+        ally_embed = self.ally_private_encoder(ally_feat[:, :, :, :4]) * ally_mask.unsqueeze(-1).float()
+        enemy_embed = self.enemy_private_encoder(enemy_feat[:, :, :, :4]) * enemy_mask.unsqueeze(-1).float()
+        return self_embed, ally_embed, enemy_embed
+
+    def _build_attention_bias(self, mod_self, mod_ally, mod_enemy, batch_size, n_agents):
+        mod_tokens = th.cat([mod_self.unsqueeze(2), mod_ally, mod_enemy], dim=2)
+        n_entity_tokens = mod_tokens.size(2)
+        left = mod_tokens.unsqueeze(3).expand(-1, -1, -1, n_entity_tokens, -1)
+        right = mod_tokens.unsqueeze(2).expand(-1, -1, n_entity_tokens, -1, -1)
+        pair = th.cat([left, right], dim=-1)
+        pair_bias = self.bias_mlp(pair)
+
+        device = mod_tokens.device
+        side_ids = th.cat(
+            [
+                th.zeros(1, device=device, dtype=th.long),
+                th.ones(mod_ally.size(2), device=device, dtype=th.long),
+                th.full((mod_enemy.size(2),), 2, device=device, dtype=th.long),
+            ],
+            dim=0,
+        )
+        side_pair = side_ids.unsqueeze(1) * 3 + side_ids.unsqueeze(0)
+        pair_bias = pair_bias + self.side_pair_bias(side_pair).view(1, 1, n_entity_tokens, n_entity_tokens, -1)
+
+        full_bias = mod_tokens.new_zeros(batch_size, n_agents, n_entity_tokens + 1, n_entity_tokens + 1, self.num_heads)
+        full_bias[:, :, 1:, 1:] = pair_bias
+        return full_bias.permute(0, 1, 4, 2, 3).reshape(
+            batch_size * n_agents, self.num_heads, n_entity_tokens + 1, n_entity_tokens + 1
+        )
+
+    def _masked_uniform_attention(self, mask):
+        denom = mask.sum(dim=-1, keepdim=True).clamp(min=1).float()
+        return mask.float() / denom
+
+    def forward(
+        self,
+        self_feat,
+        ally_feat,
+        enemy_feat,
+        prev_relation_hidden,
+        prev_self_feat=None,
+        prev_ally_feat=None,
+        prev_enemy_feat=None,
+        next_self_feat=None,
+        next_ally_feat=None,
+        next_enemy_feat=None,
+        next_obs_mask=None,
+    ):
+        self.latest_aux_loss = None
+        self.latest_aux_stats = {}
+        batch_size, n_agents, _ = self_feat.shape
+        ally_mask = ally_feat.abs().sum(dim=-1) > 0
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        if prev_self_feat is None:
+            prev_self_feat = th.zeros_like(self_feat)
+            prev_ally_feat = th.zeros_like(ally_feat)
+            prev_enemy_feat = th.zeros_like(enemy_feat)
+        if next_self_feat is None:
+            next_self_feat = th.zeros_like(self_feat)
+            next_ally_feat = th.zeros_like(ally_feat)
+            next_enemy_feat = th.zeros_like(enemy_feat)
+        prev_ally_mask = prev_ally_feat.abs().sum(dim=-1) > 0
+        prev_enemy_mask = prev_enemy_feat.abs().sum(dim=-1) > 0
+        next_ally_mask = next_ally_feat.abs().sum(dim=-1) > 0
+        next_enemy_mask = next_enemy_feat.abs().sum(dim=-1) > 0
+
+        self_public = self._self_public_features(self_feat)
+        ally_public = self._ally_public_features(ally_feat, ally_mask)
+        enemy_public = self._enemy_public_features(enemy_feat, enemy_mask)
+        self_token = self.self_public_encoder(self_public) + self._side(0, self_feat.device).view(1, 1, -1)
+        ally_tokens = self.ally_public_encoder(ally_public) + self._side(1, self_feat.device).view(1, 1, 1, -1)
+        enemy_public_tokens = self.enemy_public_encoder(enemy_public) + self._side(2, self_feat.device).view(1, 1, 1, -1)
+        ally_tokens = ally_tokens * ally_mask.unsqueeze(-1).float()
+        enemy_public_tokens = enemy_public_tokens * enemy_mask.unsqueeze(-1).float()
+        enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
+
+        mod_self = mod_ally = mod_enemy = None
+        if self.mode in {"future_delta_token", "future_delta_bias"}:
+            mod_self, mod_ally, mod_enemy = self._future_delta_embeddings(
+                self_feat,
+                ally_feat,
+                enemy_feat,
+                ally_mask,
+                enemy_mask,
+                prev_self_feat,
+                prev_ally_feat,
+                prev_enemy_feat,
+                prev_ally_mask,
+                prev_enemy_mask,
+                next_self_feat,
+                next_ally_feat,
+                next_enemy_feat,
+                next_ally_mask,
+                next_enemy_mask,
+                next_obs_mask,
+            )
+        elif self.mode in {"past_delta_token", "past_delta_bias"}:
+            mod_self, mod_ally, mod_enemy = self._past_delta_embeddings(
+                self_feat,
+                ally_feat,
+                enemy_feat,
+                ally_mask,
+                enemy_mask,
+                prev_self_feat,
+                prev_ally_feat,
+                prev_enemy_feat,
+                prev_ally_mask,
+                prev_enemy_mask,
+            )
+        elif self.mode in {"private_token", "private_bias"}:
+            mod_self, mod_ally, mod_enemy = self._private_embeddings(
+                self_feat, ally_feat, enemy_feat, ally_mask, enemy_mask
+            )
+
+        if self.mode.endswith("_token") and mod_self is not None:
+            self_token = self_token + mod_self
+            ally_tokens = ally_tokens + mod_ally
+            enemy_public_tokens = enemy_public_tokens + mod_enemy
+
+        cls_token = self.cls_token.expand(batch_size, n_agents, -1, -1)
+        tokens = th.cat([cls_token, self_token.unsqueeze(2), ally_tokens, enemy_public_tokens], dim=2)
+        cls_mask = th.ones(batch_size, n_agents, 1, device=self_feat.device, dtype=th.bool)
+        self_mask = th.ones(batch_size, n_agents, 1, device=self_feat.device, dtype=th.bool)
+        token_mask = th.cat([cls_mask, self_mask, ally_mask, enemy_mask], dim=2)
+
+        attn_bias = None
+        if self.mode.endswith("_bias") and mod_self is not None:
+            attn_bias = self._build_attention_bias(mod_self, mod_ally, mod_enemy, batch_size, n_agents)
+
+        flat_tokens = tokens.reshape(batch_size * n_agents, tokens.size(2), self.relation_dim)
+        flat_mask = token_mask.reshape(batch_size * n_agents, token_mask.size(2))
+        for layer in self.transformer_layers:
+            flat_tokens = layer(flat_tokens, flat_mask, attn_bias=attn_bias)
+        encoded = flat_tokens.view(batch_size, n_agents, tokens.size(2), self.relation_dim)
+
+        cls_out = encoded[:, :, 0]
+        self_out = encoded[:, :, 1]
+        temporal_input = th.cat([self_out, cls_out], dim=-1)
+        flat_input = temporal_input.reshape(batch_size * n_agents, -1)
+        flat_prev = prev_relation_hidden.reshape(batch_size * n_agents, -1)
+        relation_hidden = self.temporal_gru(flat_input, flat_prev).view(batch_size, n_agents, self.relation_dim)
+        condition = self.output_encoder(relation_hidden)
+        ally_attn = self._masked_uniform_attention(ally_mask)
+        enemy_attn = self._masked_uniform_attention(enemy_mask)
         return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
 
 
@@ -2229,6 +2741,10 @@ class CleanHyperAgent(nn.Module):
         "rpg_global_filled_obs_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_relation_distill_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_public_delta_aux_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        **{
+            name: {"uses_hypernet": True, "execution_scope": "ctde"}
+            for name in PUBLIC_TRANSFORMER_RELATION_VARIANTS
+        },
         "rpg_residual_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_film_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_moe_interaction_head": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -2354,6 +2870,11 @@ class CleanHyperAgent(nn.Module):
         self.relation_topk = int(getattr(args, "clean_relation_topk", 5))
         self.action_pred_loss_coef = float(getattr(args, "clean_action_pred_loss_coef", 0.05))
         self.public_delta_loss_coef = float(getattr(args, "clean_public_delta_loss_coef", 0.05))
+        self.public_transformer_layers = int(getattr(args, "clean_public_transformer_layers", 1))
+        self.public_transformer_heads = int(getattr(args, "clean_public_transformer_heads", 4))
+        self.public_transformer_delta_loss_coef = float(
+            getattr(args, "clean_public_transformer_delta_loss_coef", self.public_delta_loss_coef)
+        )
 
         self.obs_dim = input_shape
         if getattr(args, "obs_last_action", False):
@@ -2392,6 +2913,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_public_delta_aux_hypercond",
+            *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -2514,6 +3036,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_public_delta_aux_hypercond",
+            *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -2576,6 +3099,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_public_delta_aux_hypercond",
+            *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -2645,6 +3169,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_global_filled_obs_hypercond",
                 "rpg_relation_distill_hypercond",
                 "rpg_public_delta_aux_hypercond",
+                *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
                 "rpg_semantic_selfattn_relation_hypercond",
                 "rpg_entity_selfattn_relation_hypercond",
                 "rpg_topk_entity_relation_hypercond",
@@ -2798,6 +3323,7 @@ class CleanHyperAgent(nn.Module):
                     "rpg_global_filled_obs_hypercond",
                     "rpg_relation_distill_hypercond",
                     "rpg_public_delta_aux_hypercond",
+                    *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
                     "rpg_semantic_selfattn_relation_hypercond",
                     "rpg_entity_selfattn_relation_hypercond",
                     "rpg_topk_entity_relation_hypercond",
@@ -3069,6 +3595,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_public_delta_aux_hypercond",
+            *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -3343,6 +3870,8 @@ class CleanHyperAgent(nn.Module):
             capturer_cls = HeteroGATRelationCapturer
         elif self.model_type == "rpg_public_relation_hypercond":
             capturer_cls = PublicRPGRelationCapturer
+        elif self.model_type in PUBLIC_TRANSFORMER_RELATION_VARIANTS:
+            capturer_cls = PublicTransformerRelationCapturer
         elif self.model_type == "rpg_semantic_selfattn_relation_hypercond":
             capturer_cls = SemanticSelfAttentionRelationCapturer
         elif self.model_type == "rpg_entity_selfattn_relation_hypercond":
@@ -3401,6 +3930,27 @@ class CleanHyperAgent(nn.Module):
                 obs_own_health=self.rpg_obs_layout["obs_own_health"],
                 obs_last_action=self.rpg_obs_layout["obs_last_action"],
                 n_actions=self.n_actions,
+            )
+        elif capturer_cls is PublicTransformerRelationCapturer:
+            capturer_kwargs.update(
+                unit_type_bits=self.rpg_obs_layout["unit_type_bits"],
+                shield_bits_ally=self.rpg_obs_layout["shield_bits_ally"],
+                shield_bits_enemy=self.rpg_obs_layout["shield_bits_enemy"],
+                obs_all_health=self.rpg_obs_layout["obs_all_health"],
+                obs_own_health=self.rpg_obs_layout["obs_own_health"],
+                obs_last_action=self.rpg_obs_layout["obs_last_action"],
+                n_actions=self.n_actions,
+                mode={
+                    "rpg_public_transformer_hypercond": "baseline",
+                    "rpg_public_future_delta_token_transformer_hypercond": "future_delta_token",
+                    "rpg_public_future_delta_bias_transformer_hypercond": "future_delta_bias",
+                    "rpg_public_private_token_transformer_hypercond": "private_token",
+                    "rpg_public_private_bias_transformer_hypercond": "private_bias",
+                    "rpg_public_past_delta_token_transformer_hypercond": "past_delta_token",
+                    "rpg_public_past_delta_bias_transformer_hypercond": "past_delta_bias",
+                }[self.model_type],
+                num_heads=self.public_transformer_heads,
+                num_layers=self.public_transformer_layers,
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(
@@ -3622,19 +4172,49 @@ class CleanHyperAgent(nn.Module):
         )
         move_feat, enemy_feat, ally_feat, own_feat = self._split_rpg_obs(obs)
         self_feat = th.cat([move_feat, own_feat], dim=-1)
-        (
-            condition,
-            new_relation_hidden,
-            ally_attn,
-            enemy_attn,
-            enemy_tokens,
-            enemy_mask,
-        ) = self.rpg_relation_capturer(
-            self_feat=self_feat,
-            ally_feat=ally_feat,
-            enemy_feat=enemy_feat,
-            prev_relation_hidden=relation_hidden,
-        )
+        if isinstance(self.rpg_relation_capturer, PublicTransformerRelationCapturer):
+            prev_obs = context.get("prev_obs")
+            next_obs = context.get("next_obs")
+            if prev_obs is None:
+                prev_obs = th.zeros_like(obs)
+            if next_obs is None:
+                next_obs = th.zeros_like(obs)
+            prev_move, prev_enemy, prev_ally, prev_own = self._split_rpg_obs(prev_obs)
+            next_move, next_enemy, next_ally, next_own = self._split_rpg_obs(next_obs)
+            (
+                condition,
+                new_relation_hidden,
+                ally_attn,
+                enemy_attn,
+                enemy_tokens,
+                enemy_mask,
+            ) = self.rpg_relation_capturer(
+                self_feat=self_feat,
+                ally_feat=ally_feat,
+                enemy_feat=enemy_feat,
+                prev_relation_hidden=relation_hidden,
+                prev_self_feat=th.cat([prev_move, prev_own], dim=-1),
+                prev_ally_feat=prev_ally,
+                prev_enemy_feat=prev_enemy,
+                next_self_feat=th.cat([next_move, next_own], dim=-1),
+                next_ally_feat=next_ally,
+                next_enemy_feat=next_enemy,
+                next_obs_mask=context.get("next_obs_mask"),
+            )
+        else:
+            (
+                condition,
+                new_relation_hidden,
+                ally_attn,
+                enemy_attn,
+                enemy_tokens,
+                enemy_mask,
+            ) = self.rpg_relation_capturer(
+                self_feat=self_feat,
+                ally_feat=ally_feat,
+                enemy_feat=enemy_feat,
+                prev_relation_hidden=relation_hidden,
+            )
         self.latest_relation_ally_attn = ally_attn.detach()
         self.latest_relation_enemy_attn = enemy_attn.detach()
         return condition, new_relation_hidden, enemy_tokens, enemy_mask
@@ -3774,6 +4354,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_public_delta_aux_hypercond",
+            *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -4234,6 +4815,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_public_delta_aux_hypercond",
+            *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
@@ -4349,6 +4931,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_public_delta_aux_hypercond",
+            *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -4470,6 +5053,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_global_filled_obs_hypercond",
                 "rpg_relation_distill_hypercond",
                 "rpg_public_delta_aux_hypercond",
+                *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
                 "rpg_residual_interaction_hypercond",
                 "rpg_film_interaction_hypercond",
                 "rpg_moe_interaction_head",
@@ -4517,6 +5101,17 @@ class CleanHyperAgent(nn.Module):
                         q = self._apply_rpg_structured_maker(
                             hidden, relation_condition, enemy_tokens, enemy_mask, context=context
                         )
+                    if (
+                        self.model_type in PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS
+                        and th.is_grad_enabled()
+                        and not test_mode
+                    ):
+                        aux_loss = getattr(self.rpg_relation_capturer, "latest_aux_loss", None)
+                        if aux_loss is not None:
+                            self.latest_aux_loss = self.public_transformer_delta_loss_coef * aux_loss
+                            self.latest_aux_stats.update(
+                                getattr(self.rpg_relation_capturer, "latest_aux_stats", {})
+                            )
                     if (
                         self.model_type == "rpg_public_delta_aux_hypercond"
                         and th.is_grad_enabled()
