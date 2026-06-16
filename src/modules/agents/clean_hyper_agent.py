@@ -36,13 +36,25 @@ PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS = {
     "rpg_public_future_delta_token_transformer_hypercond",
     "rpg_public_future_delta_bias_transformer_hypercond",
 }
+PUBLIC_TRANSFORMER_FUTURE_DELTA_SINGLE_HEAD_VARIANTS = {
+    "rpg_public_future_delta_token_transformer_single_head_hypercond",
+    "rpg_public_future_delta_bias_transformer_single_head_hypercond",
+}
 PUBLIC_TRANSFORMER_PAST_DELTA_VARIANTS = {
     "rpg_public_past_delta_token_transformer_hypercond",
     "rpg_public_past_delta_bias_transformer_hypercond",
 }
+PUBLIC_TRANSFORMER_PAST_DELTA_SINGLE_HEAD_VARIANTS = {
+    "rpg_public_past_delta_token_transformer_single_head_hypercond",
+    "rpg_public_past_delta_bias_transformer_single_head_hypercond",
+}
 PUBLIC_TRANSFORMER_PRIVATE_VARIANTS = {
     "rpg_public_private_token_transformer_hypercond",
     "rpg_public_private_bias_transformer_hypercond",
+}
+PUBLIC_TRANSFORMER_PRIVATE_SINGLE_HEAD_VARIANTS = {
+    "rpg_public_private_token_transformer_single_head_hypercond",
+    "rpg_public_private_bias_transformer_single_head_hypercond",
 }
 PUBLIC_TRANSFORMER_TOKEN_VARIANTS = {
     "rpg_public_future_delta_token_transformer_hypercond",
@@ -60,6 +72,34 @@ PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
     | PUBLIC_TRANSFORMER_PAST_DELTA_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_VARIANTS
 )
+PUBLIC_TRANSFORMER_SINGLE_HEAD_VARIANTS = (
+    {"rpg_public_transformer_single_head_hypercond"}
+    | PUBLIC_TRANSFORMER_FUTURE_DELTA_SINGLE_HEAD_VARIANTS
+    | PUBLIC_TRANSFORMER_PAST_DELTA_SINGLE_HEAD_VARIANTS
+    | PUBLIC_TRANSFORMER_PRIVATE_SINGLE_HEAD_VARIANTS
+)
+PUBLIC_TRANSFORMER_CAPTURER_VARIANTS = (
+    PUBLIC_TRANSFORMER_RELATION_VARIANTS | PUBLIC_TRANSFORMER_SINGLE_HEAD_VARIANTS
+)
+PUBLIC_TRANSFORMER_FUTURE_DELTA_ALL_VARIANTS = (
+    PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS | PUBLIC_TRANSFORMER_FUTURE_DELTA_SINGLE_HEAD_VARIANTS
+)
+PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
+    "rpg_public_transformer_hypercond": "baseline",
+    "rpg_public_transformer_single_head_hypercond": "baseline",
+    "rpg_public_future_delta_token_transformer_hypercond": "future_delta_token",
+    "rpg_public_future_delta_token_transformer_single_head_hypercond": "future_delta_token",
+    "rpg_public_future_delta_bias_transformer_hypercond": "future_delta_bias",
+    "rpg_public_future_delta_bias_transformer_single_head_hypercond": "future_delta_bias",
+    "rpg_public_private_token_transformer_hypercond": "private_token",
+    "rpg_public_private_token_transformer_single_head_hypercond": "private_token",
+    "rpg_public_private_bias_transformer_hypercond": "private_bias",
+    "rpg_public_private_bias_transformer_single_head_hypercond": "private_bias",
+    "rpg_public_past_delta_token_transformer_hypercond": "past_delta_token",
+    "rpg_public_past_delta_token_transformer_single_head_hypercond": "past_delta_token",
+    "rpg_public_past_delta_bias_transformer_hypercond": "past_delta_bias",
+    "rpg_public_past_delta_bias_transformer_single_head_hypercond": "past_delta_bias",
+}
 
 
 def _neg_inf_like(tensor):
@@ -2743,7 +2783,7 @@ class CleanHyperAgent(nn.Module):
         "rpg_public_delta_aux_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         **{
             name: {"uses_hypernet": True, "execution_scope": "ctde"}
-            for name in PUBLIC_TRANSFORMER_RELATION_VARIANTS
+            for name in PUBLIC_TRANSFORMER_CAPTURER_VARIANTS
         },
         "rpg_residual_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_film_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -2913,7 +2953,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_public_delta_aux_hypercond",
-            *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
+            *PUBLIC_TRANSFORMER_CAPTURER_VARIANTS,
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -3595,7 +3635,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_public_delta_aux_hypercond",
-            *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
+            *PUBLIC_TRANSFORMER_CAPTURER_VARIANTS,
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -3870,7 +3910,7 @@ class CleanHyperAgent(nn.Module):
             capturer_cls = HeteroGATRelationCapturer
         elif self.model_type == "rpg_public_relation_hypercond":
             capturer_cls = PublicRPGRelationCapturer
-        elif self.model_type in PUBLIC_TRANSFORMER_RELATION_VARIANTS:
+        elif self.model_type in PUBLIC_TRANSFORMER_CAPTURER_VARIANTS:
             capturer_cls = PublicTransformerRelationCapturer
         elif self.model_type == "rpg_semantic_selfattn_relation_hypercond":
             capturer_cls = SemanticSelfAttentionRelationCapturer
@@ -3940,15 +3980,7 @@ class CleanHyperAgent(nn.Module):
                 obs_own_health=self.rpg_obs_layout["obs_own_health"],
                 obs_last_action=self.rpg_obs_layout["obs_last_action"],
                 n_actions=self.n_actions,
-                mode={
-                    "rpg_public_transformer_hypercond": "baseline",
-                    "rpg_public_future_delta_token_transformer_hypercond": "future_delta_token",
-                    "rpg_public_future_delta_bias_transformer_hypercond": "future_delta_bias",
-                    "rpg_public_private_token_transformer_hypercond": "private_token",
-                    "rpg_public_private_bias_transformer_hypercond": "private_bias",
-                    "rpg_public_past_delta_token_transformer_hypercond": "past_delta_token",
-                    "rpg_public_past_delta_bias_transformer_hypercond": "past_delta_bias",
-                }[self.model_type],
+                mode=PUBLIC_TRANSFORMER_MODE_BY_MODEL[self.model_type],
                 num_heads=self.public_transformer_heads,
                 num_layers=self.public_transformer_layers,
             )
@@ -4354,7 +4386,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_public_delta_aux_hypercond",
-            *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
+            *PUBLIC_TRANSFORMER_CAPTURER_VARIANTS,
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -4931,7 +4963,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_global_filled_obs_hypercond",
             "rpg_relation_distill_hypercond",
             "rpg_public_delta_aux_hypercond",
-            *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
+            *PUBLIC_TRANSFORMER_CAPTURER_VARIANTS,
             "rpg_residual_interaction_hypercond",
             "rpg_film_interaction_hypercond",
             "rpg_moe_interaction_head",
@@ -5053,7 +5085,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_global_filled_obs_hypercond",
                 "rpg_relation_distill_hypercond",
                 "rpg_public_delta_aux_hypercond",
-                *PUBLIC_TRANSFORMER_RELATION_VARIANTS,
+                *PUBLIC_TRANSFORMER_CAPTURER_VARIANTS,
                 "rpg_residual_interaction_hypercond",
                 "rpg_film_interaction_hypercond",
                 "rpg_moe_interaction_head",
@@ -5077,10 +5109,22 @@ class CleanHyperAgent(nn.Module):
                     "rpg_relation_hypercond",
                     "two_graph_gat_hypercond",
                     "hetero_gat_hypercond",
+                    *PUBLIC_TRANSFORMER_SINGLE_HEAD_VARIANTS,
                 }:
                     condition = relation_condition
                     self.latest_condition = condition.detach()
                     q = self._apply_dynamic_head(hidden, condition)
+                    if (
+                        self.model_type in PUBLIC_TRANSFORMER_FUTURE_DELTA_ALL_VARIANTS
+                        and th.is_grad_enabled()
+                        and not test_mode
+                    ):
+                        aux_loss = getattr(self.rpg_relation_capturer, "latest_aux_loss", None)
+                        if aux_loss is not None:
+                            self.latest_aux_loss = self.public_transformer_delta_loss_coef * aux_loss
+                            self.latest_aux_stats.update(
+                                getattr(self.rpg_relation_capturer, "latest_aux_stats", {})
+                            )
                 elif self.model_type == "rpg_relation_route":
                     route_logits = self.route_logits_head(relation_condition)
                     condition = self._route_from_logits(route_logits, test_mode=test_mode)

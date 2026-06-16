@@ -158,6 +158,16 @@ hypernet_layers: 2
 #                                                      embeddings.
 # - rpg_public_past_delta_bias_transformer_hypercond: past public delta injected
 #                                                     as attention bias.
+# - *_single_head_hypercond public Transformer variants: same public Transformer
+#                                                       relation generators as
+#                                                       the seven variants
+#                                                       above, but remove the
+#                                                       RPG decision-maker
+#                                                       split. The relation
+#                                                       condition directly
+#                                                       generates a full
+#                                                       two-layer Q-head by
+#                                                       hypernetwork.
 # - rpg_residual_interaction_hypercond: keeps the same generated ego branch,
 #                                       then combines a fixed linear
 #                                       interaction scorer with a
