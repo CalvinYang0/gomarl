@@ -86,6 +86,13 @@ hypernet_layers: 2
 #                                     pattern, applied to [agent hidden,
 #                                     enemy token]. This removes the generated
 #                                     interaction bottleneck layer.
+# - rpg_flat_interaction_hypercond: ablation of the target-wise interaction
+#                                   scorer. It keeps the RPG ego/interaction
+#                                   split and relation-conditioned generated
+#                                   interaction layer, but outputs all enemy
+#                                   attack Q-values at once from the agent
+#                                   hidden state instead of scoring each
+#                                   enemy token separately.
 # - rpg_public_relation_hypercond: same maker as rpg_linear_interaction_hypercond,
 #                                  but the relation pattern is generated from
 #                                  observer-invariant public fields extracted

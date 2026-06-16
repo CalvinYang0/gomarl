@@ -2776,6 +2776,7 @@ class CleanHyperAgent(nn.Module):
         "rpg_full_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_readout_structured_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_linear_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        "rpg_flat_interaction_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_public_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_private_interaction_input_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_global_filled_obs_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -2948,6 +2949,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_flat_interaction_hypercond",
             "rpg_public_relation_hypercond",
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
@@ -3071,6 +3073,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_flat_interaction_hypercond",
             "rpg_public_relation_hypercond",
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
@@ -3134,6 +3137,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_flat_interaction_hypercond",
             "rpg_public_relation_hypercond",
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
@@ -3232,6 +3236,16 @@ class CleanHyperAgent(nn.Module):
                 self.rpg_interaction_bottleneck_b = None
                 self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.rpg_interaction_input_dim)
                 self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
+                self.rpg_interaction_encoder = None
+                self.rpg_interaction_scorer = None
+            elif self.model_type == "rpg_flat_interaction_hypercond":
+                self.rpg_interaction_input_dim = self.hidden_dim
+                self.rpg_interaction_bottleneck_w = None
+                self.rpg_interaction_bottleneck_b = None
+                self.rpg_interaction_out_w = nn.Linear(
+                    self.cond_dim, self.hidden_dim * self.rpg_obs_layout["n_enemies"]
+                )
+                self.rpg_interaction_out_b = nn.Linear(self.cond_dim, self.rpg_obs_layout["n_enemies"])
                 self.rpg_interaction_encoder = None
                 self.rpg_interaction_scorer = None
             elif self.model_type == "rpg_private_interaction_input_hypercond":
@@ -3358,6 +3372,7 @@ class CleanHyperAgent(nn.Module):
                     nn.init.zeros_(self.rpg_interaction_out_b.bias)
                 elif self.model_type in {
                     "rpg_linear_interaction_hypercond",
+                    "rpg_flat_interaction_hypercond",
                     "rpg_public_relation_hypercond",
                     "rpg_private_interaction_input_hypercond",
                     "rpg_global_filled_obs_hypercond",
@@ -3630,6 +3645,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_flat_interaction_hypercond",
             "rpg_public_relation_hypercond",
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
@@ -4381,6 +4397,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_flat_interaction_hypercond",
             "rpg_public_relation_hypercond",
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
@@ -4873,6 +4890,23 @@ class CleanHyperAgent(nn.Module):
             q_attack, _ = self._linear_generated_interaction(
                 flat_interaction_input, flat_condition, batch_size, n_agents
             )
+        elif self.model_type == "rpg_flat_interaction_hypercond":
+            interaction_out_w = self.rpg_interaction_out_w(flat_condition).view(
+                batch_size * n_agents, self.hidden_dim, self.rpg_obs_layout["n_enemies"]
+            )
+            interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(
+                batch_size * n_agents, 1, self.rpg_obs_layout["n_enemies"]
+            )
+            generated_head = th.cat(
+                [
+                    interaction_out_w.reshape(batch_size * n_agents, -1),
+                    interaction_out_b.reshape(batch_size * n_agents, -1),
+                ],
+                dim=-1,
+            )
+            self.latest_generated_interaction_head = generated_head.detach().view(batch_size, n_agents, -1)
+            q_attack = th.bmm(flat_hidden, interaction_out_w) + interaction_out_b
+            q_attack = q_attack.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"])
         elif self.model_type == "rpg_private_interaction_input_hypercond":
             if context is None:
                 raise ValueError("rpg_private_interaction_input_hypercond requires context for private MLP inputs.")
@@ -4958,6 +4992,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_full_structured_hypercond",
             "rpg_readout_structured_hypercond",
             "rpg_linear_interaction_hypercond",
+            "rpg_flat_interaction_hypercond",
             "rpg_public_relation_hypercond",
             "rpg_private_interaction_input_hypercond",
             "rpg_global_filled_obs_hypercond",
@@ -5080,6 +5115,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_full_structured_hypercond",
                 "rpg_readout_structured_hypercond",
                 "rpg_linear_interaction_hypercond",
+                "rpg_flat_interaction_hypercond",
                 "rpg_public_relation_hypercond",
                 "rpg_private_interaction_input_hypercond",
                 "rpg_global_filled_obs_hypercond",
