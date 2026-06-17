@@ -191,6 +191,41 @@ hypernet_layers: 2
 #                                                                   to the
 #                                                                   interaction
 #                                                                   head.
+# - rpg_public_private_token_past_delta_bias_transformer_enemy_slot_hypercond:
+#                                                                   public
+#                                                                   Transformer
+#                                                                   with current
+#                                                                   private
+#                                                                   local
+#                                                                   fields as
+#                                                                   token
+#                                                                   embeddings,
+#                                                                   obs_t -
+#                                                                   obs_{t-1}
+#                                                                   public
+#                                                                   delta as
+#                                                                   attention
+#                                                                   bias, and
+#                                                                   encoded
+#                                                                   enemy slots
+#                                                                   passed to
+#                                                                   the
+#                                                                   interaction
+#                                                                   head.
+# - rpg_public_past_delta_bias_transformer_private_head_input_hypercond:
+#                                                                   public
+#                                                                   Transformer
+#                                                                   with past
+#                                                                   public delta
+#                                                                   as attention
+#                                                                   bias, while
+#                                                                   private
+#                                                                   target
+#                                                                   fields are
+#                                                                   concatenated
+#                                                                   into the
+#                                                                   interaction
+#                                                                   head input.
 # - *_single_head_hypercond public Transformer variants: same public Transformer
 #                                                       relation generators as
 #                                                       the public Transformer

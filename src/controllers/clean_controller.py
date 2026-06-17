@@ -28,6 +28,8 @@ class CleanMAC(BasicMAC):
             "rpg_public_past_delta_bias_transformer_hypercond",
             "rpg_public_private_bias_past_delta_token_transformer_hypercond",
             "rpg_public_private_bias_past_delta_token_transformer_enemy_slot_hypercond",
+            "rpg_public_private_token_past_delta_bias_transformer_enemy_slot_hypercond",
+            "rpg_public_past_delta_bias_transformer_private_head_input_hypercond",
             "rpg_public_transformer_single_head_hypercond",
             "rpg_public_future_delta_token_transformer_single_head_hypercond",
             "rpg_public_future_delta_bias_transformer_single_head_hypercond",
