@@ -53,6 +53,11 @@ RPG_TARGETWISE_ABLATION_VARIANTS = (
 RPG_STANDARD_INTERACTION_ABLATION_VARIANTS = (
     RPG_TARGETWISE_ABLATION_VARIANTS - {"rpg_delta_enemy_token_interaction_hypercond"}
 )
+RPG_TOKEN_DECISION_HEAD_VARIANTS = {
+    "rpg_entity_token_decision_head_hypercond",
+    "rpg_self_enemy_pair_token_decision_head_hypercond",
+    "rpg_relation_token_decision_head_hypercond",
+}
 PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS = {
     "rpg_public_future_delta_token_transformer_hypercond",
     "rpg_public_future_delta_bias_transformer_hypercond",
@@ -2981,6 +2986,10 @@ class CleanHyperAgent(nn.Module):
             name: {"uses_hypernet": True, "execution_scope": "ctde"}
             for name in RPG_TARGETWISE_ABLATION_VARIANTS
         },
+        **{
+            name: {"uses_hypernet": True, "execution_scope": "ctde"}
+            for name in RPG_TOKEN_DECISION_HEAD_VARIANTS
+        },
         "rpg_action_edge_graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_rgcn_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_egcn_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -3155,6 +3164,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
+            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -3280,6 +3290,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
+            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -3345,6 +3356,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
+            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -3594,6 +3606,7 @@ class CleanHyperAgent(nn.Module):
                     "rpg_entity_selfattn_relation_hypercond",
                     "rpg_topk_entity_relation_hypercond",
                     *RPG_TARGETWISE_ABLATION_VARIANTS,
+                    *RPG_TOKEN_DECISION_HEAD_VARIANTS,
                     "rpg_action_edge_graph_hypercond",
                     "rpg_action_edge_rgcn_hypercond",
                     "rpg_action_edge_egcn_hypercond",
@@ -3644,6 +3657,27 @@ class CleanHyperAgent(nn.Module):
             self.rpg_interaction_film_beta = None
             self.rpg_interaction_expert_gate = None
             self.rpg_interaction_expert_heads = None
+
+        if self.model_type in RPG_TOKEN_DECISION_HEAD_VARIANTS:
+            if self.model_type == "rpg_entity_token_decision_head_hypercond":
+                token_interaction_input_dim = self.rpg_relation_dim
+            else:
+                token_interaction_input_dim = 2 * self.rpg_relation_dim
+            self.token_ego_bottleneck_w = nn.Linear(self.cond_dim, self.rpg_relation_dim * self.hidden_dim)
+            self.token_ego_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
+            self.token_ego_out_w = nn.Linear(self.cond_dim, self.hidden_dim * self.rpg_n_ego_actions)
+            self.token_ego_out_b = nn.Linear(self.cond_dim, self.rpg_n_ego_actions)
+            self.token_interaction_input_dim = token_interaction_input_dim
+            self.token_interaction_out_w = nn.Linear(self.cond_dim, self.token_interaction_input_dim)
+            self.token_interaction_out_b = nn.Linear(self.cond_dim, 1)
+        else:
+            self.token_ego_bottleneck_w = None
+            self.token_ego_bottleneck_b = None
+            self.token_ego_out_w = None
+            self.token_ego_out_b = None
+            self.token_interaction_input_dim = None
+            self.token_interaction_out_w = None
+            self.token_interaction_out_b = None
 
         if self.model_type in RPG_POST_TARGET_SELECTION_VARIANTS:
             self.rpg_target_selector = nn.Sequential(
@@ -3902,6 +3936,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
+            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -4672,6 +4707,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
+            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -5119,6 +5155,89 @@ class CleanHyperAgent(nn.Module):
         self.latest_aux_stats["target_select_frac"] = (selected.float().sum() / valid_count).detach()
         return selected
 
+    def _rpg_self_token_from_context(self, context):
+        if context is None:
+            raise ValueError("{} requires context for self-token decision inputs.".format(self.model_type))
+        move_feat, _, _, own_feat = self._split_rpg_obs(context["obs"])
+        self_feat = th.cat([move_feat, own_feat], dim=-1)
+        if not hasattr(self.rpg_relation_capturer, "self_encoder"):
+            raise ValueError("{} requires an RPG-style capturer with self_encoder.".format(self.model_type))
+        return self.rpg_relation_capturer.self_encoder(self_feat)
+
+    def _apply_rpg_token_decision_head(
+        self,
+        relation_condition,
+        self_token,
+        enemy_tokens,
+        enemy_mask,
+        relation_hidden,
+    ):
+        batch_size, n_agents, _ = relation_condition.shape
+        flat_condition = relation_condition.reshape(batch_size * n_agents, -1)
+
+        if self.model_type == "rpg_relation_token_decision_head_hypercond":
+            if relation_hidden is None:
+                raise ValueError("{} requires relation_hidden as decision input.".format(self.model_type))
+            ego_source = relation_hidden
+            interaction_anchor = relation_hidden
+        else:
+            ego_source = self_token
+            interaction_anchor = self_token
+
+        flat_ego_source = ego_source.reshape(batch_size * n_agents, 1, self.rpg_relation_dim)
+        ego_bottleneck_w = self.token_ego_bottleneck_w(flat_condition).view(
+            batch_size * n_agents, self.rpg_relation_dim, self.hidden_dim
+        )
+        ego_bottleneck_b = self.token_ego_bottleneck_b(flat_condition).view(
+            batch_size * n_agents, 1, self.hidden_dim
+        )
+        ego_out_w = self.token_ego_out_w(flat_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.rpg_n_ego_actions
+        )
+        ego_out_b = self.token_ego_out_b(flat_condition).view(
+            batch_size * n_agents, 1, self.rpg_n_ego_actions
+        )
+        ego_mid = F.elu(th.bmm(flat_ego_source, ego_bottleneck_w) + ego_bottleneck_b)
+        q_ego = th.bmm(ego_mid, ego_out_w) + ego_out_b
+        q_ego = q_ego.view(batch_size, n_agents, self.rpg_n_ego_actions)
+
+        if self.model_type == "rpg_entity_token_decision_head_hypercond":
+            interaction_input = enemy_tokens
+        else:
+            anchor_rep = interaction_anchor.unsqueeze(2).expand(
+                -1, -1, self.rpg_obs_layout["n_enemies"], -1
+            )
+            interaction_input = th.cat([anchor_rep, enemy_tokens], dim=-1)
+
+        flat_interaction_input = interaction_input.reshape(
+            batch_size * n_agents,
+            self.rpg_obs_layout["n_enemies"],
+            self.token_interaction_input_dim,
+        )
+        interaction_out_w = self.token_interaction_out_w(flat_condition).view(
+            batch_size * n_agents, self.token_interaction_input_dim, 1
+        )
+        interaction_out_b = self.token_interaction_out_b(flat_condition).view(
+            batch_size * n_agents, 1, 1
+        )
+        q_attack = th.bmm(flat_interaction_input, interaction_out_w) + interaction_out_b
+        q_attack = q_attack.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"])
+
+        generated_head = th.cat(
+            [
+                ego_bottleneck_w.reshape(batch_size * n_agents, -1),
+                ego_bottleneck_b.reshape(batch_size * n_agents, -1),
+                ego_out_w.reshape(batch_size * n_agents, -1),
+                ego_out_b.reshape(batch_size * n_agents, -1),
+                interaction_out_w.reshape(batch_size * n_agents, -1),
+                interaction_out_b.reshape(batch_size * n_agents, -1),
+            ],
+            dim=-1,
+        )
+        self.latest_generated_interaction_head = generated_head.detach().view(batch_size, n_agents, -1)
+        q_attack = q_attack.masked_fill(~enemy_mask.bool(), 0.0)
+        return th.cat([q_ego, q_attack], dim=-1)
+
     def _apply_rpg_structured_maker(self, hidden, relation_condition, enemy_tokens, enemy_mask, context=None):
         batch_size, n_agents, _ = hidden.shape
         flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
@@ -5194,6 +5313,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
+            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -5337,6 +5457,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
+            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -5461,6 +5582,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_entity_selfattn_relation_hypercond",
                 "rpg_topk_entity_relation_hypercond",
                 *RPG_TARGETWISE_ABLATION_VARIANTS,
+                *RPG_TOKEN_DECISION_HEAD_VARIANTS,
                 "rpg_relation_coarse_self_fine_head",
                 "rpg_relation_coarse_fine_four_layer_head",
                 "rpg_relation_coarse_q_fine_gate_head",
@@ -5473,7 +5595,18 @@ class CleanHyperAgent(nn.Module):
                 relation_condition, next_relation_hidden, enemy_tokens, enemy_mask = self._build_rpg_condition(
                     context, relation_hidden_state, test_mode=test_mode
                 )
-                if self.model_type in {
+                if self.model_type in RPG_TOKEN_DECISION_HEAD_VARIANTS:
+                    condition = relation_condition
+                    self.latest_condition = condition.detach()
+                    self_token = self._rpg_self_token_from_context(context)
+                    q = self._apply_rpg_token_decision_head(
+                        relation_condition,
+                        self_token,
+                        enemy_tokens,
+                        enemy_mask,
+                        next_relation_hidden,
+                    )
+                elif self.model_type in {
                     "rpg_relation_hypercond",
                     "two_graph_gat_hypercond",
                     "hetero_gat_hypercond",

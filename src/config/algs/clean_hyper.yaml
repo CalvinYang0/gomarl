@@ -132,6 +132,21 @@ hypernet_layers: 2
 #                                  predicted, and ally/enemy loss is computed
 #                                  only for entity slots visible at both t and
 #                                  t+1.
+# - rpg_entity_token_decision_head_hypercond: RPG relation generator and
+#                                             hypernetwork-conditioned heads,
+#                                             but Q-head inputs do not use the
+#                                             policy GRU hidden. Ego actions
+#                                             use the self token; attack action
+#                                             j uses only enemy token j.
+# - rpg_self_enemy_pair_token_decision_head_hypercond: same no-policy-hidden
+#                                                      ablation, but attack
+#                                                      action j uses
+#                                                      [self token, enemy token
+#                                                      j].
+# - rpg_relation_token_decision_head_hypercond: replaces policy GRU hidden in
+#                                               both ego and interaction heads
+#                                               with the temporal relation
+#                                               hidden state.
 # - rpg_public_transformer_hypercond: same structured decision maker as
 #                                     rpg_linear_interaction_hypercond, but
 #                                     replaces RPG cross-attention relation
