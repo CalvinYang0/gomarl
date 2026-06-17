@@ -180,6 +180,17 @@ hypernet_layers: 2
 #                                                                   injected as
 #                                                                   attention
 #                                                                   bias.
+# - rpg_public_private_bias_past_delta_token_transformer_enemy_slot_hypercond:
+#                                                                   same mixed
+#                                                                   Transformer,
+#                                                                   but sends
+#                                                                   encoded
+#                                                                   enemy slots
+#                                                                   from the
+#                                                                   Transformer
+#                                                                   to the
+#                                                                   interaction
+#                                                                   head.
 # - *_single_head_hypercond public Transformer variants: same public Transformer
 #                                                       relation generators as
 #                                                       the public Transformer

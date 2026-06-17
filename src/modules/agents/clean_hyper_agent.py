@@ -71,6 +71,7 @@ PUBLIC_TRANSFORMER_PAST_DELTA_SINGLE_HEAD_VARIANTS = {
 }
 PUBLIC_TRANSFORMER_MIXED_VARIANTS = {
     "rpg_public_private_bias_past_delta_token_transformer_hypercond",
+    "rpg_public_private_bias_past_delta_token_transformer_enemy_slot_hypercond",
 }
 PUBLIC_TRANSFORMER_MIXED_SINGLE_HEAD_VARIANTS = {
     "rpg_public_private_bias_past_delta_token_transformer_single_head_hypercond",
@@ -132,6 +133,7 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_past_delta_bias_transformer_single_head_hypercond": "past_delta_bias",
     "rpg_public_private_bias_past_delta_token_transformer_hypercond": "private_bias_past_delta_token",
     "rpg_public_private_bias_past_delta_token_transformer_single_head_hypercond": "private_bias_past_delta_token",
+    "rpg_public_private_bias_past_delta_token_transformer_enemy_slot_hypercond": "private_bias_past_delta_token",
 }
 
 
@@ -683,6 +685,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         mode="baseline",
         num_heads=4,
         num_layers=1,
+        use_encoded_enemy_tokens=False,
     ):
         super().__init__()
         del own_dim, obs_last_action, n_actions
@@ -698,6 +701,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.obs_own_health = obs_own_health
         self.mode = mode
         self.num_heads = num_heads
+        self.use_encoded_enemy_tokens = bool(use_encoded_enemy_tokens)
 
         self.public_self_dim = 1 + unit_type_bits
         self.public_ally_dim = 1 + unit_type_bits
@@ -1171,6 +1175,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         condition = self.output_encoder(relation_hidden)
         ally_attn = self._masked_uniform_attention(ally_mask)
         enemy_attn = self._masked_uniform_attention(enemy_mask)
+        if self.use_encoded_enemy_tokens:
+            enemy_start = 2 + ally_tokens.size(2)
+            enemy_tokens = encoded[:, :, enemy_start:] * enemy_mask.unsqueeze(-1).float()
         return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
 
 
@@ -4197,6 +4204,10 @@ class CleanHyperAgent(nn.Module):
                 mode=PUBLIC_TRANSFORMER_MODE_BY_MODEL[self.model_type],
                 num_heads=self.public_transformer_heads,
                 num_layers=self.public_transformer_layers,
+                use_encoded_enemy_tokens=(
+                    self.model_type
+                    == "rpg_public_private_bias_past_delta_token_transformer_enemy_slot_hypercond"
+                ),
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(
