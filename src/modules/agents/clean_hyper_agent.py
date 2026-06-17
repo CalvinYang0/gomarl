@@ -32,6 +32,27 @@ ACTION_EDGE_REL_PRIVATE_VARIANTS = (
     ACTION_EDGE_REL_PRIVATE_SINGLE_HEAD_VARIANTS
     | {"rpg_action_edge_public_pred_relation_private_decision_maker"}
 )
+RPG_POST_TARGET_SELECTION_VARIANTS = {
+    "rpg_post_topk_enemy_interaction_hypercond",
+    "rpg_post_threshold_enemy_interaction_hypercond",
+}
+RPG_PRE_RELATION_SELECTION_VARIANTS = {
+    "rpg_pre_topk_entity_relation_hypercond",
+    "rpg_pre_threshold_entity_relation_hypercond",
+}
+RPG_ENEMY_TOKEN_VARIANTS = {
+    "rpg_no_enemy_token_interaction_hypercond",
+    "rpg_private_enemy_token_interaction_hypercond",
+    "rpg_delta_enemy_token_interaction_hypercond",
+}
+RPG_TARGETWISE_ABLATION_VARIANTS = (
+    RPG_POST_TARGET_SELECTION_VARIANTS
+    | RPG_PRE_RELATION_SELECTION_VARIANTS
+    | RPG_ENEMY_TOKEN_VARIANTS
+)
+RPG_STANDARD_INTERACTION_ABLATION_VARIANTS = (
+    RPG_TARGETWISE_ABLATION_VARIANTS - {"rpg_delta_enemy_token_interaction_hypercond"}
+)
 PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS = {
     "rpg_public_future_delta_token_transformer_hypercond",
     "rpg_public_future_delta_bias_transformer_hypercond",
@@ -48,6 +69,12 @@ PUBLIC_TRANSFORMER_PAST_DELTA_SINGLE_HEAD_VARIANTS = {
     "rpg_public_past_delta_token_transformer_single_head_hypercond",
     "rpg_public_past_delta_bias_transformer_single_head_hypercond",
 }
+PUBLIC_TRANSFORMER_MIXED_VARIANTS = {
+    "rpg_public_private_bias_past_delta_token_transformer_hypercond",
+}
+PUBLIC_TRANSFORMER_MIXED_SINGLE_HEAD_VARIANTS = {
+    "rpg_public_private_bias_past_delta_token_transformer_single_head_hypercond",
+}
 PUBLIC_TRANSFORMER_PRIVATE_VARIANTS = {
     "rpg_public_private_token_transformer_hypercond",
     "rpg_public_private_bias_transformer_hypercond",
@@ -60,22 +87,26 @@ PUBLIC_TRANSFORMER_TOKEN_VARIANTS = {
     "rpg_public_future_delta_token_transformer_hypercond",
     "rpg_public_past_delta_token_transformer_hypercond",
     "rpg_public_private_token_transformer_hypercond",
+    "rpg_public_private_bias_past_delta_token_transformer_hypercond",
 }
 PUBLIC_TRANSFORMER_BIAS_VARIANTS = {
     "rpg_public_future_delta_bias_transformer_hypercond",
     "rpg_public_past_delta_bias_transformer_hypercond",
     "rpg_public_private_bias_transformer_hypercond",
+    "rpg_public_private_bias_past_delta_token_transformer_hypercond",
 }
 PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
     {"rpg_public_transformer_hypercond"}
     | PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS
     | PUBLIC_TRANSFORMER_PAST_DELTA_VARIANTS
+    | PUBLIC_TRANSFORMER_MIXED_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_VARIANTS
 )
 PUBLIC_TRANSFORMER_SINGLE_HEAD_VARIANTS = (
     {"rpg_public_transformer_single_head_hypercond"}
     | PUBLIC_TRANSFORMER_FUTURE_DELTA_SINGLE_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_PAST_DELTA_SINGLE_HEAD_VARIANTS
+    | PUBLIC_TRANSFORMER_MIXED_SINGLE_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_SINGLE_HEAD_VARIANTS
 )
 PUBLIC_TRANSFORMER_CAPTURER_VARIANTS = (
@@ -99,6 +130,8 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_past_delta_token_transformer_single_head_hypercond": "past_delta_token",
     "rpg_public_past_delta_bias_transformer_hypercond": "past_delta_bias",
     "rpg_public_past_delta_bias_transformer_single_head_hypercond": "past_delta_bias",
+    "rpg_public_private_bias_past_delta_token_transformer_hypercond": "private_bias_past_delta_token",
+    "rpg_public_private_bias_past_delta_token_transformer_single_head_hypercond": "private_bias_past_delta_token",
 }
 
 
@@ -348,6 +381,92 @@ class RPGInspiredRelationCapturer(nn.Module):
         )
         enemy_context, enemy_attn = self._masked_cross_attention(
             self_token, enemy_tokens, enemy_mask, self.enemy_key, self.enemy_value
+        )
+
+        instant = self.instant_pattern(th.cat([self_token, ally_context, enemy_context], dim=-1))
+        temporal_input = th.cat([self_token, instant], dim=-1)
+
+        batch_size, n_agents, _ = temporal_input.shape
+        flat_input = temporal_input.reshape(batch_size * n_agents, -1)
+        flat_prev = prev_relation_hidden.reshape(batch_size * n_agents, -1)
+        relation_hidden = self.temporal_gru(flat_input, flat_prev).view(batch_size, n_agents, self.relation_dim)
+        condition = self.output_encoder(relation_hidden)
+        return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
+
+
+class PreSelectRPGRelationCapturer(RPGInspiredRelationCapturer):
+    # Pre-relation bottleneck: score ally/enemy context entities from the
+    # self-centered query, then let the original RPG-style cross-attention see
+    # only selected context entities. Target Q-values are still produced for
+    # every observed enemy, so this isolates relation-generation selection.
+    def __init__(
+        self,
+        move_dim,
+        own_dim,
+        ally_feat_dim,
+        enemy_feat_dim,
+        relation_dim,
+        output_dim,
+        selection_mode="topk",
+        topk=5,
+        threshold=0.5,
+    ):
+        super().__init__(
+            move_dim=move_dim,
+            own_dim=own_dim,
+            ally_feat_dim=ally_feat_dim,
+            enemy_feat_dim=enemy_feat_dim,
+            relation_dim=relation_dim,
+            output_dim=output_dim,
+        )
+        self.selection_mode = selection_mode
+        self.topk = int(topk)
+        self.threshold = float(threshold)
+
+    def _select_entity_mask(self, scores, entity_mask):
+        valid_mask = entity_mask.bool()
+        if scores.size(-1) == 0:
+            return valid_mask
+        masked_scores = scores.masked_fill(~valid_mask, _neg_inf_like(scores))
+        valid_any = valid_mask.any(dim=-1, keepdim=True)
+        if self.selection_mode == "topk":
+            k = max(1, min(self.topk, scores.size(-1)))
+            _, indices = th.topk(masked_scores, k=k, dim=-1)
+            gathered_valid = th.gather(valid_mask, dim=-1, index=indices)
+            selected = scores.new_zeros(scores.shape)
+            selected.scatter_(dim=-1, index=indices, src=gathered_valid.float())
+            selected = selected.bool()
+        else:
+            selected = (th.sigmoid(scores) >= self.threshold) & valid_mask
+            selected_any = selected.any(dim=-1, keepdim=True)
+            fallback_idx = masked_scores.argmax(dim=-1, keepdim=True)
+            fallback = th.zeros_like(selected)
+            fallback.scatter_(dim=-1, index=fallback_idx, src=valid_any)
+            selected = th.where(selected_any, selected, fallback)
+        return selected & valid_mask
+
+    def forward(self, self_feat, ally_feat, enemy_feat, prev_relation_hidden):
+        self_token = self.self_encoder(self_feat)
+        ally_mask = ally_feat.abs().sum(dim=-1) > 0
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        ally_tokens = self.ally_encoder(ally_feat) * ally_mask.unsqueeze(-1).float()
+        enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
+
+        query = self.self_query(self_token)
+        scale = math.sqrt(float(self.relation_dim))
+        ally_scores = th.matmul(query.unsqueeze(2), self.ally_key(ally_tokens).transpose(-1, -2)).squeeze(2) / scale
+        enemy_scores = th.matmul(query.unsqueeze(2), self.enemy_key(enemy_tokens).transpose(-1, -2)).squeeze(2) / scale
+        entity_scores = th.cat([ally_scores, enemy_scores], dim=-1)
+        entity_mask = th.cat([ally_mask, enemy_mask], dim=-1)
+        selected_entity_mask = self._select_entity_mask(entity_scores, entity_mask)
+        selected_ally_mask = selected_entity_mask[:, :, : ally_feat.size(2)]
+        selected_enemy_mask = selected_entity_mask[:, :, ally_feat.size(2) :]
+
+        ally_context, ally_attn = self._masked_cross_attention(
+            self_token, ally_tokens, selected_ally_mask, self.ally_key, self.ally_value
+        )
+        enemy_context, enemy_attn = self._masked_cross_attention(
+            self_token, enemy_tokens, selected_enemy_mask, self.enemy_key, self.enemy_value
         )
 
         instant = self.instant_pattern(th.cat([self_token, ally_context, enemy_context], dim=-1))
@@ -955,7 +1074,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         enemy_public_tokens = enemy_public_tokens * enemy_mask.unsqueeze(-1).float()
         enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
 
-        mod_self = mod_ally = mod_enemy = None
+        token_self = token_ally = token_enemy = None
+        bias_self = bias_ally = bias_enemy = None
         if self.mode in {"future_delta_token", "future_delta_bias"}:
             mod_self, mod_ally, mod_enemy = self._future_delta_embeddings(
                 self_feat,
@@ -975,6 +1095,10 @@ class PublicTransformerRelationCapturer(nn.Module):
                 next_enemy_mask,
                 next_obs_mask,
             )
+            if self.mode == "future_delta_token":
+                token_self, token_ally, token_enemy = mod_self, mod_ally, mod_enemy
+            else:
+                bias_self, bias_ally, bias_enemy = mod_self, mod_ally, mod_enemy
         elif self.mode in {"past_delta_token", "past_delta_bias"}:
             mod_self, mod_ally, mod_enemy = self._past_delta_embeddings(
                 self_feat,
@@ -988,15 +1112,39 @@ class PublicTransformerRelationCapturer(nn.Module):
                 prev_ally_mask,
                 prev_enemy_mask,
             )
+            if self.mode == "past_delta_token":
+                token_self, token_ally, token_enemy = mod_self, mod_ally, mod_enemy
+            else:
+                bias_self, bias_ally, bias_enemy = mod_self, mod_ally, mod_enemy
         elif self.mode in {"private_token", "private_bias"}:
             mod_self, mod_ally, mod_enemy = self._private_embeddings(
                 self_feat, ally_feat, enemy_feat, ally_mask, enemy_mask
             )
+            if self.mode == "private_token":
+                token_self, token_ally, token_enemy = mod_self, mod_ally, mod_enemy
+            else:
+                bias_self, bias_ally, bias_enemy = mod_self, mod_ally, mod_enemy
+        elif self.mode == "private_bias_past_delta_token":
+            token_self, token_ally, token_enemy = self._past_delta_embeddings(
+                self_feat,
+                ally_feat,
+                enemy_feat,
+                ally_mask,
+                enemy_mask,
+                prev_self_feat,
+                prev_ally_feat,
+                prev_enemy_feat,
+                prev_ally_mask,
+                prev_enemy_mask,
+            )
+            bias_self, bias_ally, bias_enemy = self._private_embeddings(
+                self_feat, ally_feat, enemy_feat, ally_mask, enemy_mask
+            )
 
-        if self.mode.endswith("_token") and mod_self is not None:
-            self_token = self_token + mod_self
-            ally_tokens = ally_tokens + mod_ally
-            enemy_public_tokens = enemy_public_tokens + mod_enemy
+        if token_self is not None:
+            self_token = self_token + token_self
+            ally_tokens = ally_tokens + token_ally
+            enemy_public_tokens = enemy_public_tokens + token_enemy
 
         cls_token = self.cls_token.expand(batch_size, n_agents, -1, -1)
         tokens = th.cat([cls_token, self_token.unsqueeze(2), ally_tokens, enemy_public_tokens], dim=2)
@@ -1005,8 +1153,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         token_mask = th.cat([cls_mask, self_mask, ally_mask, enemy_mask], dim=2)
 
         attn_bias = None
-        if self.mode.endswith("_bias") and mod_self is not None:
-            attn_bias = self._build_attention_bias(mod_self, mod_ally, mod_enemy, batch_size, n_agents)
+        if bias_self is not None:
+            attn_bias = self._build_attention_bias(bias_self, bias_ally, bias_enemy, batch_size, n_agents)
 
         flat_tokens = tokens.reshape(batch_size * n_agents, tokens.size(2), self.relation_dim)
         flat_mask = token_mask.reshape(batch_size * n_agents, token_mask.size(2))
@@ -2793,6 +2941,10 @@ class CleanHyperAgent(nn.Module):
         "rpg_semantic_selfattn_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_entity_selfattn_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_topk_entity_relation_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
+        **{
+            name: {"uses_hypernet": True, "execution_scope": "ctde"}
+            for name in RPG_TARGETWISE_ABLATION_VARIANTS
+        },
         "rpg_action_edge_graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_rgcn_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_egcn_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -2909,6 +3061,9 @@ class CleanHyperAgent(nn.Module):
         self.smooth_head_knn = int(getattr(args, "clean_smooth_head_knn", 4))
         self.smooth_head_sample_size = int(getattr(args, "clean_smooth_head_sample_size", 256))
         self.relation_topk = int(getattr(args, "clean_relation_topk", 5))
+        self.target_topk = int(getattr(args, "clean_target_topk", self.relation_topk))
+        self.target_threshold = float(getattr(args, "clean_target_threshold", 0.5))
+        self.pre_relation_threshold = float(getattr(args, "clean_pre_relation_threshold", self.target_threshold))
         self.action_pred_loss_coef = float(getattr(args, "clean_action_pred_loss_coef", 0.05))
         self.public_delta_loss_coef = float(getattr(args, "clean_public_delta_loss_coef", 0.05))
         self.public_transformer_layers = int(getattr(args, "clean_public_transformer_layers", 1))
@@ -2963,6 +3118,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
+            *RPG_TARGETWISE_ABLATION_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -3087,6 +3243,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
+            *RPG_TARGETWISE_ABLATION_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -3151,6 +3308,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
+            *RPG_TARGETWISE_ABLATION_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -3217,6 +3375,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_semantic_selfattn_relation_hypercond",
                 "rpg_entity_selfattn_relation_hypercond",
                 "rpg_topk_entity_relation_hypercond",
+                *RPG_STANDARD_INTERACTION_ABLATION_VARIANTS,
                 "rpg_action_edge_graph_hypercond",
                 "rpg_action_edge_rgcn_hypercond",
                 "rpg_action_edge_egcn_hypercond",
@@ -3232,6 +3391,14 @@ class CleanHyperAgent(nn.Module):
                 "rpg_delta_relation_hypercond",
             }:
                 self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
+                self.rpg_interaction_bottleneck_w = None
+                self.rpg_interaction_bottleneck_b = None
+                self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.rpg_interaction_input_dim)
+                self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
+                self.rpg_interaction_encoder = None
+                self.rpg_interaction_scorer = None
+            elif self.model_type == "rpg_delta_enemy_token_interaction_hypercond":
+                self.rpg_interaction_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
                 self.rpg_interaction_bottleneck_w = None
                 self.rpg_interaction_bottleneck_b = None
                 self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.rpg_interaction_input_dim)
@@ -3382,6 +3549,7 @@ class CleanHyperAgent(nn.Module):
                     "rpg_semantic_selfattn_relation_hypercond",
                     "rpg_entity_selfattn_relation_hypercond",
                     "rpg_topk_entity_relation_hypercond",
+                    *RPG_TARGETWISE_ABLATION_VARIANTS,
                     "rpg_action_edge_graph_hypercond",
                     "rpg_action_edge_rgcn_hypercond",
                     "rpg_action_edge_egcn_hypercond",
@@ -3432,6 +3600,33 @@ class CleanHyperAgent(nn.Module):
             self.rpg_interaction_film_beta = None
             self.rpg_interaction_expert_gate = None
             self.rpg_interaction_expert_heads = None
+
+        if self.model_type in RPG_POST_TARGET_SELECTION_VARIANTS:
+            self.rpg_target_selector = nn.Sequential(
+                nn.Linear(self.hidden_dim + self.cond_dim + self.rpg_relation_dim, self.hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.hidden_dim, 1),
+            )
+        else:
+            self.rpg_target_selector = None
+
+        if self.model_type == "rpg_private_enemy_token_interaction_hypercond":
+            self.rpg_private_enemy_token_encoder = nn.Sequential(
+                nn.Linear(4, self.rpg_relation_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.rpg_relation_dim, self.rpg_relation_dim),
+            )
+        else:
+            self.rpg_private_enemy_token_encoder = None
+
+        if self.model_type == "rpg_delta_enemy_token_interaction_hypercond":
+            self.rpg_delta_enemy_token_encoder = nn.Sequential(
+                nn.Linear(self.rpg_obs_layout["enemy_feat_dim"], self.rpg_relation_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.rpg_relation_dim, self.rpg_relation_dim),
+            )
+        else:
+            self.rpg_delta_enemy_token_encoder = None
 
         if self.model_type in {
             "rpg_relation_coarse_self_fine_head",
@@ -3659,6 +3854,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
+            *RPG_TARGETWISE_ABLATION_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -3934,6 +4130,8 @@ class CleanHyperAgent(nn.Module):
             capturer_cls = EntitySelfAttentionRelationCapturer
         elif self.model_type == "rpg_topk_entity_relation_hypercond":
             capturer_cls = TopKEntitySelfAttentionRelationCapturer
+        elif self.model_type in RPG_PRE_RELATION_SELECTION_VARIANTS:
+            capturer_cls = PreSelectRPGRelationCapturer
         elif self.model_type in {
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
@@ -4013,6 +4211,16 @@ class CleanHyperAgent(nn.Module):
             )
         elif capturer_cls is TopKEntitySelfAttentionRelationCapturer:
             capturer_kwargs.update(topk=self.relation_topk)
+        elif capturer_cls is PreSelectRPGRelationCapturer:
+            capturer_kwargs.update(
+                selection_mode=(
+                    "topk"
+                    if self.model_type == "rpg_pre_topk_entity_relation_hypercond"
+                    else "threshold"
+                ),
+                topk=self.relation_topk,
+                threshold=self.pre_relation_threshold,
+            )
         elif capturer_cls is ActionEdgeGraphRelationCapturer:
             layout_obs_dim = (
                 self.rpg_obs_layout["move_dim"]
@@ -4411,6 +4619,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
+            *RPG_TARGETWISE_ABLATION_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -4794,6 +5003,67 @@ class CleanHyperAgent(nn.Module):
         head_sim = (head.unsqueeze(1) * neighbor_head).sum(dim=-1)
         return (1.0 - head_sim).mean()
 
+    def _private_enemy_tokens(self, context, enemy_mask):
+        if context is None:
+            raise ValueError("{} requires context for private enemy tokens.".format(self.model_type))
+        _, enemy_feat, _, _ = self._split_rpg_obs(context["obs"])
+        private_feat = enemy_feat[:, :, :, :4]
+        return self.rpg_private_enemy_token_encoder(private_feat) * enemy_mask.unsqueeze(-1).float()
+
+    def _delta_enemy_tokens(self, context, enemy_mask):
+        if context is None:
+            raise ValueError("{} requires context for delta enemy tokens.".format(self.model_type))
+        _, enemy_feat, _, _ = self._split_rpg_obs(context["obs"])
+        prev_obs = context.get("prev_obs")
+        if prev_obs is None:
+            prev_enemy_feat = th.zeros_like(enemy_feat)
+        else:
+            _, prev_enemy_feat, _, _ = self._split_rpg_obs(prev_obs)
+        prev_enemy_mask = prev_enemy_feat.abs().sum(dim=-1) > 0
+        valid = enemy_mask.bool() & prev_enemy_mask.bool()
+        delta_feat = (enemy_feat - prev_enemy_feat) * valid.unsqueeze(-1).float()
+        return self.rpg_delta_enemy_token_encoder(delta_feat) * valid.unsqueeze(-1).float()
+
+    def _interaction_enemy_features(self, enemy_tokens, enemy_mask, context):
+        if self.model_type == "rpg_no_enemy_token_interaction_hypercond":
+            return th.zeros_like(enemy_tokens)
+        if self.model_type == "rpg_private_enemy_token_interaction_hypercond":
+            return self._private_enemy_tokens(context, enemy_mask)
+        if self.model_type == "rpg_delta_enemy_token_interaction_hypercond":
+            delta_tokens = self._delta_enemy_tokens(context, enemy_mask)
+            return th.cat([enemy_tokens, delta_tokens], dim=-1)
+        return enemy_tokens
+
+    def _target_selection_mask(self, hidden, relation_condition, enemy_tokens, enemy_mask):
+        batch_size, n_agents, n_enemies, _ = enemy_tokens.shape
+        hidden_rep = hidden.unsqueeze(2).expand(-1, -1, n_enemies, -1)
+        cond_rep = relation_condition.unsqueeze(2).expand(-1, -1, n_enemies, -1)
+        selector_input = th.cat([hidden_rep, cond_rep, enemy_tokens], dim=-1)
+        scores = self.rpg_target_selector(selector_input).squeeze(-1)
+        valid_mask = enemy_mask.bool()
+        masked_scores = scores.masked_fill(~valid_mask, _neg_inf_like(scores))
+        valid_any = valid_mask.any(dim=-1, keepdim=True)
+
+        if self.model_type == "rpg_post_topk_enemy_interaction_hypercond":
+            k = max(1, min(self.target_topk, n_enemies))
+            _, indices = th.topk(masked_scores, k=k, dim=-1)
+            gathered_valid = th.gather(valid_mask, dim=-1, index=indices)
+            selected = scores.new_zeros(scores.shape)
+            selected.scatter_(dim=-1, index=indices, src=gathered_valid.float())
+            selected = selected.bool()
+        else:
+            selected = (th.sigmoid(scores) >= self.target_threshold) & valid_mask
+            selected_any = selected.any(dim=-1, keepdim=True)
+            fallback_idx = masked_scores.argmax(dim=-1, keepdim=True)
+            fallback = th.zeros_like(selected)
+            fallback.scatter_(dim=-1, index=fallback_idx, src=valid_any)
+            selected = th.where(selected_any, selected, fallback)
+
+        selected = selected & valid_mask
+        valid_count = valid_mask.float().sum().clamp(min=1.0)
+        self.latest_aux_stats["target_select_frac"] = (selected.float().sum() / valid_count).detach()
+        return selected
+
     def _apply_rpg_structured_maker(self, hidden, relation_condition, enemy_tokens, enemy_mask, context=None):
         batch_size, n_agents, _ = hidden.shape
         flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
@@ -4868,6 +5138,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
+            *RPG_TARGETWISE_ABLATION_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -4883,13 +5154,17 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_target_context_hypercond",
             "rpg_delta_relation_hypercond",
         }:
-            interaction_input = th.cat([hidden_rep, enemy_tokens], dim=-1)
+            interaction_enemy_features = self._interaction_enemy_features(enemy_tokens, enemy_mask, context)
+            interaction_input = th.cat([hidden_rep, interaction_enemy_features], dim=-1)
             flat_interaction_input = interaction_input.reshape(
                 batch_size * n_agents, self.rpg_obs_layout["n_enemies"], self.rpg_interaction_input_dim
             )
             q_attack, _ = self._linear_generated_interaction(
                 flat_interaction_input, flat_condition, batch_size, n_agents
             )
+            if self.model_type in RPG_POST_TARGET_SELECTION_VARIANTS:
+                target_mask = self._target_selection_mask(hidden, relation_condition, enemy_tokens, enemy_mask)
+                q_attack = q_attack.masked_fill(~target_mask, 0.0)
         elif self.model_type == "rpg_flat_interaction_hypercond":
             interaction_out_w = self.rpg_interaction_out_w(flat_condition).view(
                 batch_size * n_agents, self.hidden_dim, self.rpg_obs_layout["n_enemies"]
@@ -5006,6 +5281,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_semantic_selfattn_relation_hypercond",
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
+            *RPG_TARGETWISE_ABLATION_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -5129,6 +5405,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_semantic_selfattn_relation_hypercond",
                 "rpg_entity_selfattn_relation_hypercond",
                 "rpg_topk_entity_relation_hypercond",
+                *RPG_TARGETWISE_ABLATION_VARIANTS,
                 "rpg_relation_coarse_self_fine_head",
                 "rpg_relation_coarse_fine_four_layer_head",
                 "rpg_relation_coarse_q_fine_gate_head",

@@ -165,9 +165,25 @@ hypernet_layers: 2
 #                                                      embeddings.
 # - rpg_public_past_delta_bias_transformer_hypercond: past public delta injected
 #                                                     as attention bias.
+# - rpg_public_private_bias_past_delta_token_transformer_hypercond: public
+#                                                                   Transformer
+#                                                                   with obs_t
+#                                                                   - obs_{t-1}
+#                                                                   public delta
+#                                                                   injected as
+#                                                                   token
+#                                                                   embeddings,
+#                                                                   and current
+#                                                                   private
+#                                                                   local
+#                                                                   fields
+#                                                                   injected as
+#                                                                   attention
+#                                                                   bias.
 # - *_single_head_hypercond public Transformer variants: same public Transformer
 #                                                       relation generators as
-#                                                       the seven variants
+#                                                       the public Transformer
+#                                                       variants
 #                                                       above, but remove the
 #                                                       RPG decision-maker
 #                                                       split. The relation
@@ -196,6 +212,35 @@ hypernet_layers: 2
 #                                            encouraging nearby relation
 #                                            patterns to generate nearby
 #                                            interaction heads.
+# - rpg_post_topk_enemy_interaction_hypercond: same relation generator as
+#                                             rpg_linear_interaction_hypercond,
+#                                             but after relation generation it
+#                                             scores enemy targets and keeps
+#                                             only top-k targets in the
+#                                             interaction branch.
+# - rpg_post_threshold_enemy_interaction_hypercond: same as above, but keeps
+#                                                   targets whose selection
+#                                                   score exceeds
+#                                                   clean_target_threshold.
+# - rpg_pre_topk_entity_relation_hypercond: before RPG cross-attention, scores
+#                                           ally/enemy context entities from
+#                                           the self query and keeps top-k
+#                                           entities for relation generation.
+# - rpg_pre_threshold_entity_relation_hypercond: same pre-relation bottleneck,
+#                                                using
+#                                                clean_pre_relation_threshold.
+# - rpg_no_enemy_token_interaction_hypercond: target-wise sanity ablation. The
+#                                             interaction branch keeps the
+#                                             generated scorer but removes
+#                                             target-specific enemy tokens.
+# - rpg_private_enemy_token_interaction_hypercond: replaces interaction enemy
+#                                                  tokens with private target
+#                                                  fields such as relative
+#                                                  geometry and availability.
+# - rpg_delta_enemy_token_interaction_hypercond: concatenates the original
+#                                                enemy token with an encoded
+#                                                enemy-feature delta
+#                                                obs_t - obs_{t-1}.
 # - rpg_semantic_selfattn_relation_hypercond: relation-generator ablation.
 #                                             It factorizes obs into feature
 #                                             semantic fields such as health,
@@ -396,6 +441,9 @@ clean_self_fine_delta_scale: 0.1
 clean_self_fine_gate_scale: 1.0
 clean_relation_prototypes: 4
 clean_relation_topk: 5
+clean_target_topk: 5
+clean_target_threshold: 0.5
+clean_pre_relation_threshold: 0.5
 clean_action_pred_loss_coef: 0.05
 clean_public_delta_loss_coef: 0.05
 clean_public_transformer_layers: 1
