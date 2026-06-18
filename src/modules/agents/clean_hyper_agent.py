@@ -79,6 +79,22 @@ PUBLIC_TRANSFORMER_MIXED_VARIANTS = {
     "rpg_public_private_bias_past_delta_token_transformer_enemy_slot_hypercond",
     "rpg_public_private_token_past_delta_bias_transformer_enemy_slot_hypercond",
 }
+PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS = {
+    "rpg_global_public_transformer_hypercond",
+    "rpg_global_public_private_bias_past_delta_token_transformer_hypercond",
+}
+PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS = {
+    "rpg_public_transformer_relation_token_head_hypercond",
+    "rpg_public_private_bias_past_delta_token_transformer_relation_token_head_hypercond",
+}
+PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS = {
+    "rpg_public_private_bias_past_delta_token_transformer_relation_token_topk_hypercond",
+}
+PUBLIC_TRANSFORMER_FRIEND_MERGED_VARIANTS = (
+    PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS
+    | PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS
+    | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
+)
 PUBLIC_TRANSFORMER_MIXED_SINGLE_HEAD_VARIANTS = {
     "rpg_public_private_bias_past_delta_token_transformer_single_head_hypercond",
 }
@@ -113,6 +129,9 @@ PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
     | PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS
     | PUBLIC_TRANSFORMER_PAST_DELTA_VARIANTS
     | PUBLIC_TRANSFORMER_MIXED_VARIANTS
+    | PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS
+    | PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS
+    | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_VARIANTS
 )
@@ -152,7 +171,19 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_private_bias_past_delta_token_transformer_enemy_slot_hypercond": "private_bias_past_delta_token",
     "rpg_public_private_token_past_delta_bias_transformer_enemy_slot_hypercond": "private_token_past_delta_bias",
     "rpg_public_past_delta_bias_transformer_private_head_input_hypercond": "past_delta_bias",
+    "rpg_global_public_transformer_hypercond": "baseline",
+    "rpg_global_public_private_bias_past_delta_token_transformer_hypercond": "private_bias_past_delta_token",
+    "rpg_public_transformer_relation_token_head_hypercond": "baseline",
+    "rpg_public_private_bias_past_delta_token_transformer_relation_token_head_hypercond": "private_bias_past_delta_token",
+    "rpg_public_private_bias_past_delta_token_transformer_relation_token_topk_hypercond": "private_bias_past_delta_token",
 }
+PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS = (
+    PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
+)
+RELATION_TOKEN_DECISION_HEAD_VARIANTS = (
+    {"rpg_relation_token_decision_head_hypercond"} | PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS
+)
+TOKEN_DECISION_HEAD_VARIANTS = RPG_TOKEN_DECISION_HEAD_VARIANTS | PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS
 
 
 def _neg_inf_like(tensor):
@@ -704,6 +735,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         num_heads=4,
         num_layers=1,
         use_encoded_enemy_tokens=False,
+        merge_friendly_public_side=False,
     ):
         super().__init__()
         del own_dim, obs_last_action, n_actions
@@ -720,6 +752,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.mode = mode
         self.num_heads = num_heads
         self.use_encoded_enemy_tokens = bool(use_encoded_enemy_tokens)
+        self.self_public_side_id = 1 if merge_friendly_public_side else 0
 
         self.public_self_dim = 1 + unit_type_bits
         self.public_ally_dim = 1 + unit_type_bits
@@ -1035,7 +1068,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         device = mod_tokens.device
         side_ids = th.cat(
             [
-                th.zeros(1, device=device, dtype=th.long),
+                th.full((1,), self.self_public_side_id, device=device, dtype=th.long),
                 th.ones(mod_ally.size(2), device=device, dtype=th.long),
                 th.full((mod_enemy.size(2),), 2, device=device, dtype=th.long),
             ],
@@ -1089,7 +1122,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         self_public = self._self_public_features(self_feat)
         ally_public = self._ally_public_features(ally_feat, ally_mask)
         enemy_public = self._enemy_public_features(enemy_feat, enemy_mask)
-        self_token = self.self_public_encoder(self_public) + self._side(0, self_feat.device).view(1, 1, -1)
+        self_token = self.self_public_encoder(self_public) + self._side(
+            self.self_public_side_id, self_feat.device
+        ).view(1, 1, -1)
         ally_tokens = self.ally_public_encoder(ally_public) + self._side(1, self_feat.device).view(1, 1, 1, -1)
         enemy_public_tokens = self.enemy_public_encoder(enemy_public) + self._side(2, self_feat.device).view(1, 1, 1, -1)
         ally_tokens = ally_tokens * ally_mask.unsqueeze(-1).float()
@@ -2988,7 +3023,7 @@ class CleanHyperAgent(nn.Module):
         },
         **{
             name: {"uses_hypernet": True, "execution_scope": "ctde"}
-            for name in RPG_TOKEN_DECISION_HEAD_VARIANTS
+            for name in TOKEN_DECISION_HEAD_VARIANTS
         },
         "rpg_action_edge_graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
         "rpg_action_edge_rgcn_hypercond": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -3164,7 +3199,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
-            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
+            *TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -3290,7 +3325,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
-            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
+            *TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -3356,7 +3391,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
-            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
+            *TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -3606,7 +3641,7 @@ class CleanHyperAgent(nn.Module):
                     "rpg_entity_selfattn_relation_hypercond",
                     "rpg_topk_entity_relation_hypercond",
                     *RPG_TARGETWISE_ABLATION_VARIANTS,
-                    *RPG_TOKEN_DECISION_HEAD_VARIANTS,
+                    *TOKEN_DECISION_HEAD_VARIANTS,
                     "rpg_action_edge_graph_hypercond",
                     "rpg_action_edge_rgcn_hypercond",
                     "rpg_action_edge_egcn_hypercond",
@@ -3658,7 +3693,7 @@ class CleanHyperAgent(nn.Module):
             self.rpg_interaction_expert_gate = None
             self.rpg_interaction_expert_heads = None
 
-        if self.model_type in RPG_TOKEN_DECISION_HEAD_VARIANTS:
+        if self.model_type in TOKEN_DECISION_HEAD_VARIANTS:
             if self.model_type == "rpg_entity_token_decision_head_hypercond":
                 token_interaction_input_dim = self.rpg_relation_dim
             else:
@@ -3679,9 +3714,14 @@ class CleanHyperAgent(nn.Module):
             self.token_interaction_out_w = None
             self.token_interaction_out_b = None
 
-        if self.model_type in RPG_POST_TARGET_SELECTION_VARIANTS:
+        if self.model_type in RPG_POST_TARGET_SELECTION_VARIANTS | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS:
+            target_source_dim = (
+                self.rpg_relation_dim
+                if self.model_type in PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
+                else self.hidden_dim
+            )
             self.rpg_target_selector = nn.Sequential(
-                nn.Linear(self.hidden_dim + self.cond_dim + self.rpg_relation_dim, self.hidden_dim),
+                nn.Linear(target_source_dim + self.cond_dim + self.rpg_relation_dim, self.hidden_dim),
                 nn.ReLU(inplace=True),
                 nn.Linear(self.hidden_dim, 1),
             )
@@ -3936,7 +3976,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
-            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
+            *TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -4284,6 +4324,7 @@ class CleanHyperAgent(nn.Module):
                     "rpg_public_private_bias_past_delta_token_transformer_enemy_slot_hypercond",
                     "rpg_public_private_token_past_delta_bias_transformer_enemy_slot_hypercond",
                 },
+                merge_friendly_public_side=self.model_type in PUBLIC_TRANSFORMER_FRIEND_MERGED_VARIANTS,
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(
@@ -4500,6 +4541,102 @@ class CleanHyperAgent(nn.Module):
             dim=-1,
         )
 
+    def _build_global_public_filled_obs(self, context, obs_key="obs", state_key="state"):
+        state = context.get(state_key)
+        obs = context.get(obs_key)
+        if state is None or obs is None:
+            return obs if obs is not None else context["obs"]
+
+        move_feat, local_enemy, local_ally, own_feat = self._split_rpg_obs(obs)
+        ally_state, enemy_state, _ = self._split_sc2_state(state.reshape(state.size(0), -1))
+        layout = self.rpg_obs_layout
+        batch_size, n_agents, _ = move_feat.shape
+        device = obs.device
+
+        self_state = ally_state[:, :n_agents]
+        self_alive = self_state[:, :, 0] > 0
+
+        own_public = own_feat.clone()
+        own_idx = 0
+        state_idx = 0
+        if layout["obs_own_health"]:
+            own_public[:, :, own_idx] = self_state[:, :, state_idx] * self_alive.float()
+            own_idx += 1
+            state_idx = 4
+            if layout["shield_bits_ally"] > 0:
+                own_public[:, :, own_idx : own_idx + layout["shield_bits_ally"]] = (
+                    self_state[:, :, state_idx : state_idx + layout["shield_bits_ally"]]
+                    * self_alive.unsqueeze(-1).float()
+                )
+                own_idx += layout["shield_bits_ally"]
+                state_idx += layout["shield_bits_ally"]
+        else:
+            state_idx = 4 + layout["shield_bits_ally"]
+        if layout["unit_type_bits"] > 0:
+            own_public[:, :, own_idx : own_idx + layout["unit_type_bits"]] = (
+                self_state[:, :, state_idx : state_idx + layout["unit_type_bits"]]
+                * self_alive.unsqueeze(-1).float()
+            )
+
+        enemy_alive = enemy_state[:, :, 0] > 0
+        enemy_valid = (self_alive[:, :, None] & enemy_alive[:, None, :]).float()
+        enemy_feat = local_enemy.clone()
+        obs_idx = 4
+        state_idx = 3
+        if layout["obs_all_health"]:
+            enemy_feat[:, :, :, obs_idx] = enemy_state[:, None, :, 0] * enemy_valid
+            obs_idx += 1
+            if layout["shield_bits_enemy"] > 0:
+                enemy_feat[:, :, :, obs_idx : obs_idx + layout["shield_bits_enemy"]] = (
+                    enemy_state[:, None, :, state_idx : state_idx + layout["shield_bits_enemy"]]
+                    * enemy_valid.unsqueeze(-1)
+                )
+                obs_idx += layout["shield_bits_enemy"]
+                state_idx += layout["shield_bits_enemy"]
+        if layout["unit_type_bits"] > 0:
+            enemy_feat[:, :, :, obs_idx : obs_idx + layout["unit_type_bits"]] = (
+                enemy_state[:, None, :, state_idx : state_idx + layout["unit_type_bits"]]
+                * enemy_valid.unsqueeze(-1)
+            )
+
+        ally_feat = local_ally.clone()
+        ally_ids = th.arange(n_agents, device=device)
+        other_agent_ids = []
+        for agent_id in range(n_agents):
+            other_agent_ids.append(ally_ids[ally_ids != agent_id])
+        other_agent_ids = th.stack(other_agent_ids, dim=0)
+        gathered_ally = ally_state[:, other_agent_ids]
+        ally_alive = gathered_ally[:, :, :, 0] > 0
+        ally_valid = (self_alive[:, :, None] & ally_alive).float()
+
+        obs_idx = 4
+        state_idx = 4
+        if layout["obs_all_health"]:
+            ally_feat[:, :, :, obs_idx] = gathered_ally[:, :, :, 0] * ally_valid
+            obs_idx += 1
+            if layout["shield_bits_ally"] > 0:
+                ally_feat[:, :, :, obs_idx : obs_idx + layout["shield_bits_ally"]] = (
+                    gathered_ally[:, :, :, state_idx : state_idx + layout["shield_bits_ally"]]
+                    * ally_valid.unsqueeze(-1)
+                )
+                obs_idx += layout["shield_bits_ally"]
+                state_idx += layout["shield_bits_ally"]
+        if layout["unit_type_bits"] > 0:
+            ally_feat[:, :, :, obs_idx : obs_idx + layout["unit_type_bits"]] = (
+                gathered_ally[:, :, :, state_idx : state_idx + layout["unit_type_bits"]]
+                * ally_valid.unsqueeze(-1)
+            )
+
+        return th.cat(
+            [
+                move_feat.reshape(batch_size, n_agents, -1),
+                enemy_feat.reshape(batch_size, n_agents, -1),
+                ally_feat.reshape(batch_size, n_agents, -1),
+                own_public.reshape(batch_size, n_agents, -1),
+            ],
+            dim=-1,
+        )
+
     def _build_local_structured_condition(self, hidden, context):
         condition = self.local_condition_encoder(self._build_local_source(hidden, context))
         _, enemy_feat, _, _ = self._split_rpg_obs(context["obs"])
@@ -4508,15 +4645,21 @@ class CleanHyperAgent(nn.Module):
         return condition, enemy_tokens, enemy_mask
 
     def _build_rpg_condition(self, context, relation_hidden, test_mode=False):
-        obs = (
-            self._build_global_filled_obs(context)
-            if self.model_type == "rpg_global_filled_obs_hypercond" and not test_mode
-            else context["obs"]
-        )
+        if self.model_type == "rpg_global_filled_obs_hypercond" and not test_mode:
+            obs = self._build_global_filled_obs(context)
+        elif self.model_type in PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS and not test_mode:
+            obs = self._build_global_public_filled_obs(context, obs_key="obs", state_key="state")
+        else:
+            obs = context["obs"]
         move_feat, enemy_feat, ally_feat, own_feat = self._split_rpg_obs(obs)
         self_feat = th.cat([move_feat, own_feat], dim=-1)
         if isinstance(self.rpg_relation_capturer, PublicTransformerRelationCapturer):
-            prev_obs = context.get("prev_obs")
+            if self.model_type in PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS and not test_mode:
+                prev_obs = self._build_global_public_filled_obs(
+                    context, obs_key="prev_obs", state_key="prev_state"
+                )
+            else:
+                prev_obs = context.get("prev_obs")
             next_obs = context.get("next_obs")
             if prev_obs is None:
                 prev_obs = th.zeros_like(obs)
@@ -4707,7 +4850,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
-            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
+            *TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -5125,17 +5268,17 @@ class CleanHyperAgent(nn.Module):
             return th.cat([enemy_tokens, private_tokens], dim=-1)
         return enemy_tokens
 
-    def _target_selection_mask(self, hidden, relation_condition, enemy_tokens, enemy_mask):
+    def _target_selection_mask(self, source, relation_condition, enemy_tokens, enemy_mask):
         batch_size, n_agents, n_enemies, _ = enemy_tokens.shape
-        hidden_rep = hidden.unsqueeze(2).expand(-1, -1, n_enemies, -1)
+        source_rep = source.unsqueeze(2).expand(-1, -1, n_enemies, -1)
         cond_rep = relation_condition.unsqueeze(2).expand(-1, -1, n_enemies, -1)
-        selector_input = th.cat([hidden_rep, cond_rep, enemy_tokens], dim=-1)
+        selector_input = th.cat([source_rep, cond_rep, enemy_tokens], dim=-1)
         scores = self.rpg_target_selector(selector_input).squeeze(-1)
         valid_mask = enemy_mask.bool()
         masked_scores = scores.masked_fill(~valid_mask, _neg_inf_like(scores))
         valid_any = valid_mask.any(dim=-1, keepdim=True)
 
-        if self.model_type == "rpg_post_topk_enemy_interaction_hypercond":
+        if self.model_type in {"rpg_post_topk_enemy_interaction_hypercond"} | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS:
             k = max(1, min(self.target_topk, n_enemies))
             _, indices = th.topk(masked_scores, k=k, dim=-1)
             gathered_valid = th.gather(valid_mask, dim=-1, index=indices)
@@ -5175,7 +5318,7 @@ class CleanHyperAgent(nn.Module):
         batch_size, n_agents, _ = relation_condition.shape
         flat_condition = relation_condition.reshape(batch_size * n_agents, -1)
 
-        if self.model_type == "rpg_relation_token_decision_head_hypercond":
+        if self.model_type in RELATION_TOKEN_DECISION_HEAD_VARIANTS:
             if relation_hidden is None:
                 raise ValueError("{} requires relation_hidden as decision input.".format(self.model_type))
             ego_source = relation_hidden
@@ -5313,7 +5456,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
-            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
+            *TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -5457,7 +5600,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_entity_selfattn_relation_hypercond",
             "rpg_topk_entity_relation_hypercond",
             *RPG_TARGETWISE_ABLATION_VARIANTS,
-            *RPG_TOKEN_DECISION_HEAD_VARIANTS,
+            *TOKEN_DECISION_HEAD_VARIANTS,
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",
@@ -5582,7 +5725,7 @@ class CleanHyperAgent(nn.Module):
                 "rpg_entity_selfattn_relation_hypercond",
                 "rpg_topk_entity_relation_hypercond",
                 *RPG_TARGETWISE_ABLATION_VARIANTS,
-                *RPG_TOKEN_DECISION_HEAD_VARIANTS,
+                *TOKEN_DECISION_HEAD_VARIANTS,
                 "rpg_relation_coarse_self_fine_head",
                 "rpg_relation_coarse_fine_four_layer_head",
                 "rpg_relation_coarse_q_fine_gate_head",
@@ -5595,10 +5738,14 @@ class CleanHyperAgent(nn.Module):
                 relation_condition, next_relation_hidden, enemy_tokens, enemy_mask = self._build_rpg_condition(
                     context, relation_hidden_state, test_mode=test_mode
                 )
-                if self.model_type in RPG_TOKEN_DECISION_HEAD_VARIANTS:
+                if self.model_type in TOKEN_DECISION_HEAD_VARIANTS:
                     condition = relation_condition
                     self.latest_condition = condition.detach()
-                    self_token = self._rpg_self_token_from_context(context)
+                    self_token = (
+                        None
+                        if self.model_type in RELATION_TOKEN_DECISION_HEAD_VARIANTS
+                        else self._rpg_self_token_from_context(context)
+                    )
                     q = self._apply_rpg_token_decision_head(
                         relation_condition,
                         self_token,
@@ -5606,6 +5753,13 @@ class CleanHyperAgent(nn.Module):
                         enemy_mask,
                         next_relation_hidden,
                     )
+                    if self.model_type in PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS:
+                        target_mask = self._target_selection_mask(
+                            next_relation_hidden, relation_condition, enemy_tokens, enemy_mask
+                        )
+                        q_ego = q[:, :, : self.rpg_n_ego_actions]
+                        q_attack = q[:, :, self.rpg_n_ego_actions :].masked_fill(~target_mask, 0.0)
+                        q = th.cat([q_ego, q_attack], dim=-1)
                 elif self.model_type in {
                     "rpg_relation_hypercond",
                     "two_graph_gat_hypercond",

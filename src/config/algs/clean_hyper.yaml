@@ -241,6 +241,39 @@ hypernet_layers: 2
 #                                                                   into the
 #                                                                   interaction
 #                                                                   head input.
+# - rpg_global_public_transformer_hypercond: training-only CTDE diagnostic.
+#                                            During training, public entity
+#                                            fields missing from local
+#                                            observations are filled from the
+#                                            centralized state; testing still
+#                                            uses local observations.
+# - rpg_global_public_private_bias_past_delta_token_transformer_hypercond:
+#                                            same global-public training
+#                                            diagnostic, plus past public
+#                                            delta tokens and private attention
+#                                            bias.
+# - rpg_public_transformer_relation_token_head_hypercond: public Transformer
+#                                                        relation generator,
+#                                                        but ego and
+#                                                        interaction Q-head
+#                                                        inputs use the
+#                                                        temporal relation
+#                                                        hidden state instead
+#                                                        of the policy GRU
+#                                                        hidden.
+# - rpg_public_private_bias_past_delta_token_transformer_relation_token_head_hypercond:
+#                                                        same relation-token
+#                                                        head input, with past
+#                                                        public delta tokens
+#                                                        and private attention
+#                                                        bias in the relation
+#                                                        Transformer.
+# - rpg_public_private_bias_past_delta_token_transformer_relation_token_topk_hypercond:
+#                                                        same as above, but
+#                                                        uses relation-side
+#                                                        scores to keep only
+#                                                        top-k enemy attack
+#                                                        targets.
 # - *_single_head_hypercond public Transformer variants: same public Transformer
 #                                                       relation generators as
 #                                                       the public Transformer
