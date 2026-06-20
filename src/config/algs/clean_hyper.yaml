@@ -227,6 +227,14 @@ hypernet_layers: 2
 #                                                                   the
 #                                                                   interaction
 #                                                                   head.
+# - rpg_public_private_full_token_transformer_hypercond: public/private
+#                                                        semantic fields are
+#                                                        encoded separately,
+#                                                        fused into full entity
+#                                                        tokens, then processed
+#                                                        by the public
+#                                                        Transformer relation
+#                                                        generator.
 # - rpg_public_past_delta_bias_transformer_private_head_input_hypercond:
 #                                                                   public
 #                                                                   Transformer
@@ -268,6 +276,15 @@ hypernet_layers: 2
 #                                                        and private attention
 #                                                        bias in the relation
 #                                                        Transformer.
+# - rpg_public_private_full_token_transformer_relation_token_head_hypercond:
+#                                                        same public/private
+#                                                        full-token relation
+#                                                        generator, but ego
+#                                                        and interaction
+#                                                        Q-head inputs use the
+#                                                        temporal relation
+#                                                        hidden state instead
+#                                                        of policy GRU hidden.
 # - rpg_public_private_bias_past_delta_token_transformer_relation_token_topk_hypercond:
 #                                                        same as above, but
 #                                                        uses relation-side

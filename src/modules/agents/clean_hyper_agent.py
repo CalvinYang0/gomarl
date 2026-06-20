@@ -79,6 +79,12 @@ PUBLIC_TRANSFORMER_MIXED_VARIANTS = {
     "rpg_public_private_bias_past_delta_token_transformer_enemy_slot_hypercond",
     "rpg_public_private_token_past_delta_bias_transformer_enemy_slot_hypercond",
 }
+PUBLIC_TRANSFORMER_FULL_TOKEN_VARIANTS = {
+    "rpg_public_private_full_token_transformer_hypercond",
+}
+PUBLIC_TRANSFORMER_FULL_TOKEN_RELATION_HEAD_VARIANTS = {
+    "rpg_public_private_full_token_transformer_relation_token_head_hypercond",
+}
 PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS = {
     "rpg_global_public_transformer_hypercond",
     "rpg_global_public_private_bias_past_delta_token_transformer_hypercond",
@@ -86,7 +92,7 @@ PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS = {
 PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS = {
     "rpg_public_transformer_relation_token_head_hypercond",
     "rpg_public_private_bias_past_delta_token_transformer_relation_token_head_hypercond",
-}
+} | PUBLIC_TRANSFORMER_FULL_TOKEN_RELATION_HEAD_VARIANTS
 PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS = {
     "rpg_public_private_bias_past_delta_token_transformer_relation_token_topk_hypercond",
 }
@@ -94,6 +100,7 @@ PUBLIC_TRANSFORMER_FRIEND_MERGED_VARIANTS = (
     PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
+    | PUBLIC_TRANSFORMER_FULL_TOKEN_VARIANTS
 )
 PUBLIC_TRANSFORMER_MIXED_SINGLE_HEAD_VARIANTS = {
     "rpg_public_private_bias_past_delta_token_transformer_single_head_hypercond",
@@ -129,6 +136,7 @@ PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
     | PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS
     | PUBLIC_TRANSFORMER_PAST_DELTA_VARIANTS
     | PUBLIC_TRANSFORMER_MIXED_VARIANTS
+    | PUBLIC_TRANSFORMER_FULL_TOKEN_VARIANTS
     | PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
@@ -176,6 +184,8 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_transformer_relation_token_head_hypercond": "baseline",
     "rpg_public_private_bias_past_delta_token_transformer_relation_token_head_hypercond": "private_bias_past_delta_token",
     "rpg_public_private_bias_past_delta_token_transformer_relation_token_topk_hypercond": "private_bias_past_delta_token",
+    "rpg_public_private_full_token_transformer_hypercond": "public_private_full_token",
+    "rpg_public_private_full_token_transformer_relation_token_head_hypercond": "public_private_full_token",
 }
 PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS = (
     PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
@@ -789,6 +799,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.self_private_encoder = self._make_encoder(move_dim)
         self.ally_private_encoder = self._make_encoder(4)
         self.enemy_private_encoder = self._make_encoder(4)
+        self.self_full_token_fuser = self._make_fuser()
+        self.ally_full_token_fuser = self._make_fuser()
+        self.enemy_full_token_fuser = self._make_fuser()
 
         self.future_self_encoder = self._make_encoder(1 + self.self_value_dim)
         self.future_ally_encoder = self._make_encoder(1 + self.ally_value_dim)
@@ -821,6 +834,13 @@ class PublicTransformerRelationCapturer(nn.Module):
     def _make_encoder(self, input_dim):
         return nn.Sequential(
             nn.Linear(max(1, input_dim), self.relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.relation_dim, self.relation_dim),
+        )
+
+    def _make_fuser(self):
+        return nn.Sequential(
+            nn.Linear(2 * self.relation_dim, self.relation_dim),
             nn.ReLU(inplace=True),
             nn.Linear(self.relation_dim, self.relation_dim),
         )
@@ -1213,6 +1233,16 @@ class PublicTransformerRelationCapturer(nn.Module):
                 prev_ally_mask,
                 prev_enemy_mask,
             )
+
+        if self.mode == "public_private_full_token":
+            full_self, full_ally, full_enemy = self._private_embeddings(
+                self_feat, ally_feat, enemy_feat, ally_mask, enemy_mask
+            )
+            self_token = self.self_full_token_fuser(th.cat([self_token, full_self], dim=-1))
+            ally_tokens = self.ally_full_token_fuser(th.cat([ally_tokens, full_ally], dim=-1))
+            enemy_public_tokens = self.enemy_full_token_fuser(th.cat([enemy_public_tokens, full_enemy], dim=-1))
+            ally_tokens = ally_tokens * ally_mask.unsqueeze(-1).float()
+            enemy_public_tokens = enemy_public_tokens * enemy_mask.unsqueeze(-1).float()
 
         if token_self is not None:
             self_token = self_token + token_self
