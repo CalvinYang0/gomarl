@@ -274,6 +274,38 @@ hypernet_layers: 2
 #                                                        hidden state instead
 #                                                        of the policy GRU
 #                                                        hidden.
+# - rpg_public_private_bias_transformer_relation_token_head_hypercond:
+#                                                        same as above, but
+#                                                        the relation generator
+#                                                        uses public tokens
+#                                                        with private
+#                                                        attention bias.
+# - rpg_public_private_bias_transformer_relation_pair_token_head_hypercond:
+#                                                        same private-bias
+#                                                        relation generator,
+#                                                        but interaction
+#                                                        input is [relation,
+#                                                        enemy token,
+#                                                        relation * enemy].
+# - rpg_public_private_bias_transformer_relation_private_token_head_hypercond:
+#                                                        same private-bias
+#                                                        relation generator,
+#                                                        but interaction
+#                                                        input is [relation,
+#                                                        enemy token, private
+#                                                        enemy token].
+# - rpg_public_private_bias_transformer_relation_delta_token_head_hypercond:
+#                                                        same private-bias
+#                                                        relation generator,
+#                                                        but interaction
+#                                                        input is [relation,
+#                                                        enemy token, enemy
+#                                                        delta token].
+# - rpg_global_public_transformer_relation_token_head_hypercond: training-only
+#                                                        global-public
+#                                                        diagnostic plus
+#                                                        relation-token head
+#                                                        input.
 # - rpg_public_private_bias_past_delta_token_transformer_relation_token_head_hypercond:
 #                                                        same relation-token
 #                                                        head input, with past
