@@ -147,6 +147,11 @@ hypernet_layers: 2
 #                                               both ego and interaction heads
 #                                               with the temporal relation
 #                                               hidden state.
+# - rpg_policy_relation_fusion_head_hypercond: keeps the RPG relation generator
+#                                              and target-wise decision maker,
+#                                              but Q-head inputs use a fused
+#                                              token from [policy GRU hidden,
+#                                              temporal relation hidden].
 # - rpg_public_transformer_hypercond: same structured decision maker as
 #                                     rpg_linear_interaction_hypercond, but
 #                                     replaces RPG cross-attention relation

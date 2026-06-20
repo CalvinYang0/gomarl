@@ -62,6 +62,7 @@ class CleanMAC(BasicMAC):
             "rpg_entity_token_decision_head_hypercond",
             "rpg_self_enemy_pair_token_decision_head_hypercond",
             "rpg_relation_token_decision_head_hypercond",
+            "rpg_policy_relation_fusion_head_hypercond",
             "rpg_action_edge_graph_hypercond",
             "rpg_action_edge_rgcn_hypercond",
             "rpg_action_edge_egcn_hypercond",

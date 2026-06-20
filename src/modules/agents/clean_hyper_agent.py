@@ -53,11 +53,14 @@ RPG_TARGETWISE_ABLATION_VARIANTS = (
 RPG_STANDARD_INTERACTION_ABLATION_VARIANTS = (
     RPG_TARGETWISE_ABLATION_VARIANTS - {"rpg_delta_enemy_token_interaction_hypercond"}
 )
+RPG_POLICY_RELATION_FUSION_HEAD_VARIANTS = {
+    "rpg_policy_relation_fusion_head_hypercond",
+}
 RPG_TOKEN_DECISION_HEAD_VARIANTS = {
     "rpg_entity_token_decision_head_hypercond",
     "rpg_self_enemy_pair_token_decision_head_hypercond",
     "rpg_relation_token_decision_head_hypercond",
-}
+} | RPG_POLICY_RELATION_FUSION_HEAD_VARIANTS
 PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS = {
     "rpg_public_future_delta_token_transformer_hypercond",
     "rpg_public_future_delta_bias_transformer_hypercond",
@@ -3728,6 +3731,14 @@ class CleanHyperAgent(nn.Module):
                 token_interaction_input_dim = self.rpg_relation_dim
             else:
                 token_interaction_input_dim = 2 * self.rpg_relation_dim
+            if self.model_type in RPG_POLICY_RELATION_FUSION_HEAD_VARIANTS:
+                self.policy_relation_decision_fuser = nn.Sequential(
+                    nn.Linear(self.hidden_dim + self.rpg_relation_dim, self.rpg_relation_dim),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(self.rpg_relation_dim, self.rpg_relation_dim),
+                )
+            else:
+                self.policy_relation_decision_fuser = None
             self.token_ego_bottleneck_w = nn.Linear(self.cond_dim, self.rpg_relation_dim * self.hidden_dim)
             self.token_ego_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
             self.token_ego_out_w = nn.Linear(self.cond_dim, self.hidden_dim * self.rpg_n_ego_actions)
@@ -3740,6 +3751,7 @@ class CleanHyperAgent(nn.Module):
             self.token_ego_bottleneck_b = None
             self.token_ego_out_w = None
             self.token_ego_out_b = None
+            self.policy_relation_decision_fuser = None
             self.token_interaction_input_dim = None
             self.token_interaction_out_w = None
             self.token_interaction_out_b = None
@@ -5344,11 +5356,19 @@ class CleanHyperAgent(nn.Module):
         enemy_tokens,
         enemy_mask,
         relation_hidden,
+        policy_hidden=None,
     ):
         batch_size, n_agents, _ = relation_condition.shape
         flat_condition = relation_condition.reshape(batch_size * n_agents, -1)
 
-        if self.model_type in RELATION_TOKEN_DECISION_HEAD_VARIANTS:
+        if self.model_type in RPG_POLICY_RELATION_FUSION_HEAD_VARIANTS:
+            if relation_hidden is None or policy_hidden is None:
+                raise ValueError("{} requires policy_hidden and relation_hidden.".format(self.model_type))
+            fusion_input = th.cat([policy_hidden, relation_hidden], dim=-1)
+            fused_source = self.policy_relation_decision_fuser(fusion_input)
+            ego_source = fused_source
+            interaction_anchor = fused_source
+        elif self.model_type in RELATION_TOKEN_DECISION_HEAD_VARIANTS:
             if relation_hidden is None:
                 raise ValueError("{} requires relation_hidden as decision input.".format(self.model_type))
             ego_source = relation_hidden
@@ -5774,6 +5794,7 @@ class CleanHyperAgent(nn.Module):
                     self_token = (
                         None
                         if self.model_type in RELATION_TOKEN_DECISION_HEAD_VARIANTS
+                        or self.model_type in RPG_POLICY_RELATION_FUSION_HEAD_VARIANTS
                         else self._rpg_self_token_from_context(context)
                     )
                     q = self._apply_rpg_token_decision_head(
@@ -5782,6 +5803,7 @@ class CleanHyperAgent(nn.Module):
                         enemy_tokens,
                         enemy_mask,
                         next_relation_hidden,
+                        policy_hidden=hidden,
                     )
                     if self.model_type in PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS:
                         target_mask = self._target_selection_mask(
