@@ -98,7 +98,7 @@ for model_type in $MODELS; do
       t_max="$T_MAX" \
       test_interval="$TEST_INTERVAL" \
       save_battle_trace=False \
-      name="$run_name" \
+      name="${GROUP_NAME:-$run_name}" \
       wandb_run_name="$run_name" \
       $EXTRA_ARGS
     echo "== Run done: $run_name =="

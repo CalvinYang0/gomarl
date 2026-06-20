@@ -89,7 +89,6 @@ PY
   t_max="$T_MAX" \
   test_interval="$TEST_INTERVAL" \
   save_battle_trace=False \
-  name="$RUN_NAME" \
+  name="${GROUP_NAME:-$RUN_NAME}" \
   wandb_run_name="$RUN_NAME" \
   $EXTRA_ARGS
-

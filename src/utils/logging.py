@@ -70,6 +70,9 @@ class Logger:
             ).encode("utf8")
         ).hexdigest()[-10:]
         group_name = "_".join([alg_name, env_name, config_hash])
+        if len(group_name) > 128:
+            prefix_budget = 128 - len(config_hash) - 1
+            group_name = "{}_{}".format(group_name[:prefix_budget], config_hash)
 
         entity = team_name if team_name not in [None, ""] else None
         self.wandb = wandb.init(
