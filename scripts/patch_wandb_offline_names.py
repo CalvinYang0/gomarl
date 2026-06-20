@@ -98,7 +98,7 @@ def patch_wandb_file(path, max_group_len, max_name_len):
             if _record_is_run(record):
                 run = record.run
                 for field_name, max_len in (
-                    ("group", max_group_len),
+                    ("run_group", max_group_len),
                     ("display_name", max_name_len),
                     ("job_type", max_group_len),
                 ):
