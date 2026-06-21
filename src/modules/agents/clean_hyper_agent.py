@@ -88,6 +88,9 @@ PUBLIC_TRANSFORMER_FULL_TOKEN_VARIANTS = {
 PUBLIC_TRANSFORMER_FULL_TOKEN_RELATION_HEAD_VARIANTS = {
     "rpg_public_private_full_token_transformer_relation_token_head_hypercond",
 }
+PUBLIC_TRANSFORMER_FULL_OBS_RELATION_HEAD_VARIANTS = {
+    "rpg_full_obs_transformer_relation_token_head_hypercond",
+}
 PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS = {
     "rpg_global_public_transformer_hypercond",
     "rpg_global_public_private_bias_past_delta_token_transformer_hypercond",
@@ -98,7 +101,7 @@ PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS = {
     "rpg_public_private_bias_transformer_relation_token_head_hypercond",
     "rpg_public_private_bias_past_delta_token_transformer_relation_token_head_hypercond",
     "rpg_global_public_transformer_relation_token_head_hypercond",
-} | PUBLIC_TRANSFORMER_FULL_TOKEN_RELATION_HEAD_VARIANTS
+} | PUBLIC_TRANSFORMER_FULL_TOKEN_RELATION_HEAD_VARIANTS | PUBLIC_TRANSFORMER_FULL_OBS_RELATION_HEAD_VARIANTS
 PUBLIC_TRANSFORMER_RELATION_PAIR_TOKEN_HEAD_VARIANTS = {
     "rpg_public_private_bias_transformer_relation_pair_token_head_hypercond",
 }
@@ -209,6 +212,7 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_global_public_transformer_relation_token_head_hypercond": "baseline",
     "rpg_public_private_full_token_transformer_hypercond": "public_private_full_token",
     "rpg_public_private_full_token_transformer_relation_token_head_hypercond": "public_private_full_token",
+    "rpg_full_obs_transformer_relation_token_head_hypercond": "full_obs",
 }
 PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS = (
     PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS
@@ -775,8 +779,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         merge_friendly_public_side=False,
     ):
         super().__init__()
-        del own_dim, obs_last_action, n_actions
+        del obs_last_action, n_actions
         self.move_dim = move_dim
+        self.own_dim = own_dim
         self.ally_feat_dim = ally_feat_dim
         self.enemy_feat_dim = enemy_feat_dim
         self.relation_dim = relation_dim
@@ -829,6 +834,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.self_full_token_fuser = self._make_fuser()
         self.ally_full_token_fuser = self._make_fuser()
         self.enemy_full_token_fuser = self._make_fuser()
+        self.self_full_obs_encoder = self._make_encoder(move_dim + own_dim)
+        self.ally_full_obs_encoder = self._make_encoder(ally_feat_dim)
+        self.enemy_full_obs_encoder = self._make_encoder(enemy_feat_dim)
 
         self.future_self_encoder = self._make_encoder(1 + self.self_value_dim)
         self.future_ally_encoder = self._make_encoder(1 + self.ally_value_dim)
@@ -1166,16 +1174,27 @@ class PublicTransformerRelationCapturer(nn.Module):
         next_ally_mask = next_ally_feat.abs().sum(dim=-1) > 0
         next_enemy_mask = next_enemy_feat.abs().sum(dim=-1) > 0
 
-        self_public = self._self_public_features(self_feat)
-        ally_public = self._ally_public_features(ally_feat, ally_mask)
-        enemy_public = self._enemy_public_features(enemy_feat, enemy_mask)
-        self_token = self.self_public_encoder(self_public) + self._side(
-            self.self_public_side_id, self_feat.device
-        ).view(1, 1, -1)
-        ally_tokens = self.ally_public_encoder(ally_public) + self._side(1, self_feat.device).view(1, 1, 1, -1)
-        enemy_public_tokens = self.enemy_public_encoder(enemy_public) + self._side(2, self_feat.device).view(1, 1, 1, -1)
-        ally_tokens = ally_tokens * ally_mask.unsqueeze(-1).float()
-        enemy_public_tokens = enemy_public_tokens * enemy_mask.unsqueeze(-1).float()
+        if self.mode == "full_obs":
+            self_token = self.self_full_obs_encoder(self_feat) + self._side(0, self_feat.device).view(1, 1, -1)
+            ally_tokens = self.ally_full_obs_encoder(ally_feat) + self._side(1, self_feat.device).view(1, 1, 1, -1)
+            enemy_public_tokens = self.enemy_full_obs_encoder(enemy_feat) + self._side(2, self_feat.device).view(
+                1, 1, 1, -1
+            )
+            ally_tokens = ally_tokens * ally_mask.unsqueeze(-1).float()
+            enemy_public_tokens = enemy_public_tokens * enemy_mask.unsqueeze(-1).float()
+        else:
+            self_public = self._self_public_features(self_feat)
+            ally_public = self._ally_public_features(ally_feat, ally_mask)
+            enemy_public = self._enemy_public_features(enemy_feat, enemy_mask)
+            self_token = self.self_public_encoder(self_public) + self._side(
+                self.self_public_side_id, self_feat.device
+            ).view(1, 1, -1)
+            ally_tokens = self.ally_public_encoder(ally_public) + self._side(1, self_feat.device).view(1, 1, 1, -1)
+            enemy_public_tokens = self.enemy_public_encoder(enemy_public) + self._side(2, self_feat.device).view(
+                1, 1, 1, -1
+            )
+            ally_tokens = ally_tokens * ally_mask.unsqueeze(-1).float()
+            enemy_public_tokens = enemy_public_tokens * enemy_mask.unsqueeze(-1).float()
         enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
 
         token_self = token_ally = token_enemy = None

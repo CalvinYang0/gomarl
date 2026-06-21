@@ -322,6 +322,16 @@ hypernet_layers: 2
 #                                                        temporal relation
 #                                                        hidden state instead
 #                                                        of policy GRU hidden.
+# - rpg_full_obs_transformer_relation_token_head_hypercond: no public/private
+#                                                        semantic split. The
+#                                                        relation Transformer
+#                                                        encodes full self,
+#                                                        ally, and enemy obs
+#                                                        slots directly, then
+#                                                        uses the temporal
+#                                                        relation hidden state
+#                                                        as the decision-head
+#                                                        input.
 # - rpg_public_private_bias_past_delta_token_transformer_relation_token_topk_hypercond:
 #                                                        same as above, but
 #                                                        uses relation-side
