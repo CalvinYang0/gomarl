@@ -3,9 +3,9 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 MAP_NAME="${MAP_NAME:-MMM2}"
-SEEDS="${SEEDS:-1 2 3}"
-MODELS="${MODELS:-rpg_public_transformer_hypercond rpg_public_private_bias_transformer_hypercond rpg_public_private_bias_past_delta_token_transformer_hypercond}"
-GROUP_NAME="${GROUP_NAME:-mmm2_transformer_core_s1s2s3}"
+SEEDS="${SEEDS:-1}"
+MODELS="${MODELS:-rpg_public_transformer_hypercond rpg_public_private_bias_transformer_hypercond rpg_public_private_bias_past_delta_token_transformer_hypercond rpg_public_private_bias_transformer_topk_hypercond rpg_public_private_bias_transformer_threshold_hypercond rpg_global_public_transformer_hypercond rpg_global_public_private_bias_past_delta_token_transformer_hypercond rpg_global_public_private_bias_past_delta_token_transformer_topk_hypercond rpg_global_public_private_bias_past_delta_token_transformer_threshold_hypercond}"
+GROUP_NAME="${GROUP_NAME:-mmm2_transformer_nine_models_s1}"
 
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
 MEM="${MEM:-64G}"
