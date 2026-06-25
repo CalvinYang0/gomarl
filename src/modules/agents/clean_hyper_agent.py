@@ -114,6 +114,10 @@ PUBLIC_TRANSFORMER_RELATION_DELTA_TOKEN_HEAD_VARIANTS = {
 PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS = {
     "rpg_public_private_bias_past_delta_token_transformer_relation_token_topk_hypercond",
 }
+PUBLIC_TRANSFORMER_TARGET_SELECTION_VARIANTS = {
+    "rpg_public_private_bias_transformer_topk_hypercond",
+    "rpg_public_private_bias_transformer_threshold_hypercond",
+}
 PUBLIC_TRANSFORMER_FRIEND_MERGED_VARIANTS = (
     PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS
@@ -161,6 +165,7 @@ PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
     | PUBLIC_TRANSFORMER_RELATION_PRIVATE_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_DELTA_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
+    | PUBLIC_TRANSFORMER_TARGET_SELECTION_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_VARIANTS
 )
@@ -209,6 +214,8 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_private_bias_transformer_relation_delta_token_head_hypercond": "private_bias",
     "rpg_public_private_bias_past_delta_token_transformer_relation_token_head_hypercond": "private_bias_past_delta_token",
     "rpg_public_private_bias_past_delta_token_transformer_relation_token_topk_hypercond": "private_bias_past_delta_token",
+    "rpg_public_private_bias_transformer_topk_hypercond": "private_bias",
+    "rpg_public_private_bias_transformer_threshold_hypercond": "private_bias",
     "rpg_global_public_transformer_relation_token_head_hypercond": "baseline",
     "rpg_public_private_full_token_transformer_hypercond": "public_private_full_token",
     "rpg_public_private_full_token_transformer_relation_token_head_hypercond": "public_private_full_token",
@@ -3805,7 +3812,11 @@ class CleanHyperAgent(nn.Module):
             self.token_interaction_out_w = None
             self.token_interaction_out_b = None
 
-        if self.model_type in RPG_POST_TARGET_SELECTION_VARIANTS | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS:
+        if self.model_type in (
+            RPG_POST_TARGET_SELECTION_VARIANTS
+            | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
+            | PUBLIC_TRANSFORMER_TARGET_SELECTION_VARIANTS
+        ):
             target_source_dim = (
                 self.rpg_relation_dim
                 if self.model_type in PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
@@ -5299,6 +5310,37 @@ class CleanHyperAgent(nn.Module):
         q_attack = th.bmm(flat_interaction_input, interaction_out_w) + interaction_out_b
         return q_attack.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"]), generated_head
 
+    def _linear_generated_interaction_selected(
+        self,
+        interaction_input,
+        relation_condition,
+        selected_mask,
+        batch_size,
+        n_agents,
+    ):
+        flat_condition = relation_condition.reshape(batch_size * n_agents, -1)
+        condition_rep = flat_condition.unsqueeze(1).expand(
+            -1, self.rpg_obs_layout["n_enemies"], -1
+        ).reshape(-1, flat_condition.size(-1))
+        flat_input = interaction_input.reshape(-1, self.rpg_interaction_input_dim)
+        flat_mask = selected_mask.reshape(-1).bool()
+
+        q_flat = flat_input.new_zeros(flat_input.size(0))
+        if flat_mask.any():
+            selected_input = flat_input[flat_mask].unsqueeze(1)
+            selected_condition = condition_rep[flat_mask]
+            interaction_out_w = self.rpg_interaction_out_w(selected_condition).view(
+                selected_input.size(0), self.rpg_interaction_input_dim, 1
+            )
+            interaction_out_b = self.rpg_interaction_out_b(selected_condition).view(
+                selected_input.size(0), 1, 1
+            )
+            selected_q = th.bmm(selected_input, interaction_out_w) + interaction_out_b
+            q_flat[flat_mask] = selected_q.view(-1)
+
+        self.latest_generated_interaction_head = None
+        return q_flat.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"])
+
     def _head_smoothness_loss(self, flat_condition, generated_head):
         if self.smooth_head_loss_coef <= 0.0 or generated_head.size(0) <= 1:
             return generated_head.new_zeros(())
@@ -5371,7 +5413,10 @@ class CleanHyperAgent(nn.Module):
         masked_scores = scores.masked_fill(~valid_mask, _neg_inf_like(scores))
         valid_any = valid_mask.any(dim=-1, keepdim=True)
 
-        if self.model_type in {"rpg_post_topk_enemy_interaction_hypercond"} | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS:
+        if self.model_type in {
+            "rpg_post_topk_enemy_interaction_hypercond",
+            "rpg_public_private_bias_transformer_topk_hypercond",
+        } | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS:
             k = max(1, min(self.target_topk, n_enemies))
             _, indices = th.topk(masked_scores, k=k, dim=-1)
             gathered_valid = th.gather(valid_mask, dim=-1, index=indices)
@@ -5594,12 +5639,18 @@ class CleanHyperAgent(nn.Module):
         }:
             interaction_enemy_features = self._interaction_enemy_features(enemy_tokens, enemy_mask, context)
             interaction_input = th.cat([hidden_rep, interaction_enemy_features], dim=-1)
-            flat_interaction_input = interaction_input.reshape(
-                batch_size * n_agents, self.rpg_obs_layout["n_enemies"], self.rpg_interaction_input_dim
-            )
-            q_attack, _ = self._linear_generated_interaction(
-                flat_interaction_input, flat_condition, batch_size, n_agents
-            )
+            if self.model_type in PUBLIC_TRANSFORMER_TARGET_SELECTION_VARIANTS:
+                target_mask = self._target_selection_mask(hidden, relation_condition, enemy_tokens, enemy_mask)
+                q_attack = self._linear_generated_interaction_selected(
+                    interaction_input, relation_condition, target_mask, batch_size, n_agents
+                )
+            else:
+                flat_interaction_input = interaction_input.reshape(
+                    batch_size * n_agents, self.rpg_obs_layout["n_enemies"], self.rpg_interaction_input_dim
+                )
+                q_attack, _ = self._linear_generated_interaction(
+                    flat_interaction_input, flat_condition, batch_size, n_agents
+                )
             if self.model_type in RPG_POST_TARGET_SELECTION_VARIANTS:
                 target_mask = self._target_selection_mask(hidden, relation_condition, enemy_tokens, enemy_mask)
                 q_attack = q_attack.masked_fill(~target_mask, 0.0)

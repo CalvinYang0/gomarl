@@ -179,6 +179,17 @@ hypernet_layers: 2
 #                                                   embeddings.
 # - rpg_public_private_bias_transformer_hypercond: current private local fields
 #                                                  injected as attention bias.
+# - rpg_public_private_bias_transformer_topk_hypercond: same private-bias
+#                                                       public Transformer,
+#                                                       but only computes
+#                                                       interaction Q-values
+#                                                       for top-k selected
+#                                                       enemy targets.
+# - rpg_public_private_bias_transformer_threshold_hypercond: same as above,
+#                                                           but keeps targets
+#                                                           whose selector
+#                                                           probability exceeds
+#                                                           clean_target_threshold.
 # - rpg_public_past_delta_token_transformer_hypercond: public Transformer with
 #                                                      obs_t - obs_{t-1} public
 #                                                      delta injected as token
