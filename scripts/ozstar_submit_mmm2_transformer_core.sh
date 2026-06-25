@@ -3,9 +3,9 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 MAP_NAME="${MAP_NAME:-MMM2}"
-SEEDS="${SEEDS:-1}"
+SEEDS="${SEEDS:-1 2 3}"
 MODELS="${MODELS:-rpg_public_transformer_hypercond rpg_public_private_bias_transformer_hypercond rpg_public_private_bias_past_delta_token_transformer_hypercond}"
-GROUP_NAME="${GROUP_NAME:-mmm2_transformer_core_s1}"
+GROUP_NAME="${GROUP_NAME:-mmm2_transformer_core_s1s2s3}"
 
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
 MEM="${MEM:-64G}"
@@ -33,12 +33,14 @@ echo "time: $TIME"
 echo "t_max: $T_MAX"
 echo "extra_args: $EXTRA_ARGS"
 
+job_idx=0
 for model_type in $MODELS; do
   for seed in $SEEDS; do
+    job_idx=$((job_idx + 1))
     run_name="${MAP_NAME}_${model_type}_ozstar_s${seed}"
     job_name="${MAP_NAME}_${model_type}_s${seed}"
     job_name="${job_name:0:60}"
-    echo "submit: model=$model_type seed=$seed run=$run_name"
+    echo "submit[$job_idx]: model=$model_type seed=$seed run=$run_name"
     sbatch \
       --cpus-per-task="$CPUS_PER_TASK" \
       --mem="$MEM" \
