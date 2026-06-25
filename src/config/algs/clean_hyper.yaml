@@ -276,6 +276,14 @@ hypernet_layers: 2
 #                                            diagnostic, plus past public
 #                                            delta tokens and private attention
 #                                            bias.
+# - rpg_global_public_private_bias_past_delta_token_transformer_topk_hypercond:
+#                                            same as above, but only computes
+#                                            interaction Q-values for top-k
+#                                            selected enemy targets.
+# - rpg_global_public_private_bias_past_delta_token_transformer_threshold_hypercond:
+#                                            same as above, but keeps targets
+#                                            whose selector probability exceeds
+#                                            clean_target_threshold.
 # - rpg_public_transformer_relation_token_head_hypercond: public Transformer
 #                                                        relation generator,
 #                                                        but ego and

@@ -94,6 +94,8 @@ PUBLIC_TRANSFORMER_FULL_OBS_RELATION_HEAD_VARIANTS = {
 PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS = {
     "rpg_global_public_transformer_hypercond",
     "rpg_global_public_private_bias_past_delta_token_transformer_hypercond",
+    "rpg_global_public_private_bias_past_delta_token_transformer_topk_hypercond",
+    "rpg_global_public_private_bias_past_delta_token_transformer_threshold_hypercond",
     "rpg_global_public_transformer_relation_token_head_hypercond",
 }
 PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS = {
@@ -117,6 +119,8 @@ PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS = {
 PUBLIC_TRANSFORMER_TARGET_SELECTION_VARIANTS = {
     "rpg_public_private_bias_transformer_topk_hypercond",
     "rpg_public_private_bias_transformer_threshold_hypercond",
+    "rpg_global_public_private_bias_past_delta_token_transformer_topk_hypercond",
+    "rpg_global_public_private_bias_past_delta_token_transformer_threshold_hypercond",
 }
 PUBLIC_TRANSFORMER_FRIEND_MERGED_VARIANTS = (
     PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS
@@ -207,6 +211,8 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_past_delta_bias_transformer_private_head_input_hypercond": "past_delta_bias",
     "rpg_global_public_transformer_hypercond": "baseline",
     "rpg_global_public_private_bias_past_delta_token_transformer_hypercond": "private_bias_past_delta_token",
+    "rpg_global_public_private_bias_past_delta_token_transformer_topk_hypercond": "private_bias_past_delta_token",
+    "rpg_global_public_private_bias_past_delta_token_transformer_threshold_hypercond": "private_bias_past_delta_token",
     "rpg_public_transformer_relation_token_head_hypercond": "baseline",
     "rpg_public_private_bias_transformer_relation_token_head_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_relation_pair_token_head_hypercond": "private_bias",
@@ -5416,6 +5422,7 @@ class CleanHyperAgent(nn.Module):
         if self.model_type in {
             "rpg_post_topk_enemy_interaction_hypercond",
             "rpg_public_private_bias_transformer_topk_hypercond",
+            "rpg_global_public_private_bias_past_delta_token_transformer_topk_hypercond",
         } | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS:
             k = max(1, min(self.target_topk, n_enemies))
             _, indices = th.topk(masked_scores, k=k, dim=-1)

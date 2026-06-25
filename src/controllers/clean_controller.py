@@ -35,6 +35,8 @@ class CleanMAC(BasicMAC):
             "rpg_public_past_delta_bias_transformer_private_head_input_hypercond",
             "rpg_global_public_transformer_hypercond",
             "rpg_global_public_private_bias_past_delta_token_transformer_hypercond",
+            "rpg_global_public_private_bias_past_delta_token_transformer_topk_hypercond",
+            "rpg_global_public_private_bias_past_delta_token_transformer_threshold_hypercond",
             "rpg_public_transformer_relation_token_head_hypercond",
             "rpg_public_private_bias_transformer_relation_token_head_hypercond",
             "rpg_public_private_bias_transformer_relation_pair_token_head_hypercond",
