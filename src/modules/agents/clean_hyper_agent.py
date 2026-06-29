@@ -91,6 +91,9 @@ PUBLIC_TRANSFORMER_FULL_TOKEN_RELATION_HEAD_VARIANTS = {
 PUBLIC_TRANSFORMER_FULL_OBS_RELATION_HEAD_VARIANTS = {
     "rpg_full_obs_transformer_relation_token_head_hypercond",
 }
+PUBLIC_TRANSFORMER_FULL_OBS_VARIANTS = {
+    "rpg_full_obs_transformer_hypercond",
+}
 PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS = {
     "rpg_global_public_transformer_hypercond",
     "rpg_global_public_private_bias_past_delta_token_transformer_hypercond",
@@ -166,6 +169,7 @@ PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
     | PUBLIC_TRANSFORMER_PAST_DELTA_VARIANTS
     | PUBLIC_TRANSFORMER_MIXED_VARIANTS
     | PUBLIC_TRANSFORMER_FULL_TOKEN_VARIANTS
+    | PUBLIC_TRANSFORMER_FULL_OBS_VARIANTS
     | PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_PAIR_TOKEN_HEAD_VARIANTS
@@ -232,6 +236,7 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_global_public_transformer_relation_token_head_hypercond": "baseline",
     "rpg_public_private_full_token_transformer_hypercond": "public_private_full_token",
     "rpg_public_private_full_token_transformer_relation_token_head_hypercond": "public_private_full_token",
+    "rpg_full_obs_transformer_hypercond": "full_obs",
     "rpg_full_obs_transformer_relation_token_head_hypercond": "full_obs",
 }
 PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS = (

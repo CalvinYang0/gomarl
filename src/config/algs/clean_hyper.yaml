@@ -353,6 +353,11 @@ hypernet_layers: 2
 #                                                        temporal relation
 #                                                        hidden state instead
 #                                                        of policy GRU hidden.
+# - rpg_full_obs_transformer_hypercond: no public/private semantic split. The
+#                                       relation Transformer encodes full self,
+#                                       ally, and enemy obs slots directly, but
+#                                       the decision head still uses the policy
+#                                       GRU hidden h_i.
 # - rpg_full_obs_transformer_relation_token_head_hypercond: no public/private
 #                                                        semantic split. The
 #                                                        relation Transformer
