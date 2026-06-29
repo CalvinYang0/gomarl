@@ -140,6 +140,12 @@ PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS = {
 PUBLIC_TRANSFORMER_PAIR_INTERACTION_VARIANTS = {
     "rpg_public_private_bias_transformer_pair_interaction_hypercond",
 }
+PUBLIC_TRANSFORMER_PAIR_CONCAT_INTERACTION_VARIANTS = {
+    "rpg_public_private_bias_transformer_pair_concat_interaction_hypercond",
+}
+PUBLIC_TRANSFORMER_PAIR_FEATURE_INTERACTION_VARIANTS = (
+    PUBLIC_TRANSFORMER_PAIR_INTERACTION_VARIANTS | PUBLIC_TRANSFORMER_PAIR_CONCAT_INTERACTION_VARIANTS
+)
 PUBLIC_TRANSFORMER_PRIVATE_VARIANTS = {
     "rpg_public_private_token_transformer_hypercond",
     "rpg_public_private_bias_transformer_hypercond",
@@ -178,13 +184,13 @@ PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
     | PUBLIC_TRANSFORMER_TARGET_SELECTION_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS
-    | PUBLIC_TRANSFORMER_PAIR_INTERACTION_VARIANTS
+    | PUBLIC_TRANSFORMER_PAIR_FEATURE_INTERACTION_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_VARIANTS
 )
 PUBLIC_TRANSFORMER_STANDARD_RELATION_VARIANTS = (
     PUBLIC_TRANSFORMER_RELATION_VARIANTS
     - PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS
-    - PUBLIC_TRANSFORMER_PAIR_INTERACTION_VARIANTS
+    - PUBLIC_TRANSFORMER_PAIR_FEATURE_INTERACTION_VARIANTS
 )
 PUBLIC_TRANSFORMER_SINGLE_HEAD_VARIANTS = (
     {"rpg_public_transformer_single_head_hypercond"}
@@ -210,6 +216,7 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_private_token_transformer_single_head_hypercond": "private_token",
     "rpg_public_private_bias_transformer_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_pair_interaction_hypercond": "private_bias",
+    "rpg_public_private_bias_transformer_pair_concat_interaction_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_single_head_hypercond": "private_bias",
     "rpg_public_past_delta_token_transformer_hypercond": "past_delta_token",
     "rpg_public_past_delta_token_transformer_single_head_hypercond": "past_delta_token",
@@ -3589,6 +3596,14 @@ class CleanHyperAgent(nn.Module):
                 self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
                 self.rpg_interaction_encoder = None
                 self.rpg_interaction_scorer = None
+            elif self.model_type in PUBLIC_TRANSFORMER_PAIR_CONCAT_INTERACTION_VARIANTS:
+                self.rpg_interaction_input_dim = self.hidden_dim + self.rpg_relation_dim
+                self.rpg_interaction_bottleneck_w = None
+                self.rpg_interaction_bottleneck_b = None
+                self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.rpg_interaction_input_dim)
+                self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
+                self.rpg_interaction_encoder = None
+                self.rpg_interaction_scorer = None
             elif self.model_type in PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS:
                 self.rpg_interaction_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
                 self.rpg_interaction_bottleneck_w = None
@@ -3802,10 +3817,18 @@ class CleanHyperAgent(nn.Module):
             self.rpg_interaction_expert_gate = None
             self.rpg_interaction_expert_heads = None
 
-        if self.model_type in PUBLIC_TRANSFORMER_PAIR_INTERACTION_VARIANTS:
+        if self.model_type in PUBLIC_TRANSFORMER_PAIR_FEATURE_INTERACTION_VARIANTS:
             self.rpg_hidden_pair_encoder = nn.Linear(self.hidden_dim, self.rpg_relation_dim)
         else:
             self.rpg_hidden_pair_encoder = None
+        if self.model_type in PUBLIC_TRANSFORMER_PAIR_CONCAT_INTERACTION_VARIANTS:
+            self.rpg_pair_concat_encoder = nn.Sequential(
+                nn.Linear(2 * self.rpg_relation_dim, self.rpg_relation_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.rpg_relation_dim, self.rpg_relation_dim),
+            )
+        else:
+            self.rpg_pair_concat_encoder = None
 
         if self.model_type in TOKEN_DECISION_HEAD_VARIANTS:
             if self.model_type == "rpg_entity_token_decision_head_hypercond":
@@ -5436,6 +5459,14 @@ class CleanHyperAgent(nn.Module):
             hidden_pair = hidden_pair.unsqueeze(2).expand_as(enemy_tokens)
             pair_tokens = hidden_pair * enemy_tokens
             return th.cat([enemy_tokens, pair_tokens], dim=-1)
+        if self.model_type in PUBLIC_TRANSFORMER_PAIR_CONCAT_INTERACTION_VARIANTS:
+            if hidden is None or self.rpg_hidden_pair_encoder is None or self.rpg_pair_concat_encoder is None:
+                raise ValueError("{} requires policy hidden for concat pair interaction features.".format(self.model_type))
+            hidden_pair = self.rpg_hidden_pair_encoder(hidden)
+            hidden_pair = hidden_pair.unsqueeze(2).expand_as(enemy_tokens)
+            pair_input = th.cat([hidden_pair, enemy_tokens], dim=-1)
+            pair_tokens = self.rpg_pair_concat_encoder(pair_input)
+            return pair_tokens * enemy_mask.unsqueeze(-1).float()
         if self.model_type in PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS:
             private_tokens = self._private_enemy_tokens(context, enemy_mask)
             return th.cat([enemy_tokens, private_tokens], dim=-1)
