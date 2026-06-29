@@ -179,6 +179,18 @@ hypernet_layers: 2
 #                                                   embeddings.
 # - rpg_public_private_bias_transformer_hypercond: current private local fields
 #                                                  injected as attention bias.
+# - rpg_public_private_bias_transformer_pair_interaction_hypercond: same
+#                                                                  relation
+#                                                                  generator,
+#                                                                  but the
+#                                                                  interaction
+#                                                                  head keeps
+#                                                                  policy
+#                                                                  hidden h_i
+#                                                                  and appends
+#                                                                  a learned
+#                                                                  h_i-enemy
+#                                                                  pair token.
 # - rpg_public_private_bias_transformer_topk_hypercond: same private-bias
 #                                                       public Transformer,
 #                                                       but only computes

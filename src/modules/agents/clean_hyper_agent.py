@@ -134,6 +134,9 @@ PUBLIC_TRANSFORMER_MIXED_SINGLE_HEAD_VARIANTS = {
 PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS = {
     "rpg_public_past_delta_bias_transformer_private_head_input_hypercond",
 }
+PUBLIC_TRANSFORMER_PAIR_INTERACTION_VARIANTS = {
+    "rpg_public_private_bias_transformer_pair_interaction_hypercond",
+}
 PUBLIC_TRANSFORMER_PRIVATE_VARIANTS = {
     "rpg_public_private_token_transformer_hypercond",
     "rpg_public_private_bias_transformer_hypercond",
@@ -171,10 +174,13 @@ PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
     | PUBLIC_TRANSFORMER_TARGET_SELECTION_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS
+    | PUBLIC_TRANSFORMER_PAIR_INTERACTION_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_VARIANTS
 )
 PUBLIC_TRANSFORMER_STANDARD_RELATION_VARIANTS = (
-    PUBLIC_TRANSFORMER_RELATION_VARIANTS - PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS
+    PUBLIC_TRANSFORMER_RELATION_VARIANTS
+    - PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS
+    - PUBLIC_TRANSFORMER_PAIR_INTERACTION_VARIANTS
 )
 PUBLIC_TRANSFORMER_SINGLE_HEAD_VARIANTS = (
     {"rpg_public_transformer_single_head_hypercond"}
@@ -199,6 +205,7 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_private_token_transformer_hypercond": "private_token",
     "rpg_public_private_token_transformer_single_head_hypercond": "private_token",
     "rpg_public_private_bias_transformer_hypercond": "private_bias",
+    "rpg_public_private_bias_transformer_pair_interaction_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_single_head_hypercond": "private_bias",
     "rpg_public_past_delta_token_transformer_hypercond": "past_delta_token",
     "rpg_public_past_delta_token_transformer_single_head_hypercond": "past_delta_token",
@@ -3569,6 +3576,14 @@ class CleanHyperAgent(nn.Module):
                 self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
                 self.rpg_interaction_encoder = None
                 self.rpg_interaction_scorer = None
+            elif self.model_type in PUBLIC_TRANSFORMER_PAIR_INTERACTION_VARIANTS:
+                self.rpg_interaction_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
+                self.rpg_interaction_bottleneck_w = None
+                self.rpg_interaction_bottleneck_b = None
+                self.rpg_interaction_out_w = nn.Linear(self.cond_dim, self.rpg_interaction_input_dim)
+                self.rpg_interaction_out_b = nn.Linear(self.cond_dim, 1)
+                self.rpg_interaction_encoder = None
+                self.rpg_interaction_scorer = None
             elif self.model_type in PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS:
                 self.rpg_interaction_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
                 self.rpg_interaction_bottleneck_w = None
@@ -3781,6 +3796,11 @@ class CleanHyperAgent(nn.Module):
             self.rpg_interaction_film_beta = None
             self.rpg_interaction_expert_gate = None
             self.rpg_interaction_expert_heads = None
+
+        if self.model_type in PUBLIC_TRANSFORMER_PAIR_INTERACTION_VARIANTS:
+            self.rpg_hidden_pair_encoder = nn.Linear(self.hidden_dim, self.rpg_relation_dim)
+        else:
+            self.rpg_hidden_pair_encoder = None
 
         if self.model_type in TOKEN_DECISION_HEAD_VARIANTS:
             if self.model_type == "rpg_entity_token_decision_head_hypercond":
@@ -5396,7 +5416,7 @@ class CleanHyperAgent(nn.Module):
         delta_feat = (enemy_feat - prev_enemy_feat) * valid.unsqueeze(-1).float()
         return self.rpg_delta_enemy_token_encoder(delta_feat) * valid.unsqueeze(-1).float()
 
-    def _interaction_enemy_features(self, enemy_tokens, enemy_mask, context):
+    def _interaction_enemy_features(self, enemy_tokens, enemy_mask, context, hidden=None):
         if self.model_type == "rpg_no_enemy_token_interaction_hypercond":
             return th.zeros_like(enemy_tokens)
         if self.model_type == "rpg_private_enemy_token_interaction_hypercond":
@@ -5404,6 +5424,13 @@ class CleanHyperAgent(nn.Module):
         if self.model_type == "rpg_delta_enemy_token_interaction_hypercond":
             delta_tokens = self._delta_enemy_tokens(context, enemy_mask)
             return th.cat([enemy_tokens, delta_tokens], dim=-1)
+        if self.model_type in PUBLIC_TRANSFORMER_PAIR_INTERACTION_VARIANTS:
+            if hidden is None or self.rpg_hidden_pair_encoder is None:
+                raise ValueError("{} requires policy hidden for pair interaction features.".format(self.model_type))
+            hidden_pair = self.rpg_hidden_pair_encoder(hidden)
+            hidden_pair = hidden_pair.unsqueeze(2).expand_as(enemy_tokens)
+            pair_tokens = hidden_pair * enemy_tokens
+            return th.cat([enemy_tokens, pair_tokens], dim=-1)
         if self.model_type in PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS:
             private_tokens = self._private_enemy_tokens(context, enemy_mask)
             return th.cat([enemy_tokens, private_tokens], dim=-1)
@@ -5644,7 +5671,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_action_edge_target_context_hypercond",
             "rpg_delta_relation_hypercond",
         }:
-            interaction_enemy_features = self._interaction_enemy_features(enemy_tokens, enemy_mask, context)
+            interaction_enemy_features = self._interaction_enemy_features(enemy_tokens, enemy_mask, context, hidden=hidden)
             interaction_input = th.cat([hidden_rep, interaction_enemy_features], dim=-1)
             if self.model_type in PUBLIC_TRANSFORMER_TARGET_SELECTION_VARIANTS:
                 target_mask = self._target_selection_mask(hidden, relation_condition, enemy_tokens, enemy_mask)

@@ -24,6 +24,7 @@ class CleanMAC(BasicMAC):
             "rpg_public_future_delta_bias_transformer_hypercond",
             "rpg_public_private_token_transformer_hypercond",
             "rpg_public_private_bias_transformer_hypercond",
+            "rpg_public_private_bias_transformer_pair_interaction_hypercond",
             "rpg_public_private_bias_transformer_topk_hypercond",
             "rpg_public_private_bias_transformer_threshold_hypercond",
             "rpg_public_past_delta_token_transformer_hypercond",
