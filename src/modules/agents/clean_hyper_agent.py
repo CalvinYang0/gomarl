@@ -96,10 +96,19 @@ PUBLIC_TRANSFORMER_FULL_OBS_VARIANTS = {
 }
 PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS = {
     "rpg_global_public_transformer_hypercond",
+    "rpg_global_public_private_bias_transformer_hypercond",
+    "rpg_global_public_private_bias_transformer_eval_global_hypercond",
+    "rpg_global_public_private_bias_transformer_memory_eval_hypercond",
     "rpg_global_public_private_bias_past_delta_token_transformer_hypercond",
     "rpg_global_public_private_bias_past_delta_token_transformer_topk_hypercond",
     "rpg_global_public_private_bias_past_delta_token_transformer_threshold_hypercond",
     "rpg_global_public_transformer_relation_token_head_hypercond",
+}
+PUBLIC_TRANSFORMER_EVAL_GLOBAL_VARIANTS = {
+    "rpg_global_public_private_bias_transformer_eval_global_hypercond",
+}
+PUBLIC_TRANSFORMER_MEMORY_EVAL_VARIANTS = {
+    "rpg_global_public_private_bias_transformer_memory_eval_hypercond",
 }
 PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS = {
     "rpg_public_transformer_relation_token_head_hypercond",
@@ -228,6 +237,9 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_private_token_past_delta_bias_transformer_enemy_slot_hypercond": "private_token_past_delta_bias",
     "rpg_public_past_delta_bias_transformer_private_head_input_hypercond": "past_delta_bias",
     "rpg_global_public_transformer_hypercond": "baseline",
+    "rpg_global_public_private_bias_transformer_hypercond": "private_bias",
+    "rpg_global_public_private_bias_transformer_eval_global_hypercond": "private_bias",
+    "rpg_global_public_private_bias_transformer_memory_eval_hypercond": "private_bias",
     "rpg_global_public_private_bias_past_delta_token_transformer_hypercond": "private_bias_past_delta_token",
     "rpg_global_public_private_bias_past_delta_token_transformer_topk_hypercond": "private_bias_past_delta_token",
     "rpg_global_public_private_bias_past_delta_token_transformer_threshold_hypercond": "private_bias_past_delta_token",
@@ -4111,6 +4123,7 @@ class CleanHyperAgent(nn.Module):
         self.latest_relation_enemy_attn = None
 
     def init_hidden(self):
+        self.public_memory_obs = None
         hidden_size = self.hidden_dim
         if self.model_type in {
             "rpg_relation_hypercond",
@@ -4795,6 +4808,35 @@ class CleanHyperAgent(nn.Module):
             dim=-1,
         )
 
+    def _build_public_memory_filled_obs(self, obs):
+        if obs is None:
+            return obs
+        if self.public_memory_obs is None or self.public_memory_obs.shape != obs.shape:
+            self.public_memory_obs = th.zeros_like(obs)
+
+        prev_memory = self.public_memory_obs.to(device=obs.device, dtype=obs.dtype)
+        move_feat, enemy_feat, ally_feat, own_feat = self._split_rpg_obs(obs)
+        mem_move, mem_enemy, mem_ally, mem_own = self._split_rpg_obs(prev_memory)
+
+        enemy_mask = enemy_feat.abs().sum(dim=-1, keepdim=True) > 0
+        ally_mask = ally_feat.abs().sum(dim=-1, keepdim=True) > 0
+        self_mask = own_feat.abs().sum(dim=-1, keepdim=True) > 0
+
+        filled_enemy = th.where(enemy_mask, enemy_feat, mem_enemy)
+        filled_ally = th.where(ally_mask, ally_feat, mem_ally)
+        filled_own = th.where(self_mask, own_feat, mem_own)
+        filled_obs = th.cat(
+            [
+                move_feat.reshape(obs.size(0), self.n_agents, -1),
+                filled_enemy.reshape(obs.size(0), self.n_agents, -1),
+                filled_ally.reshape(obs.size(0), self.n_agents, -1),
+                filled_own.reshape(obs.size(0), self.n_agents, -1),
+            ],
+            dim=-1,
+        )
+        self.public_memory_obs = filled_obs.detach()
+        return filled_obs
+
     def _build_local_structured_condition(self, hidden, context):
         condition = self.local_condition_encoder(self._build_local_source(hidden, context))
         _, enemy_feat, _, _ = self._split_rpg_obs(context["obs"])
@@ -4805,17 +4847,25 @@ class CleanHyperAgent(nn.Module):
     def _build_rpg_condition(self, context, relation_hidden, test_mode=False):
         if self.model_type == "rpg_global_filled_obs_hypercond" and not test_mode:
             obs = self._build_global_filled_obs(context)
-        elif self.model_type in PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS and not test_mode:
+        elif self.model_type in PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS and (
+            not test_mode or self.model_type in PUBLIC_TRANSFORMER_EVAL_GLOBAL_VARIANTS
+        ):
             obs = self._build_global_public_filled_obs(context, obs_key="obs", state_key="state")
+        elif self.model_type in PUBLIC_TRANSFORMER_MEMORY_EVAL_VARIANTS and test_mode:
+            obs = self._build_public_memory_filled_obs(context["obs"])
         else:
             obs = context["obs"]
         move_feat, enemy_feat, ally_feat, own_feat = self._split_rpg_obs(obs)
         self_feat = th.cat([move_feat, own_feat], dim=-1)
         if isinstance(self.rpg_relation_capturer, PublicTransformerRelationCapturer):
-            if self.model_type in PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS and not test_mode:
+            if self.model_type in PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS and (
+                not test_mode or self.model_type in PUBLIC_TRANSFORMER_EVAL_GLOBAL_VARIANTS
+            ):
                 prev_obs = self._build_global_public_filled_obs(
                     context, obs_key="prev_obs", state_key="prev_state"
                 )
+            elif self.model_type in PUBLIC_TRANSFORMER_MEMORY_EVAL_VARIANTS and test_mode:
+                prev_obs = context.get("prev_obs")
             else:
                 prev_obs = context.get("prev_obs")
             next_obs = context.get("next_obs")
