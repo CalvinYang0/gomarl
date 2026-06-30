@@ -268,12 +268,10 @@ PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS = (
     | PUBLIC_TRANSFORMER_RELATION_PAIR_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_PRIVATE_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_DELTA_TOKEN_HEAD_VARIANTS
-    | PUBLIC_TRANSFORMER_SLOT_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
 )
 RELATION_TOKEN_DECISION_HEAD_VARIANTS = (
-    {"rpg_relation_token_decision_head_hypercond"}
-    | (PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS - PUBLIC_TRANSFORMER_SLOT_TOKEN_HEAD_VARIANTS)
+    {"rpg_relation_token_decision_head_hypercond"} | PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS
 )
 TOKEN_DECISION_HEAD_VARIANTS = RPG_TOKEN_DECISION_HEAD_VARIANTS | PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS
 
@@ -6044,21 +6042,12 @@ class CleanHyperAgent(nn.Module):
                 if self.model_type in TOKEN_DECISION_HEAD_VARIANTS:
                     condition = relation_condition
                     self.latest_condition = condition.detach()
-                    if self.model_type in PUBLIC_TRANSFORMER_SLOT_TOKEN_HEAD_VARIANTS:
-                        self_token = getattr(self.rpg_relation_capturer, "latest_encoded_self_token", None)
-                        if self_token is None:
-                            raise ValueError(
-                                "{} requires encoded self slot from PublicTransformerRelationCapturer.".format(
-                                    self.model_type
-                                )
-                            )
-                    else:
-                        self_token = (
-                            None
-                            if self.model_type in RELATION_TOKEN_DECISION_HEAD_VARIANTS
-                            or self.model_type in RPG_POLICY_RELATION_FUSION_HEAD_VARIANTS
-                            else self._rpg_self_token_from_context(context)
-                        )
+                    self_token = (
+                        None
+                        if self.model_type in RELATION_TOKEN_DECISION_HEAD_VARIANTS
+                        or self.model_type in RPG_POLICY_RELATION_FUSION_HEAD_VARIANTS
+                        else self._rpg_self_token_from_context(context)
+                    )
                     q = self._apply_rpg_token_decision_head(
                         relation_condition,
                         self_token,
