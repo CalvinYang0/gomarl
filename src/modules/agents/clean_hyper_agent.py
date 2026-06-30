@@ -3538,6 +3538,11 @@ class CleanHyperAgent(nn.Module):
             "rpg_fixed_linear_structured_maker",
         }:
             self.rpg_n_ego_actions = self.n_actions - self.rpg_obs_layout["n_enemies"]
+            self.rpg_ego_input_dim = (
+                self.hidden_dim + self.rpg_relation_dim
+                if self.model_type in PUBLIC_TRANSFORMER_SLOT_TOKEN_HEAD_VARIANTS
+                else self.hidden_dim
+            )
             if self.model_type in {"rpg_fixed_structured_maker", "rpg_fixed_linear_structured_maker"}:
                 self.rpg_ego_bottleneck_w = None
                 self.rpg_ego_bottleneck_b = None
@@ -3549,7 +3554,7 @@ class CleanHyperAgent(nn.Module):
                     nn.Linear(self.hidden_dim, self.rpg_n_ego_actions),
                 )
             else:
-                self.rpg_ego_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
+                self.rpg_ego_bottleneck_w = nn.Linear(self.cond_dim, self.rpg_ego_input_dim * self.hidden_dim)
                 self.rpg_ego_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
                 self.rpg_ego_out_w = nn.Linear(self.cond_dim, self.hidden_dim * self.rpg_n_ego_actions)
                 self.rpg_ego_out_b = nn.Linear(self.cond_dim, self.rpg_n_ego_actions)
@@ -3820,6 +3825,7 @@ class CleanHyperAgent(nn.Module):
                     nn.init.zeros_(self.rpg_interaction_out_b.bias)
         else:
             self.rpg_n_ego_actions = None
+            self.rpg_ego_input_dim = None
             self.rpg_ego_bottleneck_w = None
             self.rpg_ego_bottleneck_b = None
             self.rpg_ego_out_w = None
@@ -5684,8 +5690,18 @@ class CleanHyperAgent(nn.Module):
         if self.model_type in {"rpg_fixed_structured_maker", "rpg_fixed_linear_structured_maker"}:
             q_ego = self.rpg_ego_maker(th.cat([hidden, relation_condition], dim=-1))
         else:
+            ego_input = hidden
+            ego_input_dim = self.rpg_ego_input_dim or self.hidden_dim
+            if self.model_type in PUBLIC_TRANSFORMER_SLOT_TOKEN_HEAD_VARIANTS:
+                self_token = getattr(self.rpg_relation_capturer, "latest_encoded_self_token", None)
+                if self_token is None:
+                    raise ValueError(
+                        f"{self.model_type} requires encoded Transformer self slots before ego head computation."
+                    )
+                ego_input = th.cat([hidden, self_token], dim=-1)
+            flat_ego_input = ego_input.reshape(batch_size * n_agents, 1, ego_input_dim)
             ego_bottleneck_w = self.rpg_ego_bottleneck_w(flat_condition).view(
-                batch_size * n_agents, self.hidden_dim, self.hidden_dim
+                batch_size * n_agents, ego_input_dim, self.hidden_dim
             )
             ego_bottleneck_b = self.rpg_ego_bottleneck_b(flat_condition).view(
                 batch_size * n_agents, 1, self.hidden_dim
@@ -5697,7 +5713,7 @@ class CleanHyperAgent(nn.Module):
                 batch_size * n_agents, 1, self.rpg_n_ego_actions
             )
 
-            ego_mid = F.elu(th.bmm(flat_hidden, ego_bottleneck_w) + ego_bottleneck_b)
+            ego_mid = F.elu(th.bmm(flat_ego_input, ego_bottleneck_w) + ego_bottleneck_b)
             q_ego = th.bmm(ego_mid, ego_out_w) + ego_out_b
             q_ego = q_ego.view(batch_size, n_agents, self.rpg_n_ego_actions)
 

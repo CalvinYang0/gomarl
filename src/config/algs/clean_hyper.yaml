@@ -335,13 +335,12 @@ hypernet_layers: 2
 # - rpg_public_private_bias_transformer_slot_token_head_hypercond:
 #                                                        same private-bias
 #                                                        relation generator,
-#                                                        but the interaction
-#                                                        head keeps policy h_t
-#                                                        and replaces raw enemy
-#                                                        tokens with encoded
-#                                                        Transformer enemy slots
+#                                                        but ego uses
+#                                                        [h_t, encoded self slot]
+#                                                        and interaction uses
+#                                                        [h_t, encoded enemy slot]
 #                                                        after private-bias
-#                                                        attention.
+#                                                        Transformer attention
 # - rpg_global_public_transformer_relation_token_head_hypercond: training-only
 #                                                        global-public
 #                                                        diagnostic plus
