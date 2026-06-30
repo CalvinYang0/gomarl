@@ -14,10 +14,14 @@ SC2PATH="${SC2PATH:-/home/kyang/StarCraftII}"
 
 CONFIG="${CONFIG:-clean_hyper}"
 ENV_CONFIG="${ENV_CONFIG:-sc2}"
-MAP_NAME="${MAP_NAME:-3m}"
+MAP_NAME="${MAP_NAME:-}"
+if [[ "$ENV_CONFIG" == "sc2" && -z "$MAP_NAME" ]]; then
+  MAP_NAME="3m"
+fi
 MODEL_TYPE="${MODEL_TYPE:-qmix_minimal}"
 SEED="${SEED:-1}"
-RUN_NAME="${RUN_NAME:-ozstar_${MAP_NAME}_${MODEL_TYPE}_s${SEED}}"
+RUN_KEY="${MAP_NAME:-$ENV_CONFIG}"
+RUN_NAME="${RUN_NAME:-ozstar_${RUN_KEY}_${MODEL_TYPE}_s${SEED}}"
 
 USE_CUDA="${USE_CUDA:-False}"
 WANDB_MODE="${WANDB_MODE:-offline}"
@@ -47,7 +51,7 @@ echo "python: $PYTHON_BIN"
 echo "sc2path: $SC2PATH"
 echo "config: $CONFIG"
 echo "env_config: $ENV_CONFIG"
-echo "map: $MAP_NAME"
+echo "map: ${MAP_NAME:-<env-config default>}"
 echo "model: $MODEL_TYPE"
 echo "seed: $SEED"
 echo "run_name: $RUN_NAME"
@@ -70,14 +74,24 @@ try:
     print("smac:", smac.__file__)
 except Exception as exc:
     print("smac_check_failed:", repr(exc))
+try:
+    import gfootball
+    print("gfootball:", gfootball.__file__)
+except Exception as exc:
+    print("gfootball_check_failed:", repr(exc))
 print("sc2_binary_exists:", os.path.exists(os.path.join(os.environ["SC2PATH"], "Versions", "Base75689", "SC2_x64")))
 PY
+
+MAP_ARGS=()
+if [[ -n "$MAP_NAME" ]]; then
+  MAP_ARGS+=(env_args.map_name="$MAP_NAME")
+fi
 
 "$PYTHON_BIN" src/main.py \
   --config="$CONFIG" \
   --env-config="$ENV_CONFIG" \
   with \
-  env_args.map_name="$MAP_NAME" \
+  "${MAP_ARGS[@]}" \
   clean_model_type="$MODEL_TYPE" \
   seed="$SEED" \
   use_cuda="$USE_CUDA" \
