@@ -142,6 +142,12 @@ PUBLIC_TRANSFORMER_FRIEND_MERGED_VARIANTS = (
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
     | PUBLIC_TRANSFORMER_FULL_TOKEN_VARIANTS
+    | {
+        "rpg_public_private_bias_friend_public_transformer_hypercond",
+        "rpg_public_private_owner_bias_transformer_hypercond",
+        "rpg_public_private_simple_bias_transformer_hypercond",
+        "rpg_public_private_selfattn_bias_transformer_hypercond",
+    }
 )
 PUBLIC_TRANSFORMER_MIXED_SINGLE_HEAD_VARIANTS = {
     "rpg_public_private_bias_past_delta_token_transformer_single_head_hypercond",
@@ -161,6 +167,10 @@ PUBLIC_TRANSFORMER_PAIR_FEATURE_INTERACTION_VARIANTS = (
 PUBLIC_TRANSFORMER_PRIVATE_VARIANTS = {
     "rpg_public_private_token_transformer_hypercond",
     "rpg_public_private_bias_transformer_hypercond",
+    "rpg_public_private_bias_friend_public_transformer_hypercond",
+    "rpg_public_private_owner_bias_transformer_hypercond",
+    "rpg_public_private_simple_bias_transformer_hypercond",
+    "rpg_public_private_selfattn_bias_transformer_hypercond",
 }
 PUBLIC_TRANSFORMER_PRIVATE_SINGLE_HEAD_VARIANTS = {
     "rpg_public_private_token_transformer_single_head_hypercond",
@@ -177,6 +187,10 @@ PUBLIC_TRANSFORMER_BIAS_VARIANTS = {
     "rpg_public_future_delta_bias_transformer_hypercond",
     "rpg_public_past_delta_bias_transformer_hypercond",
     "rpg_public_private_bias_transformer_hypercond",
+    "rpg_public_private_bias_friend_public_transformer_hypercond",
+    "rpg_public_private_owner_bias_transformer_hypercond",
+    "rpg_public_private_simple_bias_transformer_hypercond",
+    "rpg_public_private_selfattn_bias_transformer_hypercond",
     "rpg_public_private_bias_past_delta_token_transformer_hypercond",
     "rpg_public_private_token_past_delta_bias_transformer_enemy_slot_hypercond",
     "rpg_public_past_delta_bias_transformer_private_head_input_hypercond",
@@ -228,6 +242,10 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_private_token_transformer_hypercond": "private_token",
     "rpg_public_private_token_transformer_single_head_hypercond": "private_token",
     "rpg_public_private_bias_transformer_hypercond": "private_bias",
+    "rpg_public_private_bias_friend_public_transformer_hypercond": "private_bias",
+    "rpg_public_private_owner_bias_transformer_hypercond": "private_bias",
+    "rpg_public_private_simple_bias_transformer_hypercond": "private_bias",
+    "rpg_public_private_selfattn_bias_transformer_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_pair_interaction_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_pair_concat_interaction_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_single_head_hypercond": "private_bias",
@@ -826,6 +844,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         num_layers=1,
         use_encoded_enemy_tokens=False,
         merge_friendly_public_side=False,
+        private_owner_side=False,
+        private_bias_style="pair_mlp",
     ):
         super().__init__()
         del obs_last_action, n_actions
@@ -843,7 +863,10 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.mode = mode
         self.num_heads = num_heads
         self.use_encoded_enemy_tokens = bool(use_encoded_enemy_tokens)
+        self.merge_friendly_public_side = bool(merge_friendly_public_side)
         self.self_public_side_id = 1 if merge_friendly_public_side else 0
+        self.private_owner_side = bool(private_owner_side)
+        self.private_bias_style = private_bias_style
         self.latest_encoded_self_token = None
         self.latest_encoded_enemy_tokens = None
 
@@ -865,6 +888,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.cls_token = nn.Parameter(th.zeros(1, 1, 1, relation_dim))
         self.side_embedding = nn.Embedding(3, relation_dim)  # self, ally, enemy
         self.side_pair_bias = nn.Embedding(9, num_heads)
+        self.private_side_embedding = nn.Embedding(3, relation_dim)
 
         self.self_public_encoder = self._make_encoder(self.public_self_dim)
         self.ally_public_encoder = self._make_encoder(self.public_ally_dim)
@@ -904,6 +928,8 @@ class PublicTransformerRelationCapturer(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(relation_dim, num_heads),
         )
+        self.simple_bias = nn.Linear(relation_dim, num_heads)
+        self.private_bias_attention = MaskedSelfAttentionBlock(relation_dim)
         self.transformer_layers = nn.ModuleList(
             BiasTransformerEncoderLayer(relation_dim, num_heads)
             for _ in range(max(1, num_layers))
@@ -932,6 +958,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         )
 
     def _side(self, side_id, device):
+        if self.private_owner_side:
+            return self.side_embedding.weight.new_zeros(self.relation_dim).to(device)
         return self.side_embedding(th.tensor(side_id, device=device, dtype=th.long))
 
     def _own_feat(self, self_feat):
@@ -1161,27 +1189,61 @@ class PublicTransformerRelationCapturer(nn.Module):
         self_embed = self.self_private_encoder(move_feat)
         ally_embed = self.ally_private_encoder(ally_feat[:, :, :, :4]) * ally_mask.unsqueeze(-1).float()
         enemy_embed = self.enemy_private_encoder(enemy_feat[:, :, :, :4]) * enemy_mask.unsqueeze(-1).float()
+        if self.private_owner_side:
+            self_embed = self_embed + self._private_side(0, self_feat.device).view(1, 1, -1)
+            ally_embed = (
+                ally_embed
+                + self._private_side(1, self_feat.device).view(1, 1, 1, -1)
+                * ally_mask.unsqueeze(-1).float()
+            )
+            enemy_embed = (
+                enemy_embed
+                + self._private_side(2, self_feat.device).view(1, 1, 1, -1)
+                * enemy_mask.unsqueeze(-1).float()
+            )
         return self_embed, ally_embed, enemy_embed
 
-    def _build_attention_bias(self, mod_self, mod_ally, mod_enemy, batch_size, n_agents):
+    def _private_side(self, side_id, device):
+        return self.private_side_embedding(th.tensor(side_id, device=device, dtype=th.long))
+
+    def _simple_private_bias(self, mod_tokens, batch_size, n_agents):
+        n_entity_tokens = mod_tokens.size(2)
+        token_bias = self.simple_bias(mod_tokens)
+        pair_bias = token_bias.unsqueeze(2).expand(-1, -1, n_entity_tokens, -1, -1)
+        full_bias = mod_tokens.new_zeros(batch_size, n_agents, n_entity_tokens + 1, n_entity_tokens + 1, self.num_heads)
+        full_bias[:, :, 1:, 1:] = pair_bias
+        return full_bias.permute(0, 1, 4, 2, 3).reshape(
+            batch_size * n_agents, self.num_heads, n_entity_tokens + 1, n_entity_tokens + 1
+        )
+
+    def _build_attention_bias(self, mod_self, mod_ally, mod_enemy, batch_size, n_agents, ally_mask, enemy_mask):
         mod_tokens = th.cat([mod_self.unsqueeze(2), mod_ally, mod_enemy], dim=2)
         n_entity_tokens = mod_tokens.size(2)
+        if self.private_bias_style == "selfattn_simple":
+            self_mask = th.ones(batch_size, n_agents, 1, device=mod_tokens.device, dtype=th.bool)
+            private_mask = th.cat([self_mask, ally_mask, enemy_mask], dim=2)
+            mod_tokens, _ = self.private_bias_attention(mod_tokens, private_mask)
+            return self._simple_private_bias(mod_tokens, batch_size, n_agents)
+        if self.private_bias_style == "simple":
+            return self._simple_private_bias(mod_tokens, batch_size, n_agents)
+
         left = mod_tokens.unsqueeze(3).expand(-1, -1, -1, n_entity_tokens, -1)
         right = mod_tokens.unsqueeze(2).expand(-1, -1, n_entity_tokens, -1, -1)
         pair = th.cat([left, right], dim=-1)
         pair_bias = self.bias_mlp(pair)
 
-        device = mod_tokens.device
-        side_ids = th.cat(
-            [
-                th.full((1,), self.self_public_side_id, device=device, dtype=th.long),
-                th.ones(mod_ally.size(2), device=device, dtype=th.long),
-                th.full((mod_enemy.size(2),), 2, device=device, dtype=th.long),
-            ],
-            dim=0,
-        )
-        side_pair = side_ids.unsqueeze(1) * 3 + side_ids.unsqueeze(0)
-        pair_bias = pair_bias + self.side_pair_bias(side_pair).view(1, 1, n_entity_tokens, n_entity_tokens, -1)
+        if self.private_bias_style != "pair_mlp_no_side":
+            device = mod_tokens.device
+            side_ids = th.cat(
+                [
+                    th.full((1,), self.self_public_side_id, device=device, dtype=th.long),
+                    th.ones(mod_ally.size(2), device=device, dtype=th.long),
+                    th.full((mod_enemy.size(2),), 2, device=device, dtype=th.long),
+                ],
+                dim=0,
+            )
+            side_pair = side_ids.unsqueeze(1) * 3 + side_ids.unsqueeze(0)
+            pair_bias = pair_bias + self.side_pair_bias(side_pair).view(1, 1, n_entity_tokens, n_entity_tokens, -1)
 
         full_bias = mod_tokens.new_zeros(batch_size, n_agents, n_entity_tokens + 1, n_entity_tokens + 1, self.num_heads)
         full_bias[:, :, 1:, 1:] = pair_bias
@@ -1240,7 +1302,8 @@ class PublicTransformerRelationCapturer(nn.Module):
             self_token = self.self_public_encoder(self_public) + self._side(
                 self.self_public_side_id, self_feat.device
             ).view(1, 1, -1)
-            ally_tokens = self.ally_public_encoder(ally_public) + self._side(1, self_feat.device).view(1, 1, 1, -1)
+            ally_encoder = self.self_public_encoder if self.merge_friendly_public_side else self.ally_public_encoder
+            ally_tokens = ally_encoder(ally_public) + self._side(1, self_feat.device).view(1, 1, 1, -1)
             enemy_public_tokens = self.enemy_public_encoder(enemy_public) + self._side(2, self_feat.device).view(
                 1, 1, 1, -1
             )
@@ -1354,7 +1417,9 @@ class PublicTransformerRelationCapturer(nn.Module):
 
         attn_bias = None
         if bias_self is not None:
-            attn_bias = self._build_attention_bias(bias_self, bias_ally, bias_enemy, batch_size, n_agents)
+            attn_bias = self._build_attention_bias(
+                bias_self, bias_ally, bias_enemy, batch_size, n_agents, ally_mask, enemy_mask
+            )
 
         flat_tokens = tokens.reshape(batch_size * n_agents, tokens.size(2), self.relation_dim)
         flat_mask = token_mask.reshape(batch_size * n_agents, token_mask.size(2))
@@ -4512,6 +4577,21 @@ class CleanHyperAgent(nn.Module):
                     "rpg_public_private_bias_transformer_slot_token_head_hypercond",
                 },
                 merge_friendly_public_side=self.model_type in PUBLIC_TRANSFORMER_FRIEND_MERGED_VARIANTS,
+                private_owner_side=self.model_type
+                in {
+                    "rpg_public_private_owner_bias_transformer_hypercond",
+                    "rpg_public_private_simple_bias_transformer_hypercond",
+                    "rpg_public_private_selfattn_bias_transformer_hypercond",
+                },
+                private_bias_style=(
+                    "pair_mlp_no_side"
+                    if self.model_type == "rpg_public_private_owner_bias_transformer_hypercond"
+                    else "simple"
+                    if self.model_type == "rpg_public_private_simple_bias_transformer_hypercond"
+                    else "selfattn_simple"
+                    if self.model_type == "rpg_public_private_selfattn_bias_transformer_hypercond"
+                    else "pair_mlp"
+                ),
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(

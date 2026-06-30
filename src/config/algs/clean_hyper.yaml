@@ -179,6 +179,28 @@ hypernet_layers: 2
 #                                                   embeddings.
 # - rpg_public_private_bias_transformer_hypercond: current private local fields
 #                                                  injected as attention bias.
+# - rpg_public_private_bias_friend_public_transformer_hypercond: same
+#                                                  private-bias public
+#                                                  Transformer, but public
+#                                                  side embeddings merge self
+#                                                  and ally into one friendly
+#                                                  identity.
+# - rpg_public_private_owner_bias_transformer_hypercond: same friendly public
+#                                                  tokens, but self/ally/enemy
+#                                                  identity is moved into the
+#                                                  private bias embedding. The
+#                                                  old side-pair bias table is
+#                                                  disabled.
+# - rpg_public_private_simple_bias_transformer_hypercond: same owner-private
+#                                                  setup, but private bias is a
+#                                                  simple per-token learned
+#                                                  attention bias instead of
+#                                                  pairwise MLP.
+# - rpg_public_private_selfattn_bias_transformer_hypercond: same owner-private
+#                                                  setup, but private tokens run
+#                                                  one self-attention block
+#                                                  before producing the simple
+#                                                  attention bias.
 # - rpg_public_private_bias_transformer_pair_interaction_hypercond: same
 #                                                                  relation
 #                                                                  generator,
