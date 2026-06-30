@@ -332,6 +332,14 @@ hypernet_layers: 2
 #                                                        input is [relation,
 #                                                        enemy token, enemy
 #                                                        delta token].
+# - rpg_public_private_bias_transformer_slot_token_head_hypercond:
+#                                                        same private-bias
+#                                                        relation generator,
+#                                                        but ego/interact head
+#                                                        inputs use the encoded
+#                                                        Transformer self/enemy
+#                                                        slots after private-bias
+#                                                        attention.
 # - rpg_global_public_transformer_relation_token_head_hypercond: training-only
 #                                                        global-public
 #                                                        diagnostic plus

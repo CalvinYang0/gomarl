@@ -125,6 +125,9 @@ PUBLIC_TRANSFORMER_RELATION_PRIVATE_TOKEN_HEAD_VARIANTS = {
 PUBLIC_TRANSFORMER_RELATION_DELTA_TOKEN_HEAD_VARIANTS = {
     "rpg_public_private_bias_transformer_relation_delta_token_head_hypercond",
 }
+PUBLIC_TRANSFORMER_SLOT_TOKEN_HEAD_VARIANTS = {
+    "rpg_public_private_bias_transformer_slot_token_head_hypercond",
+}
 PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS = {
     "rpg_public_private_bias_past_delta_token_transformer_relation_token_topk_hypercond",
 }
@@ -190,6 +193,7 @@ PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
     | PUBLIC_TRANSFORMER_RELATION_PAIR_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_PRIVATE_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_DELTA_TOKEN_HEAD_VARIANTS
+    | PUBLIC_TRANSFORMER_SLOT_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
     | PUBLIC_TRANSFORMER_TARGET_SELECTION_VARIANTS
     | PUBLIC_TRANSFORMER_PRIVATE_HEAD_INPUT_VARIANTS
@@ -248,6 +252,7 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_private_bias_transformer_relation_pair_token_head_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_relation_private_token_head_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_relation_delta_token_head_hypercond": "private_bias",
+    "rpg_public_private_bias_transformer_slot_token_head_hypercond": "private_bias",
     "rpg_public_private_bias_past_delta_token_transformer_relation_token_head_hypercond": "private_bias_past_delta_token",
     "rpg_public_private_bias_past_delta_token_transformer_relation_token_topk_hypercond": "private_bias_past_delta_token",
     "rpg_public_private_bias_transformer_topk_hypercond": "private_bias",
@@ -263,10 +268,12 @@ PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS = (
     | PUBLIC_TRANSFORMER_RELATION_PAIR_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_PRIVATE_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_DELTA_TOKEN_HEAD_VARIANTS
+    | PUBLIC_TRANSFORMER_SLOT_TOKEN_HEAD_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_TOPK_VARIANTS
 )
 RELATION_TOKEN_DECISION_HEAD_VARIANTS = (
-    {"rpg_relation_token_decision_head_hypercond"} | PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS
+    {"rpg_relation_token_decision_head_hypercond"}
+    | (PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS - PUBLIC_TRANSFORMER_SLOT_TOKEN_HEAD_VARIANTS)
 )
 TOKEN_DECISION_HEAD_VARIANTS = RPG_TOKEN_DECISION_HEAD_VARIANTS | PUBLIC_TRANSFORMER_TOKEN_DECISION_HEAD_VARIANTS
 
@@ -839,6 +846,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.num_heads = num_heads
         self.use_encoded_enemy_tokens = bool(use_encoded_enemy_tokens)
         self.self_public_side_id = 1 if merge_friendly_public_side else 0
+        self.latest_encoded_self_token = None
+        self.latest_encoded_enemy_tokens = None
 
         self.public_self_dim = 1 + unit_type_bits
         self.public_ally_dim = 1 + unit_type_bits
@@ -1357,6 +1366,7 @@ class PublicTransformerRelationCapturer(nn.Module):
 
         cls_out = encoded[:, :, 0]
         self_out = encoded[:, :, 1]
+        self.latest_encoded_self_token = self_out
         temporal_input = th.cat([self_out, cls_out], dim=-1)
         flat_input = temporal_input.reshape(batch_size * n_agents, -1)
         flat_prev = prev_relation_hidden.reshape(batch_size * n_agents, -1)
@@ -1367,6 +1377,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         if self.use_encoded_enemy_tokens:
             enemy_start = 2 + ally_tokens.size(2)
             enemy_tokens = encoded[:, :, enemy_start:] * enemy_mask.unsqueeze(-1).float()
+        self.latest_encoded_enemy_tokens = enemy_tokens
         return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
 
 
@@ -4494,6 +4505,7 @@ class CleanHyperAgent(nn.Module):
                 in {
                     "rpg_public_private_bias_past_delta_token_transformer_enemy_slot_hypercond",
                     "rpg_public_private_token_past_delta_bias_transformer_enemy_slot_hypercond",
+                    "rpg_public_private_bias_transformer_slot_token_head_hypercond",
                 },
                 merge_friendly_public_side=self.model_type in PUBLIC_TRANSFORMER_FRIEND_MERGED_VARIANTS,
             )
@@ -6032,12 +6044,21 @@ class CleanHyperAgent(nn.Module):
                 if self.model_type in TOKEN_DECISION_HEAD_VARIANTS:
                     condition = relation_condition
                     self.latest_condition = condition.detach()
-                    self_token = (
-                        None
-                        if self.model_type in RELATION_TOKEN_DECISION_HEAD_VARIANTS
-                        or self.model_type in RPG_POLICY_RELATION_FUSION_HEAD_VARIANTS
-                        else self._rpg_self_token_from_context(context)
-                    )
+                    if self.model_type in PUBLIC_TRANSFORMER_SLOT_TOKEN_HEAD_VARIANTS:
+                        self_token = getattr(self.rpg_relation_capturer, "latest_encoded_self_token", None)
+                        if self_token is None:
+                            raise ValueError(
+                                "{} requires encoded self slot from PublicTransformerRelationCapturer.".format(
+                                    self.model_type
+                                )
+                            )
+                    else:
+                        self_token = (
+                            None
+                            if self.model_type in RELATION_TOKEN_DECISION_HEAD_VARIANTS
+                            or self.model_type in RPG_POLICY_RELATION_FUSION_HEAD_VARIANTS
+                            else self._rpg_self_token_from_context(context)
+                        )
                     q = self._apply_rpg_token_decision_head(
                         relation_condition,
                         self_token,
