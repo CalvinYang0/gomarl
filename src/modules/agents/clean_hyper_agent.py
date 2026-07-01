@@ -232,8 +232,12 @@ PUBLIC_TRANSFORMER_CAPTURER_VARIANTS = (
 PUBLIC_TRANSFORMER_FUTURE_DELTA_ALL_VARIANTS = (
     PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS | PUBLIC_TRANSFORMER_FUTURE_DELTA_SINGLE_HEAD_VARIANTS
 )
+GRF_DECISION_MAKER_VARIANTS = {
+    "grf_public_private_bias_transformer_decision_maker_hypercond",
+}
 GRF_PUBLIC_TRANSFORMER_VARIANTS = {
     "grf_public_private_bias_transformer_hypercond",
+    *GRF_DECISION_MAKER_VARIANTS,
 }
 PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_transformer_hypercond": "baseline",
@@ -1592,6 +1596,17 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
             flat_tokens = layer(flat_tokens, key_mask, attn_bias=attn_bias)
 
         context_token = flat_tokens[:, 0].reshape(batch_size, n_agents, self.relation_dim)
+        encoded_entities = flat_tokens[:, 1:].reshape(
+            batch_size, n_agents, entity_tokens.size(2), self.relation_dim
+        )
+        ally_start = 1
+        opponent_start = ally_start + (self.n_agents - 1)
+        ball_index = opponent_start + self.n_opponents
+        self.latest_self_token = encoded_entities[:, :, 0]
+        self.latest_ally_tokens = encoded_entities[:, :, ally_start:opponent_start]
+        self.latest_opponent_tokens = encoded_entities[:, :, opponent_start:ball_index]
+        self.latest_ball_token = encoded_entities[:, :, ball_index]
+        self.latest_context_token = context_token
         if prev_relation_hidden is None:
             prev_relation_hidden = context_token.new_zeros(batch_size, n_agents, self.relation_dim)
         prev_flat = prev_relation_hidden.reshape(batch_size * n_agents, self.relation_dim)
@@ -3706,6 +3721,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_relation_coarse_fine_four_layer_head",
             "rpg_relation_coarse_q_fine_gate_head",
             "rpg_relation_prototype_single_head",
+            *GRF_DECISION_MAKER_VARIANTS,
         }:
             self.hyper_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
             self.hyper_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
@@ -3727,6 +3743,11 @@ class CleanHyperAgent(nn.Module):
                 if self.model_type == "qmix_minimal"
                 else None
             )
+
+        if self.model_type in GRF_DECISION_MAKER_VARIANTS:
+            self._init_grf_decision_maker_head()
+        else:
+            self.grf_decision_hyper = None
 
         if self.model_type in {
             "local_structured_hypercond",
@@ -4670,6 +4691,50 @@ class CleanHyperAgent(nn.Module):
             num_layers=self.public_transformer_layers,
         )
 
+    def _init_grf_decision_maker_head(self):
+        if self.n_actions != 19:
+            raise ValueError(
+                "{} assumes the default GRF 19-action space, got n_actions={}.".format(
+                    self.model_type, self.n_actions
+                )
+            )
+
+        # GRF actions are not target-indexed. We split them by semantic role:
+        # local control, teammate interaction (passes), and opponent/goal interaction.
+        self.register_buffer(
+            "grf_ego_action_idx",
+            th.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15, 17, 18], dtype=th.long),
+            persistent=False,
+        )
+        self.register_buffer(
+            "grf_ally_action_idx",
+            th.tensor([9, 10, 11], dtype=th.long),
+            persistent=False,
+        )
+        self.register_buffer(
+            "grf_opponent_action_idx",
+            th.tensor([12, 16], dtype=th.long),
+            persistent=False,
+        )
+
+        self.grf_ego_head_input_dim = self.hidden_dim + self.rpg_relation_dim
+        self.grf_ally_head_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
+        self.grf_opponent_head_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
+        self.grf_decision_hyper = nn.ModuleDict()
+        for branch, input_dim, output_dim in (
+            ("ego", self.grf_ego_head_input_dim, int(self.grf_ego_action_idx.numel())),
+            ("ally", self.grf_ally_head_input_dim, int(self.grf_ally_action_idx.numel())),
+            ("opponent", self.grf_opponent_head_input_dim, int(self.grf_opponent_action_idx.numel())),
+        ):
+            self.grf_decision_hyper[f"{branch}_w1"] = nn.Linear(
+                self.cond_dim, input_dim * self.hidden_dim
+            )
+            self.grf_decision_hyper[f"{branch}_b1"] = nn.Linear(self.cond_dim, self.hidden_dim)
+            self.grf_decision_hyper[f"{branch}_w2"] = nn.Linear(
+                self.cond_dim, self.hidden_dim * output_dim
+            )
+            self.grf_decision_hyper[f"{branch}_b2"] = nn.Linear(self.cond_dim, output_dim)
+
     def _init_rpg_relation_capturer(self):
         self.rpg_obs_layout = self._build_rpg_obs_layout()
         capturer_cls = RPGInspiredRelationCapturer
@@ -5408,6 +5473,64 @@ class CleanHyperAgent(nn.Module):
         mid = F.elu(th.bmm(flat_hidden, bottleneck_w) + bottleneck_b)
         q = th.bmm(mid, out_w) + out_b
         return q.view(batch_size, n_agents, self.n_actions)
+
+    def _apply_grf_generated_branch(self, branch, branch_input, condition, output_dim):
+        batch_size, n_agents, input_dim = branch_input.shape
+        flat_input = branch_input.reshape(batch_size * n_agents, 1, input_dim)
+        flat_condition = condition.reshape(batch_size * n_agents, -1)
+
+        w1 = self.grf_decision_hyper[f"{branch}_w1"](flat_condition).view(
+            batch_size * n_agents, input_dim, self.hidden_dim
+        )
+        b1 = self.grf_decision_hyper[f"{branch}_b1"](flat_condition).view(
+            batch_size * n_agents, 1, self.hidden_dim
+        )
+        w2 = self.grf_decision_hyper[f"{branch}_w2"](flat_condition).view(
+            batch_size * n_agents, self.hidden_dim, output_dim
+        )
+        b2 = self.grf_decision_hyper[f"{branch}_b2"](flat_condition).view(
+            batch_size * n_agents, 1, output_dim
+        )
+
+        mid = F.elu(th.bmm(flat_input, w1) + b1)
+        q = th.bmm(mid, w2) + b2
+        return q.view(batch_size, n_agents, output_dim)
+
+    def _apply_grf_decision_maker_head(self, hidden, condition):
+        self_token = getattr(self.rpg_relation_capturer, "latest_self_token", None)
+        ally_tokens = getattr(self.rpg_relation_capturer, "latest_ally_tokens", None)
+        opponent_tokens = getattr(self.rpg_relation_capturer, "latest_opponent_tokens", None)
+        if self_token is None or ally_tokens is None or opponent_tokens is None:
+            raise RuntimeError(
+                "{} requires GRF transformer entity tokens from the relation capturer.".format(
+                    self.model_type
+                )
+            )
+
+        if ally_tokens.size(2) > 0:
+            ally_context = ally_tokens.mean(dim=2)
+        else:
+            ally_context = self_token.new_zeros(self_token.shape)
+        if opponent_tokens.size(2) > 0:
+            opponent_context = opponent_tokens.mean(dim=2)
+        else:
+            opponent_context = self_token.new_zeros(self_token.shape)
+
+        ego_input = th.cat([hidden, self_token], dim=-1)
+        ally_input = th.cat([hidden, self_token, ally_context], dim=-1)
+        opponent_input = th.cat([hidden, self_token, opponent_context], dim=-1)
+
+        q = hidden.new_zeros(hidden.size(0), hidden.size(1), self.n_actions)
+        q[:, :, self.grf_ego_action_idx] = self._apply_grf_generated_branch(
+            "ego", ego_input, condition, int(self.grf_ego_action_idx.numel())
+        )
+        q[:, :, self.grf_ally_action_idx] = self._apply_grf_generated_branch(
+            "ally", ally_input, condition, int(self.grf_ally_action_idx.numel())
+        )
+        q[:, :, self.grf_opponent_action_idx] = self._apply_grf_generated_branch(
+            "opponent", opponent_input, condition, int(self.grf_opponent_action_idx.numel())
+        )
+        return q
 
     def _apply_full_hypermarl_head(self, hidden, id_embeddings):
         batch_size, n_agents, _ = hidden.shape
@@ -6231,7 +6354,10 @@ class CleanHyperAgent(nn.Module):
                     context["obs"], relation_hidden_state
                 )
                 self.latest_condition = relation_condition.detach()
-                q = self._apply_dynamic_head(hidden, relation_condition)
+                if self.model_type in GRF_DECISION_MAKER_VARIANTS:
+                    q = self._apply_grf_decision_maker_head(hidden, relation_condition)
+                else:
+                    q = self._apply_dynamic_head(hidden, relation_condition)
                 next_hidden = th.cat([hidden, next_relation_hidden], dim=-1)
             elif self.model_type in {
                 "rpg_action_edge_graph_hypercond",
