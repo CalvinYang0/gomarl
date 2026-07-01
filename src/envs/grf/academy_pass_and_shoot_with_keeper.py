@@ -147,11 +147,13 @@ class Academy_Pass_and_Shoot_with_Keeper(MultiAgentEnv):
             # return obs, self.get_global_state(), -int(done), done, infos
             infos["score"] = 0.
             self.win = 0.
+            infos["game_win"] = self.win
             return -int(done), done, infos
 
         # return obs, self.get_global_state(), 100, done, infos
         infos["score"] = 1.
         self.win = 1.
+        infos["game_win"] = self.win
         return 100, done, infos
 
     def get_obs(self):
