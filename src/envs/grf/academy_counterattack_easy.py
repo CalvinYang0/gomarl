@@ -196,6 +196,7 @@ class Academy_Counterattack_Easy(MultiAgentEnv):
     def reset(self):
         """Returns initial observations and states."""
         self.time_step = 0
+        self.win = -1
         self.env.reset()
         obs = np.array([self.get_simple_obs(i) for i in range(self.n_agents)])
 

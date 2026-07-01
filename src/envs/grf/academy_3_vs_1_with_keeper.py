@@ -72,6 +72,7 @@ class Academy_3_vs_1_with_Keeper(MultiAgentEnv):
         self.n_actions = self.action_space[0].n
 
         self.unit_dim = self.obs_dim
+        self.win = -1
 
 
     def get_simple_obs(self, index=-1):
@@ -142,9 +143,13 @@ class Academy_3_vs_1_with_Keeper(MultiAgentEnv):
 
         if sum(rewards) <= 0:
             # return obs, self.get_global_state(), -int(done), done, infos
+            infos["score"] = 0.
+            self.win = 0.
             return -int(done), done, infos
 
         # return obs, self.get_global_state(), 100, done, infos
+        infos["score"] = 1.
+        self.win = 1.
         return 100, done, infos
 
     def get_obs(self):
@@ -183,6 +188,7 @@ class Academy_3_vs_1_with_Keeper(MultiAgentEnv):
     def reset(self):
         """Returns initial observations and states."""
         self.time_step = 0
+        self.win = -1
         self.env.reset()
         obs = np.array([self.get_simple_obs(i) for i in range(self.n_agents)])
 
@@ -202,4 +208,6 @@ class Academy_3_vs_1_with_Keeper(MultiAgentEnv):
         pass
     
     def get_stats(self):
-        pass
+        if self.win == -1:
+            return {}
+        return {"game_win": self.win}

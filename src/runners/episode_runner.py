@@ -61,7 +61,8 @@ class EpisodeRunner:
         terminated = False
         episode_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
-        trace_request = self.battle_trace_request if test_mode else None
+        supports_battle_snapshot = hasattr(self.env, "get_battle_snapshot")
+        trace_request = self.battle_trace_request if test_mode and supports_battle_snapshot else None
         self.battle_trace_request = None
         trace_frames = []
         snapshot = self.env.get_battle_snapshot() if trace_request is not None else None
