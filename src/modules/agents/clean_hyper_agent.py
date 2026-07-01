@@ -232,6 +232,9 @@ PUBLIC_TRANSFORMER_CAPTURER_VARIANTS = (
 PUBLIC_TRANSFORMER_FUTURE_DELTA_ALL_VARIANTS = (
     PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS | PUBLIC_TRANSFORMER_FUTURE_DELTA_SINGLE_HEAD_VARIANTS
 )
+GRF_PUBLIC_TRANSFORMER_VARIANTS = {
+    "grf_public_private_bias_transformer_hypercond",
+}
 PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_transformer_hypercond": "baseline",
     "rpg_public_transformer_single_head_hypercond": "baseline",
@@ -1442,6 +1445,162 @@ class PublicTransformerRelationCapturer(nn.Module):
             enemy_tokens = encoded[:, :, enemy_start:] * enemy_mask.unsqueeze(-1).float()
         self.latest_encoded_enemy_tokens = enemy_tokens
         return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
+
+
+class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
+    # GRF compact observations expose fixed semantic blocks rather than SMAC
+    # visibility slots. This capturer builds public entity tokens and lets local
+    # observer-dependent geometry modulate attention through a private bias.
+    def __init__(self, n_agents, relation_dim, output_dim, num_heads=4, num_layers=1):
+        super().__init__()
+        self.n_agents = n_agents
+        self.relation_dim = relation_dim
+        self.output_dim = output_dim
+        self.num_heads = num_heads
+        self.n_opponents = 2
+        self.expected_obs_dim = 4 * n_agents + 14
+
+        self.cls_token = nn.Parameter(th.zeros(1, 1, relation_dim))
+        self.side_embedding = nn.Embedding(4, relation_dim)  # self, ally, opponent, ball
+        self.self_encoder = self._make_encoder(4)
+        self.ally_encoder = self._make_encoder(4)
+        self.opponent_encoder = self._make_encoder(4)
+        self.ball_encoder = self._make_encoder(6)
+        self.private_encoder = self._make_encoder(4)
+        self.private_bias = nn.Sequential(
+            nn.Linear(2 * relation_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, num_heads),
+        )
+        self.transformer_layers = nn.ModuleList(
+            BiasTransformerEncoderLayer(relation_dim, num_heads)
+            for _ in range(max(1, num_layers))
+        )
+        self.temporal_gru = nn.GRUCell(relation_dim * 2, relation_dim)
+        self.output_encoder = nn.Sequential(
+            nn.Linear(relation_dim, output_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(output_dim, output_dim),
+        )
+
+    def _make_encoder(self, input_dim):
+        return nn.Sequential(
+            nn.Linear(input_dim, self.relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.relation_dim, self.relation_dim),
+        )
+
+    def _split_obs(self, obs):
+        if obs.size(-1) < self.expected_obs_dim:
+            raise ValueError(
+                "GRF private-bias public transformer expected obs_dim >= {}, got {}.".format(
+                    self.expected_obs_dim, obs.size(-1)
+                )
+            )
+        obs = obs[..., : self.expected_obs_dim]
+        batch_size, n_agents, _ = obs.shape
+        if n_agents != self.n_agents:
+            raise ValueError("Expected {} agents, got {}.".format(self.n_agents, n_agents))
+
+        idx = 0
+        self_pos = obs[:, :, idx : idx + 2]
+        idx += 2
+        ally_pos = obs[:, :, idx : idx + 2 * (self.n_agents - 1)].reshape(
+            batch_size, n_agents, self.n_agents - 1, 2
+        )
+        idx += 2 * (self.n_agents - 1)
+        self_dir = obs[:, :, idx : idx + 2]
+        idx += 2
+        ally_dir = obs[:, :, idx : idx + 2 * (self.n_agents - 1)].reshape(
+            batch_size, n_agents, self.n_agents - 1, 2
+        )
+        idx += 2 * (self.n_agents - 1)
+        opponent_pos = obs[:, :, idx : idx + 2 * self.n_opponents].reshape(
+            batch_size, n_agents, self.n_opponents, 2
+        )
+        idx += 2 * self.n_opponents
+        opponent_dir = obs[:, :, idx : idx + 2 * self.n_opponents].reshape(
+            batch_size, n_agents, self.n_opponents, 2
+        )
+        idx += 2 * self.n_opponents
+        ball = obs[:, :, idx : idx + 6]
+
+        return self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball
+
+    def _build_private_bias(self, entity_private, token_count):
+        batch_size, n_agents, n_entities, _ = entity_private.shape
+        private_tokens = self.private_encoder(entity_private)
+        left = private_tokens.unsqueeze(3).expand(-1, -1, -1, n_entities, -1)
+        right = private_tokens.unsqueeze(2).expand(-1, -1, n_entities, -1, -1)
+        pair = th.cat([left, right], dim=-1)
+        pair_bias = self.private_bias(pair).permute(0, 1, 4, 2, 3)
+
+        bias = entity_private.new_zeros(batch_size, n_agents, self.num_heads, token_count, token_count)
+        bias[:, :, :, 1:, 1:] = pair_bias
+        return bias.reshape(batch_size * n_agents, self.num_heads, token_count, token_count)
+
+    def forward(self, obs, prev_relation_hidden):
+        batch_size, n_agents, _ = obs.shape
+        (
+            self_pos,
+            ally_pos,
+            self_dir,
+            ally_dir,
+            opponent_pos,
+            opponent_dir,
+            ball,
+        ) = self._split_obs(obs)
+
+        self_token = self.self_encoder(th.cat([self_pos, self_dir], dim=-1))
+        ally_token = self.ally_encoder(th.cat([ally_pos, ally_dir], dim=-1))
+        opponent_token = self.opponent_encoder(th.cat([opponent_pos, opponent_dir], dim=-1))
+        ball_token = self.ball_encoder(ball).unsqueeze(2)
+
+        self_side = self.side_embedding.weight[0].view(1, 1, 1, -1)
+        ally_side = self.side_embedding.weight[1].view(1, 1, 1, -1)
+        opponent_side = self.side_embedding.weight[2].view(1, 1, 1, -1)
+        ball_side = self.side_embedding.weight[3].view(1, 1, 1, -1)
+
+        entity_tokens = th.cat(
+            [
+                self_token.unsqueeze(2) + self_side,
+                ally_token + ally_side,
+                opponent_token + opponent_side,
+                ball_token + ball_side,
+            ],
+            dim=2,
+        )
+        token_count = entity_tokens.size(2) + 1
+        cls = self.cls_token.expand(batch_size, n_agents, -1).unsqueeze(2)
+        tokens = th.cat([cls, entity_tokens], dim=2)
+
+        ball_private = ball[:, :, :4].unsqueeze(2)
+        entity_private = th.cat(
+            [
+                th.cat([self_pos, self_dir], dim=-1).unsqueeze(2),
+                th.cat([ally_pos, ally_dir], dim=-1),
+                th.cat([opponent_pos, opponent_dir], dim=-1),
+                ball_private,
+            ],
+            dim=2,
+        )
+        attn_bias = self._build_private_bias(entity_private, token_count)
+
+        flat_tokens = tokens.reshape(batch_size * n_agents, token_count, self.relation_dim)
+        key_mask = th.ones(batch_size * n_agents, token_count, dtype=th.bool, device=obs.device)
+        for layer in self.transformer_layers:
+            flat_tokens = layer(flat_tokens, key_mask, attn_bias=attn_bias)
+
+        context_token = flat_tokens[:, 0].reshape(batch_size, n_agents, self.relation_dim)
+        if prev_relation_hidden is None:
+            prev_relation_hidden = context_token.new_zeros(batch_size, n_agents, self.relation_dim)
+        prev_flat = prev_relation_hidden.reshape(batch_size * n_agents, self.relation_dim)
+        gru_input = th.cat([context_token.reshape(batch_size * n_agents, -1), prev_flat], dim=-1)
+        next_relation_hidden = self.temporal_gru(gru_input, prev_flat).reshape(
+            batch_size, n_agents, self.relation_dim
+        )
+        condition = self.output_encoder(next_relation_hidden)
+        return condition, next_relation_hidden
 
 
 class MaskedSelfAttentionBlock(nn.Module):
@@ -3287,6 +3446,10 @@ class CleanHyperAgent(nn.Module):
         "graph_hypercond": {"uses_hypernet": True, "execution_scope": "ctce"},
         "graph_route": {"uses_hypernet": True, "execution_scope": "ctce"},
         "qmix_minimal": {"uses_hypernet": False, "execution_scope": "ctde"},
+        **{
+            name: {"uses_hypernet": True, "execution_scope": "ctde"}
+            for name in GRF_PUBLIC_TRANSFORMER_VARIANTS
+        },
     }
 
     def __init__(self, input_shape, args):
@@ -3369,6 +3532,8 @@ class CleanHyperAgent(nn.Module):
         }:
             self.rpg_obs_layout = self._build_rpg_obs_layout()
             self.rpg_relation_capturer = None
+        elif self.model_type in GRF_PUBLIC_TRANSFORMER_VARIANTS:
+            self._init_grf_relation_capturer()
         elif self.model_type in {
             "local_structured_hypercond",
             "local_linear_interaction_hypercond",
@@ -4250,6 +4415,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_fixed_linear_structured_maker",
             "two_graph_gat_hypercond",
             "hetero_gat_hypercond",
+            *GRF_PUBLIC_TRANSFORMER_VARIANTS,
         }:
             hidden_size += self.rpg_relation_dim
         return self.fc1.weight.new_zeros(hidden_size)
@@ -4484,6 +4650,24 @@ class CleanHyperAgent(nn.Module):
                 enemy_feat[:, :, :, :4].reshape(batch_size, n_agents, -1),
             ],
             dim=-1,
+        )
+
+    def _init_grf_relation_capturer(self):
+        if getattr(self.args, "env", None) not in {
+            "academy_pass_and_shoot_with_keeper",
+            "academy_3_vs_1_with_keeper",
+            "academy_counterattack_easy",
+        }:
+            raise ValueError(
+                "{} currently supports GoMARL GRF academy envs only.".format(self.model_type)
+            )
+        self.rpg_obs_layout = None
+        self.rpg_relation_capturer = GRFPublicPrivateBiasTransformerCapturer(
+            n_agents=self.n_agents,
+            relation_dim=self.rpg_relation_dim,
+            output_dim=self.cond_dim,
+            num_heads=self.public_transformer_heads,
+            num_layers=self.public_transformer_layers,
         )
 
     def _init_rpg_relation_capturer(self):
@@ -6020,6 +6204,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_fixed_linear_structured_maker",
             "two_graph_gat_hypercond",
             "hetero_gat_hypercond",
+            *GRF_PUBLIC_TRANSFORMER_VARIANTS,
         }:
             policy_hidden_state = hidden_state[:, :, : self.hidden_dim]
             relation_hidden_state = hidden_state[:, :, self.hidden_dim :]
@@ -6041,6 +6226,13 @@ class CleanHyperAgent(nn.Module):
                 self.latest_condition = condition.detach()
                 q = self._apply_rpg_structured_maker(hidden, condition, enemy_tokens, enemy_mask)
                 next_hidden = hidden
+            elif self.model_type in GRF_PUBLIC_TRANSFORMER_VARIANTS:
+                relation_condition, next_relation_hidden = self.rpg_relation_capturer(
+                    context["obs"], relation_hidden_state
+                )
+                self.latest_condition = relation_condition.detach()
+                q = self._apply_dynamic_head(hidden, relation_condition)
+                next_hidden = th.cat([hidden, next_relation_hidden], dim=-1)
             elif self.model_type in {
                 "rpg_action_edge_graph_hypercond",
                 "rpg_action_edge_rgcn_hypercond",
