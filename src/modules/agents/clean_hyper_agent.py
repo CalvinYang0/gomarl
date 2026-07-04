@@ -234,9 +234,11 @@ PUBLIC_TRANSFORMER_FUTURE_DELTA_ALL_VARIANTS = (
 )
 GRF_DECISION_MAKER_VARIANTS = {
     "grf_public_private_bias_transformer_decision_maker_hypercond",
+    "grf_abs_public_private_bias_transformer_decision_maker_hypercond",
 }
 GRF_PUBLIC_TRANSFORMER_VARIANTS = {
     "grf_public_private_bias_transformer_hypercond",
+    "grf_abs_public_private_bias_transformer_hypercond",
     *GRF_DECISION_MAKER_VARIANTS,
 }
 PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
@@ -1455,12 +1457,21 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
     # GRF compact observations expose fixed semantic blocks rather than SMAC
     # visibility slots. This capturer builds public entity tokens and lets local
     # observer-dependent geometry modulate attention through a private bias.
-    def __init__(self, n_agents, relation_dim, output_dim, num_heads=4, num_layers=1):
+    def __init__(
+        self,
+        n_agents,
+        relation_dim,
+        output_dim,
+        num_heads=4,
+        num_layers=1,
+        use_absolute_public=False,
+    ):
         super().__init__()
         self.n_agents = n_agents
         self.relation_dim = relation_dim
         self.output_dim = output_dim
         self.num_heads = num_heads
+        self.use_absolute_public = use_absolute_public
         self.n_opponents = 2
         self.expected_obs_dim = 4 * n_agents + 14
 
@@ -1531,6 +1542,33 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
 
         return self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball
 
+    def _build_public_features(self, self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball):
+        if not self.use_absolute_public:
+            return self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball
+
+        ego_pos = self_pos.unsqueeze(2)
+        ally_abs_pos = ally_pos + ego_pos
+        opponent_abs_pos = opponent_pos + ego_pos
+        ball_abs = th.cat([ball[:, :, :2] + self_pos, ball[:, :, 2:]], dim=-1)
+        return self_pos, ally_abs_pos, self_dir, ally_dir, opponent_abs_pos, opponent_dir, ball_abs
+
+    def _build_private_features(self, self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball):
+        if self.use_absolute_public:
+            self_private_pos = th.zeros_like(self_pos)
+        else:
+            self_private_pos = self_pos
+
+        ball_private = ball[:, :, :4].unsqueeze(2)
+        return th.cat(
+            [
+                th.cat([self_private_pos, self_dir], dim=-1).unsqueeze(2),
+                th.cat([ally_pos, ally_dir], dim=-1),
+                th.cat([opponent_pos, opponent_dir], dim=-1),
+                ball_private,
+            ],
+            dim=2,
+        )
+
     def _build_private_bias(self, entity_private, token_count):
         batch_size, n_agents, n_entities, _ = entity_private.shape
         private_tokens = self.private_encoder(entity_private)
@@ -1554,11 +1592,22 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
             opponent_dir,
             ball,
         ) = self._split_obs(obs)
+        (
+            public_self_pos,
+            public_ally_pos,
+            public_self_dir,
+            public_ally_dir,
+            public_opponent_pos,
+            public_opponent_dir,
+            public_ball,
+        ) = self._build_public_features(
+            self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball
+        )
 
-        self_token = self.self_encoder(th.cat([self_pos, self_dir], dim=-1))
-        ally_token = self.ally_encoder(th.cat([ally_pos, ally_dir], dim=-1))
-        opponent_token = self.opponent_encoder(th.cat([opponent_pos, opponent_dir], dim=-1))
-        ball_token = self.ball_encoder(ball).unsqueeze(2)
+        self_token = self.self_encoder(th.cat([public_self_pos, public_self_dir], dim=-1))
+        ally_token = self.ally_encoder(th.cat([public_ally_pos, public_ally_dir], dim=-1))
+        opponent_token = self.opponent_encoder(th.cat([public_opponent_pos, public_opponent_dir], dim=-1))
+        ball_token = self.ball_encoder(public_ball).unsqueeze(2)
 
         self_side = self.side_embedding.weight[0].view(1, 1, 1, -1)
         ally_side = self.side_embedding.weight[1].view(1, 1, 1, -1)
@@ -1578,15 +1627,8 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
         cls = self.cls_token.expand(batch_size, n_agents, -1).unsqueeze(2)
         tokens = th.cat([cls, entity_tokens], dim=2)
 
-        ball_private = ball[:, :, :4].unsqueeze(2)
-        entity_private = th.cat(
-            [
-                th.cat([self_pos, self_dir], dim=-1).unsqueeze(2),
-                th.cat([ally_pos, ally_dir], dim=-1),
-                th.cat([opponent_pos, opponent_dir], dim=-1),
-                ball_private,
-            ],
-            dim=2,
+        entity_private = self._build_private_features(
+            self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball
         )
         attn_bias = self._build_private_bias(entity_private, token_count)
 
@@ -4689,6 +4731,11 @@ class CleanHyperAgent(nn.Module):
             output_dim=self.cond_dim,
             num_heads=self.public_transformer_heads,
             num_layers=self.public_transformer_layers,
+            use_absolute_public=self.model_type
+            in {
+                "grf_abs_public_private_bias_transformer_hypercond",
+                "grf_abs_public_private_bias_transformer_decision_maker_hypercond",
+            },
         )
 
     def _init_grf_decision_maker_head(self):

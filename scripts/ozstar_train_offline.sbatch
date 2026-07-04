@@ -87,12 +87,17 @@ if [[ -n "$MAP_NAME" ]]; then
   MAP_ARGS+=(env_args.map_name="$MAP_NAME")
 fi
 
+MODEL_ARGS=()
+if [[ "$CONFIG" == clean_hyper* ]]; then
+  MODEL_ARGS+=(clean_model_type="$MODEL_TYPE")
+fi
+
 "$PYTHON_BIN" src/main.py \
   --config="$CONFIG" \
   --env-config="$ENV_CONFIG" \
   with \
   "${MAP_ARGS[@]}" \
-  clean_model_type="$MODEL_TYPE" \
+  "${MODEL_ARGS[@]}" \
   seed="$SEED" \
   use_cuda="$USE_CUDA" \
   use_wandb="$USE_WANDB" \

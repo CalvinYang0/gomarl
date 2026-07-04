@@ -3,7 +3,8 @@ set -euo pipefail
 
 SEEDS="${SEEDS:-1}"
 ENVS="${ENVS:-academy_pass_and_shoot_with_keeper academy_3_vs_1_with_keeper academy_counterattack_easy}"
-MODEL_TYPE="${MODEL_TYPE:-baseline}"
+CONFIG="${CONFIG:-group}"
+MODEL_TYPE="${MODEL_TYPE:-group}"
 T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
@@ -20,6 +21,7 @@ mkdir -p ozstar_logs
 
 echo "== GoMARL OzSTAR GRF submit =="
 echo "envs: $ENVS"
+echo "config: $CONFIG"
 echo "model: $MODEL_TYPE"
 echo "seeds: $SEEDS"
 echo "t_max: $T_MAX"
@@ -37,7 +39,7 @@ for env_config in $ENVS; do
       --job-name="$job_name" \
       --output=ozstar_logs/%x_%j.out \
       --error=ozstar_logs/%x_%j.err \
-      --export=ALL,CONFIG=clean_hyper,ENV_CONFIG="$env_config",MAP_NAME="$env_config",MODEL_TYPE="$MODEL_TYPE",SEED="$seed",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",RUN_NAME="$run_name",GROUP_NAME="$run_name" \
+      --export=ALL,CONFIG="$CONFIG",ENV_CONFIG="$env_config",MAP_NAME="$env_config",MODEL_TYPE="$MODEL_TYPE",SEED="$seed",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",RUN_NAME="$run_name",GROUP_NAME="$run_name" \
       scripts/ozstar_train_offline.sbatch
   done
 done
