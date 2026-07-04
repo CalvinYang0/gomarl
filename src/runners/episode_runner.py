@@ -61,11 +61,20 @@ class EpisodeRunner:
         terminated = False
         episode_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
-        supports_battle_snapshot = hasattr(self.env, "get_battle_snapshot")
-        trace_request = self.battle_trace_request if test_mode and supports_battle_snapshot else None
+        snapshot_fn = getattr(self.env, "get_battle_snapshot", None)
+
+        def safe_battle_snapshot():
+            if snapshot_fn is None:
+                return None
+            try:
+                return snapshot_fn()
+            except Exception:
+                return None
+
+        trace_request = self.battle_trace_request if test_mode and snapshot_fn is not None else None
         self.battle_trace_request = None
         trace_frames = []
-        snapshot = self.env.get_battle_snapshot() if trace_request is not None else None
+        snapshot = safe_battle_snapshot() if trace_request is not None else None
 
         while not terminated:
 
@@ -94,7 +103,7 @@ class EpisodeRunner:
             reward, terminated, env_info = self.env.step(actions[0])
             episode_return += reward
             if trace_request is not None:
-                snapshot = self.env.get_battle_snapshot()
+                snapshot = safe_battle_snapshot()
 
             post_transition_data = {
                 "actions": cpu_actions,

@@ -257,7 +257,16 @@ class ParallelRunner:
 
 def env_worker(remote, env_fn):
     env = env_fn.x()
-    supports_battle_snapshot = hasattr(env, "get_battle_snapshot")
+
+    def safe_battle_snapshot():
+        snapshot_fn = getattr(env, "get_battle_snapshot", None)
+        if snapshot_fn is None:
+            return None
+        try:
+            return snapshot_fn()
+        except Exception:
+            return None
+
     while True:
         cmd, data = remote.recv()
         if cmd in {"step", "step_trace"}:
@@ -274,8 +283,10 @@ def env_worker(remote, env_fn):
                 "terminated": terminated,
                 "info": env_info
             }
-            if cmd == "step_trace" and supports_battle_snapshot:
-                response["snapshot"] = env.get_battle_snapshot()
+            if cmd == "step_trace":
+                snapshot = safe_battle_snapshot()
+                if snapshot is not None:
+                    response["snapshot"] = snapshot
             remote.send(response)
         elif cmd == "reset":
             env.reset()
@@ -284,8 +295,9 @@ def env_worker(remote, env_fn):
                 "avail_actions": env.get_avail_actions(),
                 "obs": env.get_obs(),
             }
-            if supports_battle_snapshot:
-                response["snapshot"] = env.get_battle_snapshot()
+            snapshot = safe_battle_snapshot()
+            if snapshot is not None:
+                response["snapshot"] = snapshot
             remote.send(response)
         elif cmd == "close":
             env.close()
