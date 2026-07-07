@@ -236,9 +236,14 @@ GRF_DECISION_MAKER_VARIANTS = {
     "grf_public_private_bias_transformer_decision_maker_hypercond",
     "grf_abs_public_private_bias_transformer_decision_maker_hypercond",
 }
+GRF_LINEAR_HEAD_VARIANTS = {
+    "grf_public_private_bias_transformer_linear_head_hypercond",
+    "grf_abs_public_private_bias_transformer_linear_head_hypercond",
+}
 GRF_PUBLIC_TRANSFORMER_VARIANTS = {
     "grf_public_private_bias_transformer_hypercond",
     "grf_abs_public_private_bias_transformer_hypercond",
+    *GRF_LINEAR_HEAD_VARIANTS,
     *GRF_DECISION_MAKER_VARIANTS,
 }
 PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
@@ -3764,6 +3769,7 @@ class CleanHyperAgent(nn.Module):
             "rpg_relation_coarse_q_fine_gate_head",
             "rpg_relation_prototype_single_head",
             *GRF_DECISION_MAKER_VARIANTS,
+            *GRF_LINEAR_HEAD_VARIANTS,
         }:
             self.hyper_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
             self.hyper_bottleneck_b = nn.Linear(self.cond_dim, self.hidden_dim)
@@ -3790,6 +3796,13 @@ class CleanHyperAgent(nn.Module):
             self._init_grf_decision_maker_head()
         else:
             self.grf_decision_hyper = None
+
+        if self.model_type in GRF_LINEAR_HEAD_VARIANTS:
+            self.grf_linear_head_w = nn.Linear(self.cond_dim, self.hidden_dim * self.n_actions)
+            self.grf_linear_head_b = nn.Linear(self.cond_dim, self.n_actions)
+        else:
+            self.grf_linear_head_w = None
+            self.grf_linear_head_b = None
 
         if self.model_type in {
             "local_structured_hypercond",
@@ -4734,6 +4747,7 @@ class CleanHyperAgent(nn.Module):
             use_absolute_public=self.model_type
             in {
                 "grf_abs_public_private_bias_transformer_hypercond",
+                "grf_abs_public_private_bias_transformer_linear_head_hypercond",
                 "grf_abs_public_private_bias_transformer_decision_maker_hypercond",
             },
         )
@@ -5519,6 +5533,17 @@ class CleanHyperAgent(nn.Module):
 
         mid = F.elu(th.bmm(flat_hidden, bottleneck_w) + bottleneck_b)
         q = th.bmm(mid, out_w) + out_b
+        return q.view(batch_size, n_agents, self.n_actions)
+
+    def _apply_grf_linear_head(self, hidden, condition):
+        batch_size, n_agents, _ = hidden.shape
+        flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
+        flat_condition = condition.reshape(batch_size * n_agents, -1)
+        out_w = self.grf_linear_head_w(flat_condition).view(
+            batch_size * n_agents, self.hidden_dim, self.n_actions
+        )
+        out_b = self.grf_linear_head_b(flat_condition).view(batch_size * n_agents, 1, self.n_actions)
+        q = th.bmm(flat_hidden, out_w) + out_b
         return q.view(batch_size, n_agents, self.n_actions)
 
     def _apply_grf_generated_branch(self, branch, branch_input, condition, output_dim):
@@ -6403,6 +6428,8 @@ class CleanHyperAgent(nn.Module):
                 self.latest_condition = relation_condition.detach()
                 if self.model_type in GRF_DECISION_MAKER_VARIANTS:
                     q = self._apply_grf_decision_maker_head(hidden, relation_condition)
+                elif self.model_type in GRF_LINEAR_HEAD_VARIANTS:
+                    q = self._apply_grf_linear_head(hidden, relation_condition)
                 else:
                     q = self._apply_dynamic_head(hidden, relation_condition)
                 next_hidden = th.cat([hidden, next_relation_hidden], dim=-1)
