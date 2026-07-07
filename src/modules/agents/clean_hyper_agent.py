@@ -236,6 +236,10 @@ GRF_DECISION_MAKER_VARIANTS = {
     "grf_public_private_bias_transformer_decision_maker_hypercond",
     "grf_abs_public_private_bias_transformer_decision_maker_hypercond",
 }
+GRF_TWO_LAYER_HEAD_VARIANTS = {
+    "grf_public_private_bias_transformer_two_layer_head_hypercond",
+    "grf_abs_public_private_bias_transformer_two_layer_head_hypercond",
+}
 GRF_LINEAR_HEAD_VARIANTS = {
     "grf_public_private_bias_transformer_linear_head_hypercond",
     "grf_abs_public_private_bias_transformer_linear_head_hypercond",
@@ -243,6 +247,7 @@ GRF_LINEAR_HEAD_VARIANTS = {
 GRF_PUBLIC_TRANSFORMER_VARIANTS = {
     "grf_public_private_bias_transformer_hypercond",
     "grf_abs_public_private_bias_transformer_hypercond",
+    *GRF_TWO_LAYER_HEAD_VARIANTS,
     *GRF_LINEAR_HEAD_VARIANTS,
     *GRF_DECISION_MAKER_VARIANTS,
 }
@@ -4747,6 +4752,7 @@ class CleanHyperAgent(nn.Module):
             use_absolute_public=self.model_type
             in {
                 "grf_abs_public_private_bias_transformer_hypercond",
+                "grf_abs_public_private_bias_transformer_two_layer_head_hypercond",
                 "grf_abs_public_private_bias_transformer_linear_head_hypercond",
                 "grf_abs_public_private_bias_transformer_decision_maker_hypercond",
             },
