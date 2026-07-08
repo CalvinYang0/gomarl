@@ -140,6 +140,9 @@ PUBLIC_TRANSFORMER_TARGET_SELECTION_VARIANTS = {
 PUBLIC_TRANSFORMER_STABLE_HEAD_VARIANTS = {
     "rpg_public_private_simple_bias_transformer_q_residual_hypercond",
     "rpg_public_private_simple_bias_transformer_param_residual_hypercond",
+    "rpg_public_private_simple_bias_transformer_param_residual_l2_hypercond",
+    "rpg_public_private_simple_bias_transformer_param_residual_smooth_hypercond",
+    "rpg_public_private_simple_bias_transformer_param_residual_l2_smooth_hypercond",
     "rpg_public_private_simple_bias_transformer_smooth_hypercond",
 }
 PUBLIC_TRANSFORMER_Q_RESIDUAL_HEAD_VARIANTS = {
@@ -147,10 +150,21 @@ PUBLIC_TRANSFORMER_Q_RESIDUAL_HEAD_VARIANTS = {
 }
 PUBLIC_TRANSFORMER_PARAM_RESIDUAL_HEAD_VARIANTS = {
     "rpg_public_private_simple_bias_transformer_param_residual_hypercond",
+    "rpg_public_private_simple_bias_transformer_param_residual_l2_hypercond",
+    "rpg_public_private_simple_bias_transformer_param_residual_smooth_hypercond",
+    "rpg_public_private_simple_bias_transformer_param_residual_l2_smooth_hypercond",
+}
+PUBLIC_TRANSFORMER_RESIDUAL_L2_HEAD_VARIANTS = {
+    "rpg_public_private_simple_bias_transformer_param_residual_l2_hypercond",
+    "rpg_public_private_simple_bias_transformer_param_residual_l2_smooth_hypercond",
+}
+PUBLIC_TRANSFORMER_RESIDUAL_SMOOTH_HEAD_VARIANTS = {
+    "rpg_public_private_simple_bias_transformer_param_residual_smooth_hypercond",
+    "rpg_public_private_simple_bias_transformer_param_residual_l2_smooth_hypercond",
 }
 PUBLIC_TRANSFORMER_SMOOTH_HEAD_VARIANTS = {
     "rpg_public_private_simple_bias_transformer_smooth_hypercond",
-}
+} | PUBLIC_TRANSFORMER_RESIDUAL_SMOOTH_HEAD_VARIANTS
 PUBLIC_TRANSFORMER_SIMPLE_BIAS_FAMILY = {
     "rpg_public_private_simple_bias_transformer_hypercond",
 } | PUBLIC_TRANSFORMER_STABLE_HEAD_VARIANTS
@@ -281,6 +295,9 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_private_simple_bias_transformer_hypercond": "private_bias",
     "rpg_public_private_simple_bias_transformer_q_residual_hypercond": "private_bias",
     "rpg_public_private_simple_bias_transformer_param_residual_hypercond": "private_bias",
+    "rpg_public_private_simple_bias_transformer_param_residual_l2_hypercond": "private_bias",
+    "rpg_public_private_simple_bias_transformer_param_residual_smooth_hypercond": "private_bias",
+    "rpg_public_private_simple_bias_transformer_param_residual_l2_smooth_hypercond": "private_bias",
     "rpg_public_private_simple_bias_transformer_smooth_hypercond": "private_bias",
     "rpg_public_private_selfattn_bias_transformer_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_pair_interaction_hypercond": "private_bias",
@@ -3575,6 +3592,7 @@ class CleanHyperAgent(nn.Module):
         self.rpg_interaction_experts = int(getattr(args, "clean_rpg_interaction_experts", 4))
         self.rpg_residual_gate_bias = float(getattr(args, "clean_rpg_residual_gate_bias", -1.0))
         self.stable_residual_gate_bias = float(getattr(args, "clean_stable_residual_gate_bias", -3.0))
+        self.stable_residual_l2_coef = float(getattr(args, "clean_stable_residual_l2_coef", 0.001))
         self.self_fine_delta_scale = float(getattr(args, "clean_self_fine_delta_scale", 0.1))
         self.self_fine_gate_scale = float(getattr(args, "clean_self_fine_gate_scale", 1.0))
         self.relation_prototypes = int(getattr(args, "clean_relation_prototypes", self.route_num))
@@ -4951,16 +4969,18 @@ class CleanHyperAgent(nn.Module):
                 },
                 merge_friendly_public_side=self.model_type in PUBLIC_TRANSFORMER_FRIEND_MERGED_VARIANTS,
                 private_owner_side=self.model_type
-                in {
-                    "rpg_public_private_owner_bias_transformer_hypercond",
-                    "rpg_public_private_simple_bias_transformer_hypercond",
-                    "rpg_public_private_selfattn_bias_transformer_hypercond",
-                },
+                in (
+                    {
+                        "rpg_public_private_owner_bias_transformer_hypercond",
+                        "rpg_public_private_selfattn_bias_transformer_hypercond",
+                    }
+                    | PUBLIC_TRANSFORMER_SIMPLE_BIAS_FAMILY
+                ),
                 private_bias_style=(
                     "pair_mlp_no_side"
                     if self.model_type == "rpg_public_private_owner_bias_transformer_hypercond"
                     else "simple"
-                    if self.model_type == "rpg_public_private_simple_bias_transformer_hypercond"
+                    if self.model_type in PUBLIC_TRANSFORMER_SIMPLE_BIAS_FAMILY
                     else "selfattn_simple"
                     if self.model_type == "rpg_public_private_selfattn_bias_transformer_hypercond"
                     else "pair_mlp"
@@ -5952,6 +5972,11 @@ class CleanHyperAgent(nn.Module):
         q_attack = th.bmm(flat_interaction_input, interaction_out_w) + interaction_out_b
         return q_attack.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"]), generated_head
 
+    def _add_aux_loss(self, loss):
+        if loss is None:
+            return
+        self.latest_aux_loss = loss if self.latest_aux_loss is None else self.latest_aux_loss + loss
+
     def _q_residual_generated_interaction(self, flat_interaction_input, flat_condition, batch_size, n_agents):
         q_dynamic, generated_head = self._linear_generated_interaction(
             flat_interaction_input, flat_condition, batch_size, n_agents
@@ -5984,7 +6009,15 @@ class CleanHyperAgent(nn.Module):
         self.latest_generated_interaction_head = generated_head.detach().view(batch_size, n_agents, -1)
         self.latest_aux_stats["residual_interaction_gate"] = gate.mean().detach()
         q_attack = th.bmm(flat_interaction_input, interaction_out_w) + interaction_out_b
-        return q_attack.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"]), generated_head
+        residual_head = th.cat(
+            [
+                (gate * delta_w).reshape(batch_agents, -1),
+                (gate * delta_b).reshape(batch_agents, -1),
+            ],
+            dim=-1,
+        )
+        self.latest_aux_stats["residual_interaction_param_norm"] = residual_head.norm(dim=-1).mean().detach()
+        return q_attack.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"]), generated_head, residual_head
 
     def _linear_generated_interaction_selected(
         self,
@@ -6017,7 +6050,7 @@ class CleanHyperAgent(nn.Module):
         self.latest_generated_interaction_head = None
         return q_flat.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"])
 
-    def _head_smoothness_loss(self, flat_condition, generated_head):
+    def _head_smoothness_loss(self, flat_condition, generated_head, normalize_head=True):
         if self.smooth_head_loss_coef <= 0.0 or generated_head.size(0) <= 1:
             return generated_head.new_zeros(())
 
@@ -6036,14 +6069,17 @@ class CleanHyperAgent(nn.Module):
             head = generated_head
 
         condition = F.normalize(condition, p=2, dim=-1)
-        head = F.normalize(head, p=2, dim=-1)
         rel_dist = 1.0 - th.matmul(condition, condition.transpose(0, 1))
         rel_dist = rel_dist.masked_fill(th.eye(sample_size, device=rel_dist.device).bool(), float("inf"))
         knn = min(self.smooth_head_knn, sample_size - 1)
         neighbor_idx = rel_dist.topk(k=knn, largest=False, dim=-1).indices
         neighbor_head = head.index_select(0, neighbor_idx.reshape(-1)).view(sample_size, knn, -1)
-        head_sim = (head.unsqueeze(1) * neighbor_head).sum(dim=-1)
-        return (1.0 - head_sim).mean()
+        if normalize_head:
+            head = F.normalize(head, p=2, dim=-1)
+            neighbor_head = F.normalize(neighbor_head, p=2, dim=-1)
+            head_sim = (head.unsqueeze(1) * neighbor_head).sum(dim=-1)
+            return (1.0 - head_sim).mean()
+        return (head.unsqueeze(1) - neighbor_head).pow(2).mean()
 
     def _private_enemy_tokens(self, context, enemy_mask):
         if context is None:
@@ -6273,6 +6309,12 @@ class CleanHyperAgent(nn.Module):
                 gate = th.sigmoid(self.rpg_residual_ego_gate(flat_condition)).view(
                     batch_size * n_agents, 1, 1
                 )
+                ego_residual_parts = [
+                    gate * ego_bottleneck_w,
+                    gate * ego_bottleneck_b,
+                    gate * ego_out_w,
+                    gate * ego_out_b,
+                ]
                 base_w1 = self.rpg_ego_base_maker[0].weight.t().unsqueeze(0).expand_as(ego_bottleneck_w)
                 base_b1 = self.rpg_ego_base_maker[0].bias.view(1, 1, self.hidden_dim)
                 base_w2 = self.rpg_ego_base_maker[2].weight.t().unsqueeze(0).expand_as(ego_out_w)
@@ -6282,6 +6324,10 @@ class CleanHyperAgent(nn.Module):
                 ego_out_w = base_w2 + gate * ego_out_w
                 ego_out_b = base_b2 + gate * ego_out_b
                 self.latest_aux_stats["residual_ego_gate"] = gate.mean().detach()
+                ego_residual_norm = th.stack([part.pow(2).mean() for part in ego_residual_parts]).mean()
+                self.latest_aux_stats["residual_ego_param_norm"] = ego_residual_norm.sqrt().detach()
+                if self.model_type in PUBLIC_TRANSFORMER_RESIDUAL_L2_HEAD_VARIANTS:
+                    self._add_aux_loss(self.stable_residual_l2_coef * ego_residual_norm)
 
             ego_mid = F.elu(th.bmm(flat_ego_input, ego_bottleneck_w) + ego_bottleneck_b)
             q_ego = th.bmm(ego_mid, ego_out_w) + ego_out_b
@@ -6374,17 +6420,28 @@ class CleanHyperAgent(nn.Module):
                         flat_interaction_input, flat_condition, batch_size, n_agents
                     )
                 elif self.model_type in PUBLIC_TRANSFORMER_PARAM_RESIDUAL_HEAD_VARIANTS:
-                    q_attack, generated_head = self._param_residual_generated_interaction(
+                    q_attack, generated_head, residual_head = self._param_residual_generated_interaction(
                         flat_interaction_input, flat_condition, batch_size, n_agents
                     )
+                    if self.model_type in PUBLIC_TRANSFORMER_RESIDUAL_L2_HEAD_VARIANTS:
+                        self._add_aux_loss(self.stable_residual_l2_coef * residual_head.pow(2).mean())
                 else:
                     q_attack, generated_head = self._linear_generated_interaction(
                         flat_interaction_input, flat_condition, batch_size, n_agents
                     )
                 if self.model_type in PUBLIC_TRANSFORMER_SMOOTH_HEAD_VARIANTS:
-                    self.latest_aux_loss = self.smooth_head_loss_coef * self._head_smoothness_loss(
-                        flat_condition, generated_head
+                    smooth_target = (
+                        residual_head
+                        if self.model_type in PUBLIC_TRANSFORMER_RESIDUAL_SMOOTH_HEAD_VARIANTS
+                        else generated_head
                     )
+                    smooth_loss = self._head_smoothness_loss(
+                        flat_condition,
+                        smooth_target,
+                        normalize_head=self.model_type not in PUBLIC_TRANSFORMER_RESIDUAL_SMOOTH_HEAD_VARIANTS,
+                    )
+                    self.latest_aux_stats["head_smooth_loss_raw"] = smooth_loss.detach()
+                    self._add_aux_loss(self.smooth_head_loss_coef * smooth_loss)
             if self.model_type in RPG_POST_TARGET_SELECTION_VARIANTS:
                 target_mask = self._target_selection_mask(hidden, relation_condition, enemy_tokens, enemy_mask)
                 q_attack = q_attack.masked_fill(~target_mask, 0.0)

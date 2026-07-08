@@ -208,6 +208,18 @@ hypernet_layers: 2
 #                                                  generated parameters are a
 #                                                  gated residual update to a
 #                                                  fixed base head.
+# - rpg_public_private_simple_bias_transformer_param_residual_l2_hypercond:
+#                                                  same as param_residual, plus
+#                                                  an L2 penalty on the gated
+#                                                  generated residual weights.
+# - rpg_public_private_simple_bias_transformer_param_residual_smooth_hypercond:
+#                                                  same as param_residual, but
+#                                                  smoothness is applied to the
+#                                                  gated residual weights rather
+#                                                  than the full generated head.
+# - rpg_public_private_simple_bias_transformer_param_residual_l2_smooth_hypercond:
+#                                                  combines residual L2 and
+#                                                  residual smoothness.
 # - rpg_public_private_simple_bias_transformer_smooth_hypercond: same
 #                                                  owner-private simple-bias
 #                                                  relation generator and head,
@@ -680,6 +692,7 @@ clean_rpg_interaction_hidden_dim: 16
 clean_rpg_interaction_experts: 4
 clean_rpg_residual_gate_bias: -1.0
 clean_stable_residual_gate_bias: -3.0
+clean_stable_residual_l2_coef: 0.001
 clean_self_fine_delta_scale: 0.1
 clean_self_fine_gate_scale: 1.0
 clean_relation_prototypes: 4
