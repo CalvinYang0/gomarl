@@ -196,6 +196,23 @@ hypernet_layers: 2
 #                                                  simple per-token learned
 #                                                  attention bias instead of
 #                                                  pairwise MLP.
+# - rpg_public_private_simple_bias_transformer_q_residual_hypercond: same
+#                                                  owner-private simple-bias
+#                                                  relation generator, but the
+#                                                  generated decision head only
+#                                                  provides a gated Q residual
+#                                                  on top of a fixed base head.
+# - rpg_public_private_simple_bias_transformer_param_residual_hypercond: same
+#                                                  owner-private simple-bias
+#                                                  relation generator, but the
+#                                                  generated parameters are a
+#                                                  gated residual update to a
+#                                                  fixed base head.
+# - rpg_public_private_simple_bias_transformer_smooth_hypercond: same
+#                                                  owner-private simple-bias
+#                                                  relation generator and head,
+#                                                  plus relation-to-head
+#                                                  smoothness regularization.
 # - rpg_public_private_selfattn_bias_transformer_hypercond: same owner-private
 #                                                  setup, but private tokens run
 #                                                  one self-attention block
@@ -662,6 +679,7 @@ clean_hyper_mlp_hidden_dim: 64
 clean_rpg_interaction_hidden_dim: 16
 clean_rpg_interaction_experts: 4
 clean_rpg_residual_gate_bias: -1.0
+clean_stable_residual_gate_bias: -3.0
 clean_self_fine_delta_scale: 0.1
 clean_self_fine_gate_scale: 1.0
 clean_relation_prototypes: 4
