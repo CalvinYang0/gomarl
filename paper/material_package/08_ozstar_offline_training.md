@@ -47,22 +47,27 @@ If needed, narrow the sync target:
 PATTERN='wandb/offline-run-20260604*' bash scripts/ozstar_sync_wandb.sh
 ```
 
-## 4. Optional Near-live W&B Sync
+## 4. Post-run W&B Sync
 
-Compute nodes may be offline, but the login/test node can periodically upload W&B offline files while training is still running. Start this watcher from a network-enabled login/test node:
+Do not run `wandb sync` repeatedly against an active `offline-run-*` directory.
+The process appends to `run-*.wandb` throughout training; a mid-training upload
+can publish a partial remote run that W&B marks as finished. Monitor active
+jobs with their Slurm output instead:
+
+```bash
+tail -F ozstar_logs/<job-name>_<job-id>.out
+```
+
+After a job has finished, upload its complete offline record once:
 
 ```bash
 cd /home/kyang/code/gomarl
-bash scripts/ozstar_live_sync_wandb.sh
+bash scripts/ozstar_sync_completed_wandb.sh wandb/offline-run-YYYYMMDD_HHMMSS-xxxxxxxx
 ```
 
-Use a longer interval if the filesystem or W&B upload is noisy:
-
-```bash
-INTERVAL_SECONDS=600 bash scripts/ozstar_live_sync_wandb.sh
-```
-
-The watcher uses `wandb sync --sync-all --include-offline --include-synced --no-mark-synced`, so it can retry incomplete/offline runs without marking an active run as finally synced. Stop the watcher with `Ctrl+C`; Slurm training jobs continue independently.
+The helper copies the local run, gives the copy a fresh W&B run id, and uploads
+that copy. This preserves the original data and prevents an earlier partial
+remote record from being overwritten.
 
 ## 5. Notes
 

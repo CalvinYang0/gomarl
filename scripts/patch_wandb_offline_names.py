@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Copy a W&B offline run and shorten upload-only run/group names.
+"""Copy a W&B offline run and patch upload-only W&B metadata.
 
-This is intentionally conservative: it never edits the original offline run.
-It patches a copied run directory before `wandb sync`, mainly to remove
-experiment-origin suffixes such as `_rerun` and `_ozstar` from W&B group names.
+It never edits the original offline run. In addition to shortening names, it
+can assign a new run id to a copied, completed offline run. This is useful when
+an earlier live sync created a partial remote run that W&B already marked as
+finished: the complete local record can then be uploaded as a new run.
 """
 
 import argparse
 import hashlib
+import secrets
 import shutil
 import sys
 from pathlib import Path
@@ -72,7 +74,7 @@ def _record_is_run(record):
             return False
 
 
-def patch_wandb_file(path, max_group_len, max_name_len):
+def patch_wandb_file(path, max_group_len, max_name_len, new_run_id=None):
     from wandb.proto import wandb_internal_pb2
     from wandb.sdk.internal.datastore import DataStore
 
@@ -97,6 +99,13 @@ def patch_wandb_file(path, max_group_len, max_name_len):
 
             if _record_is_run(record):
                 run = record.run
+                if new_run_id is not None:
+                    if not hasattr(run, "run_id"):
+                        raise RuntimeError("W&B RunRecord has no run_id field")
+                    old_run_id = run.run_id
+                    if old_run_id != new_run_id:
+                        run.run_id = new_run_id
+                        changed.append(("run_id", old_run_id, new_run_id))
                 for field_name, max_len in (
                     ("run_group", max_group_len),
                     ("display_name", max_name_len),
@@ -123,12 +132,24 @@ def patch_wandb_file(path, max_group_len, max_name_len):
     return changed
 
 
+def generate_run_id():
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+    return "".join(secrets.choice(alphabet) for _ in range(8))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", help="Original wandb/offline-run-* directory.")
     parser.add_argument("output_root", help="Directory for patched sync copies.")
     parser.add_argument("--max-group-len", type=int, default=120)
     parser.add_argument("--max-name-len", type=int, default=180)
+    parser.add_argument(
+        "--new-run-id",
+        nargs="?",
+        const="auto",
+        help="Assign a fresh 8-character W&B run id to the copied run. "
+        "Use without a value to generate one automatically.",
+    )
     args = parser.parse_args()
 
     src = Path(args.run_dir).resolve()
@@ -137,7 +158,17 @@ def main():
         raise SystemExit("not a directory: {}".format(src))
 
     out_root.mkdir(parents=True, exist_ok=True)
-    dst = out_root / src.name
+    new_run_id = args.new_run_id
+    if new_run_id == "auto":
+        new_run_id = generate_run_id()
+    if new_run_id is not None:
+        if len(new_run_id) != 8 or not new_run_id.isalnum():
+            raise SystemExit("--new-run-id must be an 8-character alphanumeric id")
+        dst_name = "{}-{}".format(src.name.rsplit("-", 1)[0], new_run_id)
+    else:
+        dst_name = src.name
+
+    dst = out_root / dst_name
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst, symlinks=True)
@@ -146,7 +177,14 @@ def main():
     if len(run_files) != 1:
         raise SystemExit("expected one run-*.wandb in {}, found {}".format(dst, len(run_files)))
 
-    changed = patch_wandb_file(run_files[0], args.max_group_len, args.max_name_len)
+    if new_run_id is not None:
+        renamed_run_file = run_files[0].with_name("run-{}.wandb".format(new_run_id))
+        run_files[0].rename(renamed_run_file)
+        run_files = [renamed_run_file]
+
+    changed = patch_wandb_file(
+        run_files[0], args.max_group_len, args.max_name_len, new_run_id=new_run_id
+    )
     for field_name, old, new in changed:
         print("patched {}: {} -> {}".format(field_name, old, new), file=sys.stderr)
 
