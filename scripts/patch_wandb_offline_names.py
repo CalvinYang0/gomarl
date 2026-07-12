@@ -117,6 +117,8 @@ def patch_wandb_file(path, max_group_len, max_name_len, new_run_id=None):
                     if not old:
                         continue
                     new = shorten_name(old, max_len)
+                    if new_run_id is not None and field_name == "display_name":
+                        new = shorten_name("{}_recovered".format(new), max_len)
                     if new != old:
                         setattr(run, field_name, new)
                         changed.append((field_name, old, new))
