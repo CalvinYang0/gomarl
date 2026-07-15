@@ -5984,7 +5984,8 @@ class CleanHyperAgent(nn.Module):
         q_base = self.rpg_interaction_base_scorer(flat_interaction_input).squeeze(-1)
         q_base = q_base.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"])
         gate = th.sigmoid(self.rpg_residual_interaction_gate(flat_condition)).view(batch_size, n_agents, 1)
-        self.latest_aux_stats["residual_interaction_gate"] = gate.mean().detach()
+        if th.is_grad_enabled():
+            self.latest_aux_stats["residual_interaction_gate"] = gate.mean().detach()
         return q_base + gate * q_dynamic, generated_head
 
     def _param_residual_generated_interaction(self, flat_interaction_input, flat_condition, batch_size, n_agents):
@@ -6007,16 +6008,18 @@ class CleanHyperAgent(nn.Module):
             dim=-1,
         )
         self.latest_generated_interaction_head = generated_head.detach().view(batch_size, n_agents, -1)
-        self.latest_aux_stats["residual_interaction_gate"] = gate.mean().detach()
         q_attack = th.bmm(flat_interaction_input, interaction_out_w) + interaction_out_b
-        residual_head = th.cat(
-            [
-                (gate * delta_w).reshape(batch_agents, -1),
-                (gate * delta_b).reshape(batch_agents, -1),
-            ],
-            dim=-1,
-        )
-        self.latest_aux_stats["residual_interaction_param_norm"] = residual_head.norm(dim=-1).mean().detach()
+        residual_head = None
+        if th.is_grad_enabled():
+            self.latest_aux_stats["residual_interaction_gate"] = gate.mean().detach()
+            residual_head = th.cat(
+                [
+                    (gate * delta_w).reshape(batch_agents, -1),
+                    (gate * delta_b).reshape(batch_agents, -1),
+                ],
+                dim=-1,
+            )
+            self.latest_aux_stats["residual_interaction_param_norm"] = residual_head.norm(dim=-1).mean().detach()
         return q_attack.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"]), generated_head, residual_head
 
     def _linear_generated_interaction_selected(
@@ -6278,6 +6281,7 @@ class CleanHyperAgent(nn.Module):
         batch_size, n_agents, _ = hidden.shape
         flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
         flat_condition = relation_condition.reshape(batch_size * n_agents, -1)
+        compute_training_aux = th.is_grad_enabled()
 
         if self.model_type in {"rpg_fixed_structured_maker", "rpg_fixed_linear_structured_maker"}:
             q_ego = self.rpg_ego_maker(th.cat([hidden, relation_condition], dim=-1))
@@ -6309,25 +6313,27 @@ class CleanHyperAgent(nn.Module):
                 gate = th.sigmoid(self.rpg_residual_ego_gate(flat_condition)).view(
                     batch_size * n_agents, 1, 1
                 )
-                ego_residual_parts = [
-                    gate * ego_bottleneck_w,
-                    gate * ego_bottleneck_b,
-                    gate * ego_out_w,
-                    gate * ego_out_b,
-                ]
                 base_w1 = self.rpg_ego_base_maker[0].weight.t().unsqueeze(0).expand_as(ego_bottleneck_w)
                 base_b1 = self.rpg_ego_base_maker[0].bias.view(1, 1, self.hidden_dim)
                 base_w2 = self.rpg_ego_base_maker[2].weight.t().unsqueeze(0).expand_as(ego_out_w)
                 base_b2 = self.rpg_ego_base_maker[2].bias.view(1, 1, self.rpg_n_ego_actions)
+                if compute_training_aux:
+                    ego_residual_parts = [
+                        gate * ego_bottleneck_w,
+                        gate * ego_bottleneck_b,
+                        gate * ego_out_w,
+                        gate * ego_out_b,
+                    ]
                 ego_bottleneck_w = base_w1 + gate * ego_bottleneck_w
                 ego_bottleneck_b = base_b1 + gate * ego_bottleneck_b
                 ego_out_w = base_w2 + gate * ego_out_w
                 ego_out_b = base_b2 + gate * ego_out_b
-                self.latest_aux_stats["residual_ego_gate"] = gate.mean().detach()
-                ego_residual_norm = th.stack([part.pow(2).mean() for part in ego_residual_parts]).mean()
-                self.latest_aux_stats["residual_ego_param_norm"] = ego_residual_norm.sqrt().detach()
-                if self.model_type in PUBLIC_TRANSFORMER_RESIDUAL_L2_HEAD_VARIANTS:
-                    self._add_aux_loss(self.stable_residual_l2_coef * ego_residual_norm)
+                if compute_training_aux:
+                    self.latest_aux_stats["residual_ego_gate"] = gate.mean().detach()
+                    ego_residual_norm = th.stack([part.pow(2).mean() for part in ego_residual_parts]).mean()
+                    self.latest_aux_stats["residual_ego_param_norm"] = ego_residual_norm.sqrt().detach()
+                    if self.model_type in PUBLIC_TRANSFORMER_RESIDUAL_L2_HEAD_VARIANTS:
+                        self._add_aux_loss(self.stable_residual_l2_coef * ego_residual_norm)
 
             ego_mid = F.elu(th.bmm(flat_ego_input, ego_bottleneck_w) + ego_bottleneck_b)
             q_ego = th.bmm(ego_mid, ego_out_w) + ego_out_b
@@ -6335,7 +6341,8 @@ class CleanHyperAgent(nn.Module):
                 gate = th.sigmoid(self.rpg_residual_ego_gate(flat_condition)).view(batch_size, n_agents, 1)
                 q_ego_base = self.rpg_ego_base_maker(ego_input)
                 q_ego = q_ego_base + gate * q_ego.view(batch_size, n_agents, self.rpg_n_ego_actions)
-                self.latest_aux_stats["residual_ego_gate"] = gate.mean().detach()
+                if compute_training_aux:
+                    self.latest_aux_stats["residual_ego_gate"] = gate.mean().detach()
             q_ego = q_ego.view(batch_size, n_agents, self.rpg_n_ego_actions)
 
         hidden_rep = hidden.unsqueeze(2).expand(-1, -1, self.rpg_obs_layout["n_enemies"], -1)
@@ -6423,13 +6430,13 @@ class CleanHyperAgent(nn.Module):
                     q_attack, generated_head, residual_head = self._param_residual_generated_interaction(
                         flat_interaction_input, flat_condition, batch_size, n_agents
                     )
-                    if self.model_type in PUBLIC_TRANSFORMER_RESIDUAL_L2_HEAD_VARIANTS:
+                    if compute_training_aux and self.model_type in PUBLIC_TRANSFORMER_RESIDUAL_L2_HEAD_VARIANTS:
                         self._add_aux_loss(self.stable_residual_l2_coef * residual_head.pow(2).mean())
                 else:
                     q_attack, generated_head = self._linear_generated_interaction(
                         flat_interaction_input, flat_condition, batch_size, n_agents
                     )
-                if self.model_type in PUBLIC_TRANSFORMER_SMOOTH_HEAD_VARIANTS:
+                if compute_training_aux and self.model_type in PUBLIC_TRANSFORMER_SMOOTH_HEAD_VARIANTS:
                     smooth_target = (
                         residual_head
                         if self.model_type in PUBLIC_TRANSFORMER_RESIDUAL_SMOOTH_HEAD_VARIANTS
@@ -6484,9 +6491,10 @@ class CleanHyperAgent(nn.Module):
             q_attack, generated_head = self._linear_generated_interaction(
                 flat_interaction_input, flat_condition, batch_size, n_agents
             )
-            self.latest_aux_loss = self.smooth_head_loss_coef * self._head_smoothness_loss(
-                flat_condition, generated_head
-            )
+            if compute_training_aux:
+                self.latest_aux_loss = self.smooth_head_loss_coef * self._head_smoothness_loss(
+                    flat_condition, generated_head
+                )
         elif self.model_type == "rpg_residual_interaction_hypercond":
             cond_rep = relation_condition.unsqueeze(2).expand(-1, -1, self.rpg_obs_layout["n_enemies"], -1)
             fixed_input = th.cat([hidden_rep, cond_rep, enemy_tokens], dim=-1)
