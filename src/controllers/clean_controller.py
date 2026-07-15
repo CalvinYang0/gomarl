@@ -5,7 +5,10 @@ from .basic_controller import BasicMAC
 
 class CleanMAC(BasicMAC):
     def _exclude_agent_id_from_trunk(self):
-        return getattr(self.args, "clean_model_type", "baseline").replace("-", "_") in {
+        model_type = getattr(self.args, "clean_model_type", "baseline").replace("-", "_")
+        if model_type.startswith("rpg_simple_bias_"):
+            return True
+        return model_type in {
             "hypermarl_id",
             "hypermarl_fullnet",
             "rpg_relation_hypercond",
@@ -174,6 +177,9 @@ class CleanMAC(BasicMAC):
         self.latest_aux_stats = getattr(self.agent, "latest_aux_stats", {})
         self.latest_teacher_q = getattr(self.agent, "latest_teacher_q", None)
         self.latest_generated_interaction_head = getattr(self.agent, "latest_generated_interaction_head", None)
+        self.latest_generated_interaction_head_graph = getattr(
+            self.agent, "latest_generated_interaction_head_graph", None
+        )
         self.latest_relation_ally_attn = getattr(self.agent, "latest_relation_ally_attn", None)
         self.latest_relation_enemy_attn = getattr(self.agent, "latest_relation_enemy_attn", None)
         return agent_outs.view(ep_batch.batch_size, self.n_agents, -1)

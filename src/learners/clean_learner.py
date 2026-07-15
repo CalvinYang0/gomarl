@@ -20,7 +20,11 @@ class CleanLearner:
         self.mac = mac
         self.target_mac = copy.deepcopy(mac)
         self.logger = logger
-        self.params = list(self.mac.parameters())
+        self.params = [
+            parameter
+            for name, parameter in self.mac.named_parameters()
+            if not name.endswith("semantic_probe_scale")
+        ]
         self.relation_mixer_gate = None
         self.target_relation_mixer_gate = None
         self.latest_relation_gate_mean = None
@@ -61,9 +65,81 @@ class CleanLearner:
 
         self.last_target_update_episode = 0
         self.log_stats_t = -self.args.learner_log_interval - 1
+        self.semantic_router_audit_interval = int(
+            getattr(args, "clean_semantic_router_audit_interval", 250000)
+        )
+        self.last_semantic_router_audit_t = -self.semantic_router_audit_interval
+        self.latest_semantic_counterfactual_stats = {}
 
     def _amp_context(self):
         return th.cuda.amp.autocast(enabled=True) if self.use_amp else nullcontext()
+
+    @staticmethod
+    def _semantic_router(mac):
+        capturer = getattr(getattr(mac, "agent", None), "rpg_relation_capturer", None)
+        if capturer is None or not bool(getattr(capturer, "semantic_router_active", False)):
+            return None
+        return capturer
+
+    def _sync_semantic_router_to_target(self, router):
+        target_router = self._semantic_router(self.target_mac)
+        if router is not None and target_router is not None:
+            target_router.copy_semantic_router_from(router)
+
+    def _counterfactual_td_loss(self, batch, actions, targets, td_mask):
+        mac_out = []
+        relation_conditions = [] if self.relation_mixer_gate is not None else None
+        self.mac.init_hidden(batch.batch_size)
+        for t in range(batch.max_seq_length):
+            mac_out.append(self.mac.forward(batch, t=t))
+            if relation_conditions is not None:
+                relation_conditions.append(self.mac.latest_condition)
+        mac_out = th.stack(mac_out, dim=1)
+        chosen_q = th.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)
+        if self.mixer is not None:
+            if relation_conditions is not None:
+                relation_conditions = th.stack(relation_conditions, dim=1)
+                chosen_q = self._apply_relation_gate(
+                    chosen_q, relation_conditions[:, :-1], target=False
+                )
+            chosen_q = self.mixer(chosen_q, batch["state"][:, :-1])
+        error = (chosen_q - targets.detach()) * td_mask
+        return error.pow(2).sum() / td_mask.sum().clamp(min=1.0)
+
+    def _audit_semantic_counterfactual(self, batch, actions, targets, td_mask, router, t_env):
+        if router is None or not router.semantic_router_needs_counterfactual():
+            return False
+        if bool(router.semantic_route_frozen.item()):
+            return False
+        if t_env - self.last_semantic_router_audit_t < self.semantic_router_audit_interval:
+            return False
+
+        scores = []
+        stats = {}
+        try:
+            with th.no_grad():
+                for group_index, group_name in enumerate(router.semantic_names):
+                    router.set_semantic_route_override(group_index, True)
+                    token_loss = self._counterfactual_td_loss(
+                        batch, actions, targets, td_mask
+                    )
+                    router.set_semantic_route_override(group_index, False)
+                    bias_loss = self._counterfactual_td_loss(
+                        batch, actions, targets, td_mask
+                    )
+                    score = bias_loss - token_loss
+                    scores.append(score)
+                    stats[
+                        f"semantic_cf_{group_name}_bias_minus_token_loss"
+                    ] = score.detach()
+        finally:
+            router.clear_semantic_route_override()
+
+        router.update_semantic_router(t_env, th.stack(scores))
+        self._sync_semantic_router_to_target(router)
+        self.latest_semantic_counterfactual_stats = stats
+        self.last_semantic_router_audit_t = t_env
+        return True
 
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         rewards = batch["reward"][:, :-1]
@@ -72,6 +148,8 @@ class CleanLearner:
         mask = batch["filled"][:, :-1].float()
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
         avail_actions = batch["avail_actions"]
+        semantic_router = self._semantic_router(self.mac)
+        generated_parameter_graphs = []
 
         with self._amp_context():
             mac_out = []
@@ -82,6 +160,15 @@ class CleanLearner:
             self.mac.init_hidden(batch.batch_size)
             for t in range(batch.max_seq_length):
                 mac_out.append(self.mac.forward(batch, t=t))
+                if (
+                    semantic_router is not None
+                    and semantic_router.semantic_router_needs_parameter_graph()
+                ):
+                    generated_parameter_graph = getattr(
+                        self.mac, "latest_generated_interaction_head_graph", None
+                    )
+                    if generated_parameter_graph is not None:
+                        generated_parameter_graphs.append(generated_parameter_graph)
                 if relation_conditions is not None:
                     condition = getattr(self.mac, "latest_condition", None)
                     if condition is None:
@@ -92,6 +179,8 @@ class CleanLearner:
                     aux_losses.append(aux_loss)
                 for stat_name, stat_value in getattr(self.mac, "latest_aux_stats", {}).items():
                     if stat_value is None:
+                        continue
+                    if stat_name.startswith("semantic_route_"):
                         continue
                     if not th.is_tensor(stat_value):
                         stat_value = th.as_tensor(stat_value, device=batch.device, dtype=th.float32)
@@ -172,17 +261,85 @@ class CleanLearner:
                 teacher_td_loss = (teacher_masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
             loss = td_loss + aux_loss + float(getattr(self.args, "clean_relation_teacher_td_coef", 0.0)) * teacher_td_loss
 
+        parameter_sensitivity_score = None
+        if (
+            semantic_router is not None
+            and semantic_router.semantic_router_needs_parameter_graph()
+            and generated_parameter_graphs
+        ):
+            # Hutchinson-style random projections estimate how strongly each
+            # semantic scale changes generated head parameters without forming
+            # the full parameter Jacobian.
+            generated_parameter_projection = th.stack(
+                [
+                    (
+                        generated
+                        * generated.new_empty(generated.shape)
+                        .bernoulli_(0.5)
+                        .mul_(2.0)
+                        .sub_(1.0)
+                    ).sum()
+                    / (generated.numel() ** 0.5)
+                    for generated in generated_parameter_graphs
+                ]
+            ).mean()
+            parameter_sensitivity_score = th.autograd.grad(
+                generated_parameter_projection,
+                semantic_router.semantic_probe_scale,
+                retain_graph=True,
+                allow_unused=True,
+            )[0]
+
         self.optimiser.zero_grad()
+        if semantic_router is not None and semantic_router.semantic_probe_scale is not None:
+            semantic_router.semantic_probe_scale.grad = None
         if self.use_amp:
             self.amp_scaler.scale(loss).backward()
             self.amp_scaler.unscale_(self.optimiser)
+            semantic_gradient = (
+                None
+                if semantic_router is None or semantic_router.semantic_probe_scale is None
+                else semantic_router.semantic_probe_scale.grad.detach()
+                / float(self.amp_scaler.get_scale())
+            )
             grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
             self.amp_scaler.step(self.optimiser)
             self.amp_scaler.update()
         else:
             loss.backward()
+            semantic_gradient = (
+                None
+                if semantic_router is None or semantic_router.semantic_probe_scale is None
+                else semantic_router.semantic_probe_scale.grad.detach().clone()
+            )
             grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
             self.optimiser.step()
+
+        if semantic_router is not None:
+            if semantic_router.semantic_router_mode in {
+                "observer_consistency",
+                "temporal_stability",
+            }:
+                semantic_router.update_semantic_router(t_env)
+            elif semantic_router.semantic_router_mode in {
+                "gradient_importance",
+                "gradient_consistency",
+            } and semantic_gradient is not None:
+                semantic_router.update_semantic_router(t_env, semantic_gradient)
+            elif (
+                semantic_router.semantic_router_needs_parameter_graph()
+                and parameter_sensitivity_score is not None
+            ):
+                semantic_router.update_semantic_router(
+                    t_env, parameter_sensitivity_score.detach()
+                )
+            if semantic_router.semantic_probe_scale is not None:
+                semantic_router.semantic_probe_scale.grad = None
+            self._sync_semantic_router_to_target(semantic_router)
+
+        self._audit_semantic_counterfactual(
+            batch, actions, targets, td_mask, semantic_router, t_env
+        )
 
         if (episode_num - self.last_target_update_episode) / self.args.target_update_interval >= 1.0:
             self._update_targets()
@@ -195,6 +352,11 @@ class CleanLearner:
             for stat_name, values in aux_stat_values.items():
                 if values:
                     self.logger.log_stat(stat_name, th.stack(values).mean().item(), t_env)
+            if semantic_router is not None:
+                for stat_name, stat_value in semantic_router.semantic_router_stats().items():
+                    self.logger.log_stat(stat_name, float(stat_value.item()), t_env)
+                for stat_name, stat_value in self.latest_semantic_counterfactual_stats.items():
+                    self.logger.log_stat(stat_name, float(stat_value.item()), t_env)
             if teacher_mac_out is not None:
                 self.logger.log_stat("loss_teacher_td", teacher_td_loss.item(), t_env)
             if self.latest_relation_gate_mean is not None:

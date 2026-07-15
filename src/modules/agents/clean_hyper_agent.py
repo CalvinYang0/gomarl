@@ -165,9 +165,18 @@ PUBLIC_TRANSFORMER_RESIDUAL_SMOOTH_HEAD_VARIANTS = {
 PUBLIC_TRANSFORMER_SMOOTH_HEAD_VARIANTS = {
     "rpg_public_private_simple_bias_transformer_smooth_hypercond",
 } | PUBLIC_TRANSFORMER_RESIDUAL_SMOOTH_HEAD_VARIANTS
+SEMANTIC_ROUTER_MODE_BY_MODEL = {
+    "rpg_simple_bias_observer_consistency_router_hypercond": "observer_consistency",
+    "rpg_simple_bias_temporal_stability_router_hypercond": "temporal_stability",
+    "rpg_simple_bias_gradient_importance_router_hypercond": "gradient_importance",
+    "rpg_simple_bias_gradient_consistency_router_hypercond": "gradient_consistency",
+    "rpg_simple_bias_parameter_sensitivity_router_hypercond": "parameter_sensitivity",
+    "rpg_simple_bias_counterfactual_router_hypercond": "counterfactual",
+}
+PUBLIC_TRANSFORMER_SEMANTIC_ROUTER_VARIANTS = set(SEMANTIC_ROUTER_MODE_BY_MODEL)
 PUBLIC_TRANSFORMER_SIMPLE_BIAS_FAMILY = {
     "rpg_public_private_simple_bias_transformer_hypercond",
-} | PUBLIC_TRANSFORMER_STABLE_HEAD_VARIANTS
+} | PUBLIC_TRANSFORMER_STABLE_HEAD_VARIANTS | PUBLIC_TRANSFORMER_SEMANTIC_ROUTER_VARIANTS
 PUBLIC_TRANSFORMER_FRIEND_MERGED_VARIANTS = (
     PUBLIC_TRANSFORMER_GLOBAL_PUBLIC_VARIANTS
     | PUBLIC_TRANSFORMER_RELATION_TOKEN_HEAD_VARIANTS
@@ -299,6 +308,10 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_private_simple_bias_transformer_param_residual_smooth_hypercond": "private_bias",
     "rpg_public_private_simple_bias_transformer_param_residual_l2_smooth_hypercond": "private_bias",
     "rpg_public_private_simple_bias_transformer_smooth_hypercond": "private_bias",
+    **{
+        name: "private_bias"
+        for name in PUBLIC_TRANSFORMER_SEMANTIC_ROUTER_VARIANTS
+    },
     "rpg_public_private_selfattn_bias_transformer_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_pair_interaction_hypercond": "private_bias",
     "rpg_public_private_bias_transformer_pair_concat_interaction_hypercond": "private_bias",
@@ -900,6 +913,12 @@ class PublicTransformerRelationCapturer(nn.Module):
         merge_friendly_public_side=False,
         private_owner_side=False,
         private_bias_style="pair_mlp",
+        semantic_router_mode=None,
+        semantic_router_ema=0.99,
+        semantic_router_token_budget=3,
+        semantic_router_temperature=0.1,
+        semantic_router_warmup_steps=250000,
+        semantic_router_freeze_steps=1500000,
     ):
         super().__init__()
         del obs_last_action, n_actions
@@ -923,6 +942,41 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.private_bias_style = private_bias_style
         self.latest_encoded_self_token = None
         self.latest_encoded_enemy_tokens = None
+        self.semantic_router_mode = semantic_router_mode
+        self.semantic_router_ema = float(semantic_router_ema)
+        self.semantic_router_token_budget = int(semantic_router_token_budget)
+        self.semantic_router_temperature = float(semantic_router_temperature)
+        self.semantic_router_warmup_steps = int(semantic_router_warmup_steps)
+        self.semantic_router_freeze_steps = int(semantic_router_freeze_steps)
+        self.semantic_names = (
+            "presence",
+            "health_shield",
+            "unit_type",
+            "geometry",
+            "owner",
+        )
+        manual_route = th.tensor([1.0, 1.0, 1.0, 0.0, 0.0])
+        self.register_buffer("semantic_manual_token_route", manual_route)
+        self.register_buffer("semantic_token_route", manual_route.clone())
+        self.register_buffer("semantic_token_probability", manual_route.clone())
+        self.register_buffer("semantic_route_score", th.zeros(len(self.semantic_names)))
+        self.register_buffer("semantic_route_score_initialized", th.tensor(False))
+        self.register_buffer("semantic_route_frozen", th.tensor(False))
+        self.register_buffer("semantic_gradient_mean", th.zeros(len(self.semantic_names)))
+        self.register_buffer("semantic_gradient_abs_mean", th.zeros(len(self.semantic_names)))
+        self.semantic_probe_scale = (
+            nn.Parameter(th.ones(len(self.semantic_names)), requires_grad=True)
+            if semantic_router_mode in {
+                "gradient_importance",
+                "gradient_consistency",
+                "parameter_sensitivity",
+            }
+            else None
+        )
+        self._semantic_online_score_sum = None
+        self._semantic_online_score_count = 0
+        self._semantic_forced_group = None
+        self._semantic_forced_token_branch = None
 
         self.public_self_dim = 1 + unit_type_bits
         self.public_ally_dim = 1 + unit_type_bits
@@ -996,6 +1050,155 @@ class PublicTransformerRelationCapturer(nn.Module):
         )
         self.latest_aux_loss = None
         self.latest_aux_stats = {}
+
+    @property
+    def semantic_router_active(self):
+        return self.semantic_router_mode is not None
+
+    def semantic_router_uses_probe(self):
+        return self.semantic_probe_scale is not None
+
+    def semantic_router_needs_parameter_graph(self):
+        return self.semantic_router_mode == "parameter_sensitivity"
+
+    def semantic_router_needs_counterfactual(self):
+        return self.semantic_router_mode == "counterfactual"
+
+    def set_semantic_route_override(self, group_index, token_branch):
+        self._semantic_forced_group = int(group_index)
+        self._semantic_forced_token_branch = float(bool(token_branch))
+
+    def clear_semantic_route_override(self):
+        self._semantic_forced_group = None
+        self._semantic_forced_token_branch = None
+
+    def _current_semantic_token_route(self, reference):
+        route = self.semantic_token_route.to(device=reference.device, dtype=reference.dtype).clone()
+        if self._semantic_forced_group is not None:
+            route[self._semantic_forced_group] = self._semantic_forced_token_branch
+        return route
+
+    def _semantic_scales(self, reference):
+        if self.semantic_probe_scale is None:
+            return reference.new_ones(len(self.semantic_names))
+        return self.semantic_probe_scale.to(device=reference.device, dtype=reference.dtype)
+
+    def _accumulate_semantic_online_score(self, score):
+        if not self.semantic_router_active or not th.is_grad_enabled():
+            return
+        score = score.detach().float()
+        if self._semantic_online_score_sum is None:
+            self._semantic_online_score_sum = th.zeros_like(score)
+        self._semantic_online_score_sum = self._semantic_online_score_sum + score
+        self._semantic_online_score_count += 1
+
+    def _consume_semantic_online_score(self):
+        if self._semantic_online_score_sum is None or self._semantic_online_score_count == 0:
+            return None
+        score = self._semantic_online_score_sum / float(self._semantic_online_score_count)
+        self._semantic_online_score_sum = None
+        self._semantic_online_score_count = 0
+        return score
+
+    def _semantic_route_probabilities(self, scores):
+        budget = max(1, min(self.semantic_router_token_budget, scores.numel() - 1))
+        ordered = th.sort(scores, descending=True).values
+        boundary = 0.5 * (ordered[budget - 1] + ordered[budget])
+        temperature = max(self.semantic_router_temperature, 1e-6)
+        return th.sigmoid((scores - boundary) / temperature)
+
+    def _apply_semantic_route_scores(self, scores, t_env):
+        scores = scores.detach().to(self.semantic_route_score)
+        if not bool(self.semantic_route_score_initialized.item()):
+            self.semantic_route_score.copy_(scores)
+            self.semantic_route_score_initialized.fill_(True)
+        else:
+            self.semantic_route_score.mul_(self.semantic_router_ema).add_(
+                scores, alpha=1.0 - self.semantic_router_ema
+            )
+
+        if t_env < self.semantic_router_warmup_steps:
+            self.semantic_token_route.copy_(self.semantic_manual_token_route)
+            self.semantic_token_probability.copy_(self.semantic_manual_token_route)
+            return
+        if bool(self.semantic_route_frozen.item()):
+            return
+
+        budget = max(1, min(self.semantic_router_token_budget, len(self.semantic_names) - 1))
+        tie_break = self.semantic_manual_token_route * 1e-7
+        top_indices = th.topk(self.semantic_route_score + tie_break, k=budget).indices
+        route = th.zeros_like(self.semantic_token_route)
+        route[top_indices] = 1.0
+        self.semantic_token_route.copy_(route)
+        self.semantic_token_probability.copy_(
+            self._semantic_route_probabilities(self.semantic_route_score)
+        )
+        if t_env >= self.semantic_router_freeze_steps:
+            self.semantic_route_frozen.fill_(True)
+
+    def update_semantic_router(self, t_env, external_score=None):
+        if not self.semantic_router_active:
+            return
+        if self.semantic_router_mode in {"observer_consistency", "temporal_stability"}:
+            score = self._consume_semantic_online_score()
+            if score is None:
+                return
+        elif external_score is None:
+            return
+        else:
+            raw_score = external_score.detach().to(self.semantic_route_score)
+            if self.semantic_router_mode == "gradient_importance":
+                score = raw_score.abs()
+            elif self.semantic_router_mode == "gradient_consistency":
+                self.semantic_gradient_mean.mul_(self.semantic_router_ema).add_(
+                    raw_score, alpha=1.0 - self.semantic_router_ema
+                )
+                self.semantic_gradient_abs_mean.mul_(self.semantic_router_ema).add_(
+                    raw_score.abs(), alpha=1.0 - self.semantic_router_ema
+                )
+                score = self.semantic_gradient_mean.abs() / self.semantic_gradient_abs_mean.clamp(min=1e-8)
+            elif self.semantic_router_mode == "parameter_sensitivity":
+                # Groups that most affect generated decision parameters receive
+                # the richer token path; the remaining groups use simple bias.
+                score = raw_score.abs()
+            else:
+                # Counterfactual score is L_bias - L_token, so positive values
+                # directly favor the token branch.
+                score = raw_score
+        self._apply_semantic_route_scores(score, int(t_env))
+
+    def semantic_router_stats(self):
+        if not self.semantic_router_active:
+            return {}
+        route_weights = self.semantic_token_route.new_tensor(
+            [2 ** index for index in range(len(self.semantic_names))]
+        )
+        stats = {
+            "semantic_route_token_count": self.semantic_token_route.sum().detach(),
+            "semantic_route_bias_count": (1.0 - self.semantic_token_route).sum().detach(),
+            "semantic_route_frozen": self.semantic_route_frozen.float().detach(),
+            # Bit i is one when semantic group i uses the Transformer-token path.
+            "semantic_route_code": (self.semantic_token_route * route_weights).sum().detach(),
+        }
+        for index, name in enumerate(self.semantic_names):
+            stats[f"semantic_route_{name}_score"] = self.semantic_route_score[index].detach()
+            stats[f"semantic_route_{name}_token_prob"] = self.semantic_token_probability[index].detach()
+            stats[f"semantic_route_{name}_token_branch"] = self.semantic_token_route[index].detach()
+        return stats
+
+    def copy_semantic_router_from(self, source):
+        if not self.semantic_router_active or not source.semantic_router_active:
+            return
+        for name in (
+            "semantic_token_route",
+            "semantic_token_probability",
+            "semantic_route_score",
+            "semantic_route_score_initialized",
+            "semantic_route_frozen",
+            "semantic_gradient_mean",
+            "semantic_gradient_abs_mean",
+        ):
+            getattr(self, name).copy_(getattr(source, name))
 
     def _make_encoder(self, input_dim):
         return nn.Sequential(
@@ -1260,6 +1463,265 @@ class PublicTransformerRelationCapturer(nn.Module):
     def _private_side(self, side_id, device):
         return self.private_side_embedding(th.tensor(side_id, device=device, dtype=th.long))
 
+    def _scaled_public_features(self, features, value_dim, route, scales):
+        value_end = 1 + value_dim
+        parts = [
+            features[..., :1] * scales[0],
+            features[..., 1:value_end] * scales[1],
+            features[..., value_end:] * scales[2],
+        ]
+        full_features = th.cat(parts, dim=-1)
+        token_features = th.cat(
+            [part * route[index] for index, part in enumerate(parts)],
+            dim=-1,
+        )
+        return full_features, token_features
+
+    def _semantic_routed_embeddings(
+        self,
+        self_feat,
+        ally_feat,
+        enemy_feat,
+        ally_mask,
+        enemy_mask,
+    ):
+        route = self._current_semantic_token_route(self_feat)
+        scales = self._semantic_scales(self_feat)
+        self_public = self._self_public_features(self_feat)
+        ally_public = self._ally_public_features(ally_feat, ally_mask)
+        enemy_public = self._enemy_public_features(enemy_feat, enemy_mask)
+        self_full, self_token_features = self._scaled_public_features(
+            self_public, self.self_value_dim, route, scales
+        )
+        ally_full, ally_token_features = self._scaled_public_features(
+            ally_public, self.ally_value_dim, route, scales
+        )
+        enemy_full, enemy_token_features = self._scaled_public_features(
+            enemy_public, self.enemy_value_dim, route, scales
+        )
+
+        ally_encoder = self.self_public_encoder if self.merge_friendly_public_side else self.ally_public_encoder
+        self_full_embed = self.self_public_encoder(self_full)
+        ally_full_embed = ally_encoder(ally_full) * ally_mask.unsqueeze(-1).float()
+        enemy_full_embed = self.enemy_public_encoder(enemy_full) * enemy_mask.unsqueeze(-1).float()
+        if bool((route[:3] > 0.5).all().item()):
+            self_token_base = self_full_embed
+            ally_token_base = ally_full_embed
+            enemy_token_base = enemy_full_embed
+        else:
+            self_token_base = self.self_public_encoder(self_token_features)
+            ally_token_base = ally_encoder(ally_token_features) * ally_mask.unsqueeze(-1).float()
+            enemy_token_base = (
+                self.enemy_public_encoder(enemy_token_features) * enemy_mask.unsqueeze(-1).float()
+            )
+
+        self_token = self_token_base + self._side(
+            self.self_public_side_id, self_feat.device
+        ).view(1, 1, -1)
+        ally_tokens = ally_token_base + self._side(1, self_feat.device).view(1, 1, 1, -1)
+        enemy_tokens = enemy_token_base + self._side(2, self_feat.device).view(1, 1, 1, -1)
+        ally_tokens = ally_tokens * ally_mask.unsqueeze(-1).float()
+        enemy_tokens = enemy_tokens * enemy_mask.unsqueeze(-1).float()
+
+        geometry_scale = scales[3]
+        self_geometry = self.self_private_encoder(self_feat[:, :, : self.move_dim] * geometry_scale)
+        ally_geometry = self.ally_private_encoder(ally_feat[:, :, :, :4] * geometry_scale)
+        enemy_geometry = self.enemy_private_encoder(enemy_feat[:, :, :, :4] * geometry_scale)
+        ally_geometry = ally_geometry * ally_mask.unsqueeze(-1).float()
+        enemy_geometry = enemy_geometry * enemy_mask.unsqueeze(-1).float()
+
+        owner_scale = scales[4]
+        self_owner = self._private_side(0, self_feat.device).view(1, 1, -1) * owner_scale
+        ally_owner = (
+            self._private_side(1, self_feat.device).view(1, 1, 1, -1)
+            * ally_mask.unsqueeze(-1).float()
+            * owner_scale
+        )
+        enemy_owner = (
+            self._private_side(2, self_feat.device).view(1, 1, 1, -1)
+            * enemy_mask.unsqueeze(-1).float()
+            * owner_scale
+        )
+
+        self_token = self_token + route[3] * self_geometry + route[4] * self_owner
+        ally_tokens = ally_tokens + route[3] * ally_geometry + route[4] * ally_owner
+        enemy_tokens = enemy_tokens + route[3] * enemy_geometry + route[4] * enemy_owner
+
+        # The omitted public contribution is reused as bias modulation. With
+        # the manual route this term is exactly zero, preserving the baseline.
+        bias_self = self_full_embed - self_token_base
+        bias_ally = ally_full_embed - ally_token_base
+        bias_enemy = enemy_full_embed - enemy_token_base
+        bias_self = bias_self + (1.0 - route[3]) * self_geometry + (1.0 - route[4]) * self_owner
+        bias_ally = bias_ally + (1.0 - route[3]) * ally_geometry + (1.0 - route[4]) * ally_owner
+        bias_enemy = bias_enemy + (1.0 - route[3]) * enemy_geometry + (1.0 - route[4]) * enemy_owner
+        return self_token, ally_tokens, enemy_tokens, bias_self, bias_ally, bias_enemy
+
+    def _semantic_signatures(self, self_feat, ally_feat, enemy_feat):
+        batch_size, n_agents, _ = self_feat.shape
+        ally_mask = ally_feat.abs().sum(dim=-1) > 0
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        self_presence = self_feat.new_ones(batch_size, n_agents, 1)
+        presence = th.cat(
+            [self_presence, ally_mask.float(), enemy_mask.float()], dim=-1
+        )
+
+        health_parts = [self._self_values(self_feat)]
+        if self.ally_value_dim > 0:
+            health_parts.append(self._ally_values(ally_feat).reshape(batch_size, n_agents, -1))
+        if self.enemy_value_dim > 0:
+            health_parts.append(self._enemy_values(enemy_feat).reshape(batch_size, n_agents, -1))
+        health = (
+            th.cat(health_parts, dim=-1)
+            if any(part.size(-1) > 0 for part in health_parts)
+            else self_feat.new_zeros(batch_size, n_agents, 1)
+        )
+
+        if self.unit_type_bits > 0:
+            own_feat = self._own_feat(self_feat)
+            self_type_start = self.self_value_dim
+            ally_type_start = 4 + self.ally_value_dim
+            enemy_type_start = 4 + self.enemy_value_dim
+            unit_type = th.cat(
+                [
+                    own_feat[:, :, self_type_start : self_type_start + self.unit_type_bits],
+                    ally_feat[
+                        :, :, :, ally_type_start : ally_type_start + self.unit_type_bits
+                    ].reshape(batch_size, n_agents, -1),
+                    enemy_feat[
+                        :, :, :, enemy_type_start : enemy_type_start + self.unit_type_bits
+                    ].reshape(batch_size, n_agents, -1),
+                ],
+                dim=-1,
+            )
+        else:
+            unit_type = self_feat.new_zeros(batch_size, n_agents, 1)
+
+        geometry = th.cat(
+            [
+                self_feat[:, :, : self.move_dim],
+                ally_feat[:, :, :, :4].reshape(batch_size, n_agents, -1),
+                enemy_feat[:, :, :, :4].reshape(batch_size, n_agents, -1),
+            ],
+            dim=-1,
+        )
+        owner_template = th.cat(
+            [
+                self_feat.new_zeros(1),
+                self_feat.new_ones(ally_feat.size(2)),
+                self_feat.new_full((enemy_feat.size(2),), 2.0),
+            ]
+        ) / 2.0
+        owner = owner_template.view(1, 1, -1).expand(batch_size, n_agents, -1)
+        return (presence, health, unit_type, geometry, owner)
+
+    @staticmethod
+    def _masked_entity_mean(values, mask):
+        if values.size(2) == 0:
+            return values.new_zeros(values.size(0), values.size(1), values.size(-1))
+        weights = mask.unsqueeze(-1).to(values.dtype)
+        return (values * weights).sum(dim=2) / weights.sum(dim=2).clamp(min=1.0)
+
+    def _observer_consistency_signatures(self, self_feat, ally_feat, enemy_feat):
+        """Build observer-comparable summaries without assuming ally-slot alignment."""
+        batch_size, n_agents, _ = self_feat.shape
+        ally_mask = ally_feat.abs().sum(dim=-1) > 0
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        ally_fraction = ally_mask.float().mean(dim=2, keepdim=True)
+        enemy_fraction = enemy_mask.float().mean(dim=2, keepdim=True)
+        presence = th.cat(
+            [self_feat.new_ones(batch_size, n_agents, 1), ally_fraction, enemy_fraction],
+            dim=-1,
+        )
+
+        health = th.cat(
+            [
+                self._self_values(self_feat),
+                self._masked_entity_mean(self._ally_values(ally_feat), ally_mask),
+                self._masked_entity_mean(self._enemy_values(enemy_feat), enemy_mask),
+            ],
+            dim=-1,
+        )
+        if health.size(-1) == 0:
+            health = self_feat.new_zeros(batch_size, n_agents, 1)
+
+        if self.unit_type_bits > 0:
+            own_feat = self._own_feat(self_feat)
+            self_type_start = self.self_value_dim
+            ally_type_start = 4 + self.ally_value_dim
+            enemy_type_start = 4 + self.enemy_value_dim
+            unit_type = th.cat(
+                [
+                    own_feat[:, :, self_type_start : self_type_start + self.unit_type_bits],
+                    self._masked_entity_mean(
+                        ally_feat[
+                            :, :, :, ally_type_start : ally_type_start + self.unit_type_bits
+                        ],
+                        ally_mask,
+                    ),
+                    self._masked_entity_mean(
+                        enemy_feat[
+                            :, :, :, enemy_type_start : enemy_type_start + self.unit_type_bits
+                        ],
+                        enemy_mask,
+                    ),
+                ],
+                dim=-1,
+            )
+        else:
+            unit_type = self_feat.new_zeros(batch_size, n_agents, 1)
+
+        geometry = th.cat(
+            [
+                self_feat[:, :, : self.move_dim],
+                self._masked_entity_mean(ally_feat[:, :, :, :4], ally_mask),
+                self._masked_entity_mean(enemy_feat[:, :, :, :4], enemy_mask),
+            ],
+            dim=-1,
+        )
+        # Owner identity is represented canonically instead of using observer-
+        # dependent ally slots.
+        owner = self_feat.new_tensor([0.0, 0.5, 1.0]).view(1, 1, 3).expand(
+            batch_size, n_agents, 3
+        )
+        return (presence, health, unit_type, geometry, owner)
+
+    def _collect_semantic_observation_score(
+        self,
+        self_feat,
+        ally_feat,
+        enemy_feat,
+        prev_self_feat,
+        prev_ally_feat,
+        prev_enemy_feat,
+    ):
+        if self.semantic_router_mode not in {"observer_consistency", "temporal_stability"}:
+            return
+        if self.semantic_router_mode == "observer_consistency":
+            current = self._observer_consistency_signatures(
+                self_feat, ally_feat, enemy_feat
+            )
+            scores = []
+            for signature in current:
+                centered = signature - signature.mean(dim=1, keepdim=True)
+                dispersion = centered.pow(2).mean()
+                scale = signature.pow(2).mean().clamp(min=1e-8)
+                scores.append((1.0 - dispersion / scale).clamp(min=0.0, max=1.0))
+        else:
+            current = self._semantic_signatures(self_feat, ally_feat, enemy_feat)
+            previous = self._semantic_signatures(
+                prev_self_feat, prev_ally_feat, prev_enemy_feat
+            )
+            scores = []
+            for current_signature, previous_signature in zip(current, previous):
+                change = (current_signature - previous_signature).abs().mean()
+                scale = (
+                    current_signature.abs().mean()
+                    + previous_signature.abs().mean()
+                ).clamp(min=1e-8)
+                scores.append((1.0 - change / scale).clamp(min=0.0, max=1.0))
+        self._accumulate_semantic_online_score(th.stack(scores))
+
     def _simple_private_bias(self, mod_tokens, batch_size, n_agents):
         n_entity_tokens = mod_tokens.size(2)
         token_bias = self.simple_bias(mod_tokens)
@@ -1341,6 +1803,15 @@ class PublicTransformerRelationCapturer(nn.Module):
         next_ally_mask = next_ally_feat.abs().sum(dim=-1) > 0
         next_enemy_mask = next_enemy_feat.abs().sum(dim=-1) > 0
 
+        self._collect_semantic_observation_score(
+            self_feat,
+            ally_feat,
+            enemy_feat,
+            prev_self_feat,
+            prev_ally_feat,
+            prev_enemy_feat,
+        )
+
         if self.mode == "full_obs":
             self_token = self.self_full_obs_encoder(self_feat) + self._side(0, self_feat.device).view(1, 1, -1)
             ally_tokens = self.ally_full_obs_encoder(ally_feat) + self._side(1, self_feat.device).view(1, 1, 1, -1)
@@ -1349,6 +1820,21 @@ class PublicTransformerRelationCapturer(nn.Module):
             )
             ally_tokens = ally_tokens * ally_mask.unsqueeze(-1).float()
             enemy_public_tokens = enemy_public_tokens * enemy_mask.unsqueeze(-1).float()
+        elif self.semantic_router_active:
+            (
+                self_token,
+                ally_tokens,
+                enemy_public_tokens,
+                bias_self,
+                bias_ally,
+                bias_enemy,
+            ) = self._semantic_routed_embeddings(
+                self_feat,
+                ally_feat,
+                enemy_feat,
+                ally_mask,
+                enemy_mask,
+            )
         else:
             self_public = self._self_public_features(self_feat)
             ally_public = self._ally_public_features(ally_feat, ally_mask)
@@ -1366,7 +1852,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
 
         token_self = token_ally = token_enemy = None
-        bias_self = bias_ally = bias_enemy = None
+        if not self.semantic_router_active:
+            bias_self = bias_ally = bias_enemy = None
         if self.mode in {"future_delta_token", "future_delta_bias"}:
             mod_self, mod_ally, mod_enemy = self._future_delta_embeddings(
                 self_feat,
@@ -1407,7 +1894,7 @@ class PublicTransformerRelationCapturer(nn.Module):
                 token_self, token_ally, token_enemy = mod_self, mod_ally, mod_enemy
             else:
                 bias_self, bias_ally, bias_enemy = mod_self, mod_ally, mod_enemy
-        elif self.mode in {"private_token", "private_bias"}:
+        elif self.mode in {"private_token", "private_bias"} and not self.semantic_router_active:
             mod_self, mod_ally, mod_enemy = self._private_embeddings(
                 self_feat, ally_feat, enemy_feat, ally_mask, enemy_mask
             )
@@ -1495,6 +1982,7 @@ class PublicTransformerRelationCapturer(nn.Module):
             enemy_start = 2 + ally_tokens.size(2)
             enemy_tokens = encoded[:, :, enemy_start:] * enemy_mask.unsqueeze(-1).float()
         self.latest_encoded_enemy_tokens = enemy_tokens
+        self.latest_aux_stats.update(self.semantic_router_stats())
         return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
 
 
@@ -3609,6 +4097,19 @@ class CleanHyperAgent(nn.Module):
         self.public_delta_loss_coef = float(getattr(args, "clean_public_delta_loss_coef", 0.05))
         self.public_transformer_layers = int(getattr(args, "clean_public_transformer_layers", 1))
         self.public_transformer_heads = int(getattr(args, "clean_public_transformer_heads", 4))
+        self.semantic_router_ema = float(getattr(args, "clean_semantic_router_ema", 0.99))
+        self.semantic_router_token_budget = int(
+            getattr(args, "clean_semantic_router_token_budget", 3)
+        )
+        self.semantic_router_temperature = float(
+            getattr(args, "clean_semantic_router_temperature", 0.1)
+        )
+        self.semantic_router_warmup_steps = int(
+            getattr(args, "clean_semantic_router_warmup_steps", 250000)
+        )
+        self.semantic_router_freeze_steps = int(
+            getattr(args, "clean_semantic_router_freeze_steps", 1500000)
+        )
         self.public_transformer_delta_loss_coef = float(
             getattr(args, "clean_public_transformer_delta_loss_coef", self.public_delta_loss_coef)
         )
@@ -4516,6 +5017,7 @@ class CleanHyperAgent(nn.Module):
         self.latest_aux_stats = {}
         self.latest_teacher_q = None
         self.latest_generated_interaction_head = None
+        self.latest_generated_interaction_head_graph = None
         self.latest_route_logits = None
         self.latest_route_indices = None
         self.latest_graph_adj = None
@@ -4985,6 +5487,12 @@ class CleanHyperAgent(nn.Module):
                     if self.model_type == "rpg_public_private_selfattn_bias_transformer_hypercond"
                     else "pair_mlp"
                 ),
+                semantic_router_mode=SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type),
+                semantic_router_ema=self.semantic_router_ema,
+                semantic_router_token_budget=self.semantic_router_token_budget,
+                semantic_router_temperature=self.semantic_router_temperature,
+                semantic_router_warmup_steps=self.semantic_router_warmup_steps,
+                semantic_router_freeze_steps=self.semantic_router_freeze_steps,
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(
@@ -5400,6 +5908,9 @@ class CleanHyperAgent(nn.Module):
             )
         self.latest_relation_ally_attn = ally_attn.detach()
         self.latest_relation_enemy_attn = enemy_attn.detach()
+        self.latest_aux_stats.update(
+            getattr(self.rpg_relation_capturer, "latest_aux_stats", {})
+        )
         return condition, new_relation_hidden, enemy_tokens, enemy_mask
 
     def _build_action_edge_graph_condition(self, context, relation_hidden, test_mode=False):
@@ -5969,6 +6480,13 @@ class CleanHyperAgent(nn.Module):
             dim=-1,
         )
         self.latest_generated_interaction_head = generated_head.detach().view(batch_size, n_agents, -1)
+        if (
+            SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
+            == "parameter_sensitivity"
+        ):
+            self.latest_generated_interaction_head_graph = generated_head.view(
+                batch_size, n_agents, -1
+            )
         q_attack = th.bmm(flat_interaction_input, interaction_out_w) + interaction_out_b
         return q_attack.view(batch_size, n_agents, self.rpg_obs_layout["n_enemies"]), generated_head
 
@@ -6282,6 +6800,7 @@ class CleanHyperAgent(nn.Module):
         flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
         flat_condition = relation_condition.reshape(batch_size * n_agents, -1)
         compute_training_aux = th.is_grad_enabled()
+        generated_ego_head = None
 
         if self.model_type in {"rpg_fixed_structured_maker", "rpg_fixed_linear_structured_maker"}:
             q_ego = self.rpg_ego_maker(th.cat([hidden, relation_condition], dim=-1))
@@ -6307,6 +6826,15 @@ class CleanHyperAgent(nn.Module):
             )
             ego_out_b = self.rpg_ego_out_b(flat_condition).view(
                 batch_size * n_agents, 1, self.rpg_n_ego_actions
+            )
+            generated_ego_head = th.cat(
+                [
+                    ego_bottleneck_w.reshape(batch_size * n_agents, -1),
+                    ego_bottleneck_b.reshape(batch_size * n_agents, -1),
+                    ego_out_w.reshape(batch_size * n_agents, -1),
+                    ego_out_b.reshape(batch_size * n_agents, -1),
+                ],
+                dim=-1,
             )
 
             if self.model_type in PUBLIC_TRANSFORMER_PARAM_RESIDUAL_HEAD_VARIANTS:
@@ -6527,6 +7055,18 @@ class CleanHyperAgent(nn.Module):
             interaction_input = th.cat([hidden_rep, cond_rep, enemy_tokens], dim=-1)
             q_attack = self.rpg_interaction_scorer(interaction_input).squeeze(-1)
         q_attack = q_attack.masked_fill(~enemy_mask.bool(), 0.0)
+        if (
+            SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
+            == "parameter_sensitivity"
+            and generated_ego_head is not None
+            and self.latest_generated_interaction_head_graph is not None
+        ):
+            interaction_graph = self.latest_generated_interaction_head_graph.reshape(
+                batch_size * n_agents, -1
+            )
+            self.latest_generated_interaction_head_graph = th.cat(
+                [generated_ego_head, interaction_graph], dim=-1
+            ).view(batch_size, n_agents, -1)
         return th.cat([q_ego, q_attack], dim=-1)
 
     def forward(self, inputs, hidden_state, context=None, test_mode=False):
@@ -6545,6 +7085,7 @@ class CleanHyperAgent(nn.Module):
         self.latest_aux_stats = {}
         self.latest_teacher_q = None
         self.latest_generated_interaction_head = None
+        self.latest_generated_interaction_head_graph = None
 
         if hidden_state is None:
             hidden_state = self.init_hidden().unsqueeze(0).expand(batch_size, n_agents, -1)
