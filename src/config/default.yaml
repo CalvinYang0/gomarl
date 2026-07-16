@@ -53,6 +53,10 @@ battle_trace_similarity_sample_size: 256 # Max agent-time samples for similarity
 gamma: 0.99
 batch_size: 32 # Number of episodes to train on
 buffer_size: 32 # Size of the replay buffer
+# Number of learner updates after each parallel rollout collection. Keep this at
+# one for legacy runs; high-worker CPU profiles raise it to preserve the
+# update-per-episode ratio when batch_size_run increases.
+learner_updates_per_collect: 1
 lr: 0.0005 # Learning rate for agents
 critic_lr: 0.0005 # Learning rate for critics
 optim_alpha: 0.99 # RMSProp alpha

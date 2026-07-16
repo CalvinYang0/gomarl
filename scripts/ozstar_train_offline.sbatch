@@ -41,6 +41,11 @@ export SC2PATH
 export WANDB_MODE
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-8}}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-8}}"
+# SC2 rollout workers inherit these settings. High-worker CPU profiles set all
+# three to one so each environment uses a single core rather than oversubscribing
+# the allocation with nested BLAS/OpenMP pools.
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-$OMP_NUM_THREADS}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-$OMP_NUM_THREADS}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 echo "== GoMARL OzSTAR offline job =="
@@ -57,6 +62,10 @@ echo "seed: $SEED"
 echo "run_name: $RUN_NAME"
 echo "wandb_mode: $WANDB_MODE"
 echo "use_cuda: $USE_CUDA"
+echo "omp_num_threads: $OMP_NUM_THREADS"
+echo "mkl_num_threads: $MKL_NUM_THREADS"
+echo "openblas_num_threads: $OPENBLAS_NUM_THREADS"
+echo "numexpr_num_threads: $NUMEXPR_NUM_THREADS"
 echo "extra_args: $EXTRA_ARGS"
 
 "$PYTHON_BIN" - <<'PY'

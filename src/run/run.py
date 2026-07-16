@@ -215,8 +215,16 @@ def run_sequential(args, logger):
 
     start_time = time.time()
     last_time = start_time
+    learner_updates_per_collect = max(
+        1, int(getattr(args, "learner_updates_per_collect", 1))
+    )
 
     logger.console_logger.info("Beginning training for {} timesteps".format(args.t_max))
+    logger.console_logger.info(
+        "Rollout configuration: {} env workers, {} learner update(s) per collection".format(
+            args.batch_size_run, learner_updates_per_collect
+        )
+    )
 
     while runner.t_env <= args.t_max:
 
@@ -231,17 +239,21 @@ def run_sequential(args, logger):
             if args.accumulated_episodes and next_episode % args.accumulated_episodes != 0:
                 continue
 
-            episode_sample = buffer.sample(args.batch_size)
+            # A larger rollout pool improves SC2 throughput. Repeat learner updates
+            # so changing the number of environment workers does not silently reduce
+            # the update-per-episode ratio of the original experiment setting.
+            for _ in range(learner_updates_per_collect):
+                episode_sample = buffer.sample(args.batch_size)
 
-            # Truncate batch to only filled timesteps
-            max_ep_t = episode_sample.max_t_filled()
-            episode_sample = episode_sample[:, :max_ep_t]
+                # Truncate batch to only filled timesteps
+                max_ep_t = episode_sample.max_t_filled()
+                episode_sample = episode_sample[:, :max_ep_t]
 
-            if episode_sample.device != args.device:
-                episode_sample.to(args.device)
+                if episode_sample.device != args.device:
+                    episode_sample.to(args.device)
 
-            learner.train(episode_sample, runner.t_env, episode)
-            del episode_sample
+                learner.train(episode_sample, runner.t_env, episode)
+                del episode_sample
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)

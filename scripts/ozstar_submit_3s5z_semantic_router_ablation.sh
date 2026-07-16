@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Keep the proven legacy CPU setting fixed. Every raw self/ally/enemy
-# observation scalar is threshold-routed independently. This reduced batch
-# retains only the three routing criteria selected after the 3s5z pilot.
+# Every raw self/ally/enemy observation scalar is threshold-routed
+# independently. SC2 rollout simulation, not the small CPU MLP, is the
+# bottleneck, so this profile assigns one worker per requested CPU.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 MAP_NAME="${MAP_NAME:-3s5z_vs_3s6z}"
@@ -15,10 +15,12 @@ MODELS="${MODELS:-rpg_simple_bias_gradient_importance_router_hypercond rpg_simpl
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
 MEM="${MEM:-64G}"
 TIME="${TIME:-20:00:00}"
-BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
+BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-32}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
 BUFFER_SIZE="${BUFFER_SIZE:-500}"
-TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-$CPUS_PER_TASK}"
+REFERENCE_BATCH_SIZE_RUN="${REFERENCE_BATCH_SIZE_RUN:-8}"
+LEARNER_UPDATES_PER_COLLECT="${LEARNER_UPDATES_PER_COLLECT:-$(( (BATCH_SIZE_RUN + REFERENCE_BATCH_SIZE_RUN - 1) / REFERENCE_BATCH_SIZE_RUN ))}"
+TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-1}"
 TORCH_NUM_INTEROP_THREADS="${TORCH_NUM_INTEROP_THREADS:-1}"
 T_MAX="${T_MAX:-5050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
@@ -45,13 +47,13 @@ short_name() {
 echo "== Submit 3s5z semantic-router ablation =="
 echo "models: $MODELS"
 echo "seeds: $SEEDS"
-echo "setting: ${CPUS_PER_TASK}c ${MEM} ${TIME}, t_max=${T_MAX}, br=${BATCH_SIZE_RUN}, batch=${BATCH_SIZE}, buffer=${BUFFER_SIZE}, torch_threads=${TORCH_NUM_THREADS}/${TORCH_NUM_INTEROP_THREADS}"
+echo "setting: ${CPUS_PER_TASK}c ${MEM} ${TIME}, t_max=${T_MAX}, env_workers=${BATCH_SIZE_RUN}, learner_updates=${LEARNER_UPDATES_PER_COLLECT}, batch=${BATCH_SIZE}, buffer=${BUFFER_SIZE}, torch_threads=${TORCH_NUM_THREADS}/${TORCH_NUM_INTEROP_THREADS}"
 
 for model_type in $MODELS; do
   for seed in $SEEDS; do
     tag="$(short_name "$model_type")"
-    run_name="${MAP_NAME}_${model_type}_slotthreshold_f5m_full32c_s${seed}"
-    job_name="3s5z_f32_${tag}_s${seed}"
+    run_name="${MAP_NAME}_${model_type}_env${BATCH_SIZE_RUN}_u${LEARNER_UPDATES_PER_COLLECT}_s${seed}"
+    job_name="3s5z_env${BATCH_SIZE_RUN}_${tag}_s${seed}"
 
     echo "submit: model=$model_type seed=$seed run=$run_name"
     sbatch \
@@ -61,7 +63,7 @@ for model_type in $MODELS; do
       --job-name="$job_name" \
       --output=ozstar_logs/%x_%j.out \
       --error=ozstar_logs/%x_%j.err \
-      --export=ALL,MAP_NAME="$MAP_NAME",MODEL_TYPE="$model_type",SEED="$seed",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",OMP_NUM_THREADS="$TORCH_NUM_THREADS",MKL_NUM_THREADS="$TORCH_NUM_THREADS",EXTRA_ARGS="$EXTRA_ARGS torch_num_threads=$TORCH_NUM_THREADS torch_num_interop_threads=$TORCH_NUM_INTEROP_THREADS" \
+      --export=ALL,MAP_NAME="$MAP_NAME",MODEL_TYPE="$model_type",SEED="$seed",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",OMP_NUM_THREADS="$TORCH_NUM_THREADS",MKL_NUM_THREADS="$TORCH_NUM_THREADS",OPENBLAS_NUM_THREADS="$TORCH_NUM_THREADS",NUMEXPR_NUM_THREADS="$TORCH_NUM_THREADS",EXTRA_ARGS="$EXTRA_ARGS torch_num_threads=$TORCH_NUM_THREADS torch_num_interop_threads=$TORCH_NUM_INTEROP_THREADS learner_updates_per_collect=$LEARNER_UPDATES_PER_COLLECT" \
       scripts/ozstar_train_offline.sbatch
   done
 done

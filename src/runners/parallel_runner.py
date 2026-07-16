@@ -12,6 +12,9 @@ class ParallelRunner:
         self.args = args
         self.logger = logger
         self.batch_size = self.args.batch_size_run
+        self.logger.console_logger.info(
+            "ParallelRunner starting {} SC2 environment workers".format(self.batch_size)
+        )
 
         self.parent_conns, self.worker_conns = zip(*[Pipe() for _ in range(self.batch_size)])
         env_fn = env_REGISTRY[self.args.env]
