@@ -135,23 +135,41 @@ def slot_sort_key(name):
     return side_order, entity_index, feature_rank, feature
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("job_ids", nargs="*", help="Slurm job IDs; defaults to active jobs")
-    parser.add_argument("--log-dir", default="ozstar_logs")
-    args = parser.parse_args()
+def feature_name(name, group):
+    prefix = "{}_".format(group)
+    if name.startswith(prefix):
+        return name[len(prefix):]
+    if group == "self" and name.startswith("self_"):
+        return name[5:]
+    return name
 
-    job_ids = args.job_ids or active_job_ids()
-    log_dir = Path(args.log_dir)
-    routes = [route_for_job(log_dir, job_id) for job_id in job_ids]
-    missing = [job_id for job_id, route in zip(job_ids, routes) if route is None]
-    routes = [route for route in routes if route is not None]
 
-    if missing:
-        print("No route summary yet: {}".format(", ".join(missing)))
-    if not routes:
-        raise SystemExit("No semantic slot routes found.")
+def print_job_route(route):
+    mapping = {name: "TOKEN" for name in route["token"]}
+    mapping.update({name: "BIAS" for name in route["bias"]})
+    groups = {}
+    for name in sorted(mapping, key=slot_sort_key):
+        groups.setdefault(slot_group(name), []).append(name)
 
+    print("\n" + "=" * 88)
+    print("{} | job={} | t_env={} | frozen={} | version={}".format(
+        route["label"],
+        route["job"],
+        route["t_env"],
+        route["frozen"],
+        route["version"],
+    ))
+    print("log: {}".format(route["path"]))
+    print("=" * 88)
+    for group, names in groups.items():
+        token = [feature_name(name, group) for name in names if mapping[name] == "TOKEN"]
+        bias = [feature_name(name, group) for name in names if mapping[name] == "BIAS"]
+        print("\n[{}]".format(group))
+        print("  TOKEN : {}".format(", ".join(token) if token else "-"))
+        print("  BIAS  : {}".format(", ".join(bias) if bias else "-"))
+
+
+def print_route_matrix(routes):
     print("\nLATEST ROUTE SUMMARY")
     print("{:<8} {:<10} {:>10} {:>7} {:>8} {:>7} {:>7}".format(
         "LABEL", "JOB", "T_ENV", "FROZEN", "VERSION", "TOKEN", "BIAS"
@@ -201,6 +219,35 @@ def main():
             slot, "  ".join("{:>6}".format(value) for value in values), width=slot_width
         ))
         previous_group = group
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("job_ids", nargs="*", help="Slurm job IDs; defaults to active jobs")
+    parser.add_argument("--log-dir", default="ozstar_logs")
+    parser.add_argument(
+        "--matrix",
+        action="store_true",
+        help="compare jobs side by side instead of printing one job per section",
+    )
+    args = parser.parse_args()
+
+    job_ids = args.job_ids or active_job_ids()
+    log_dir = Path(args.log_dir)
+    routes = [route_for_job(log_dir, job_id) for job_id in job_ids]
+    missing = [job_id for job_id, route in zip(job_ids, routes) if route is None]
+    routes = [route for route in routes if route is not None]
+
+    if missing:
+        print("No route summary yet: {}".format(", ".join(missing)))
+    if not routes:
+        raise SystemExit("No semantic slot routes found.")
+
+    if args.matrix:
+        print_route_matrix(routes)
+    else:
+        for route in routes:
+            print_job_route(route)
 
 
 if __name__ == "__main__":
