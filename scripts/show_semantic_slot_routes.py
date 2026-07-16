@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Show the latest slot-level semantic routes from OzSTAR job logs."""
+
+import argparse
+import getpass
+import re
+import subprocess
+from pathlib import Path
+
+
+ROUTE_MARKER = "Semantic slot route |"
+ROUTE_RE = re.compile(
+    r"t_env=(?P<t_env>\d+) \| TOKEN=\[(?P<token>.*?)\] "
+    r"\| BIAS=\[(?P<bias>.*?)\] \| frozen=(?P<frozen>\d+) "
+    r"\| version=(?P<version>\d+)"
+)
+
+LABELS = (
+    ("obscons", "OBS"),
+    ("tempstable", "TEMP"),
+    ("gradimp", "GIMP"),
+    ("gradcons", "GCONS"),
+    ("paramsens", "PSENS"),
+    ("counterfact", "CF"),
+)
+
+
+def active_job_ids():
+    result = subprocess.run(
+        ["squeue", "-h", "-u", getpass.getuser(), "-o", "%A"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def last_route_line(path, chunk_size=64 * 1024):
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        position = handle.tell()
+        remainder = b""
+        marker = ROUTE_MARKER.encode()
+        while position > 0:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            handle.seek(position)
+            data = handle.read(read_size) + remainder
+            lines = data.split(b"\n")
+            remainder = lines[0]
+            for line in reversed(lines[1:]):
+                if marker in line:
+                    return line.decode("utf-8", errors="replace")
+        if marker in remainder:
+            return remainder.decode("utf-8", errors="replace")
+    return None
+
+
+def split_names(value):
+    return [name for name in value.split(",") if name]
+
+
+def label_for(path, job_id):
+    stem = path.stem
+    for needle, label in LABELS:
+        if needle in stem:
+            return label
+    return job_id
+
+
+def route_for_job(log_dir, job_id):
+    candidates = list(log_dir.glob("*_{}.out".format(job_id)))
+    candidates += list(log_dir.glob("*_{}.err".format(job_id)))
+    best = None
+    for path in candidates:
+        line = last_route_line(path)
+        if line is None:
+            continue
+        match = ROUTE_RE.search(line)
+        if match is None:
+            continue
+        record = {
+            "job": job_id,
+            "label": label_for(path, job_id),
+            "path": path,
+            "t_env": int(match.group("t_env")),
+            "frozen": int(match.group("frozen")),
+            "version": int(match.group("version")),
+            "token": split_names(match.group("token")),
+            "bias": split_names(match.group("bias")),
+        }
+        if best is None or record["t_env"] > best["t_env"]:
+            best = record
+    return best
+
+
+def slot_group(name):
+    match = re.match(r"(ally|enemy)_(\d+)_", name)
+    if match:
+        return "{}_{}".format(match.group(1), match.group(2))
+    return "self"
+
+
+def slot_sort_key(name):
+    feature_order = {
+        "move_north": 0,
+        "move_south": 1,
+        "move_east": 2,
+        "move_west": 3,
+        "visible": 4,
+        "attack_available": 4,
+        "distance": 5,
+        "relative_x": 6,
+        "relative_y": 7,
+        "health": 8,
+        "shield": 9,
+    }
+    match = re.match(r"(ally|enemy)_(\d+)_(.*)", name)
+    if match:
+        side_order = 1 if match.group(1) == "ally" else 2
+        entity_index = int(match.group(2))
+        feature = match.group(3)
+    else:
+        side_order = 0
+        entity_index = 0
+        feature = name[5:] if name.startswith("self_") else name
+    feature_rank = feature_order.get(feature)
+    if feature_rank is None:
+        if feature.startswith("unit_type_"):
+            feature_rank = 10
+        elif feature.startswith("last_action_"):
+            feature_rank = 11
+        else:
+            feature_rank = 12
+    return side_order, entity_index, feature_rank, feature
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("job_ids", nargs="*", help="Slurm job IDs; defaults to active jobs")
+    parser.add_argument("--log-dir", default="ozstar_logs")
+    args = parser.parse_args()
+
+    job_ids = args.job_ids or active_job_ids()
+    log_dir = Path(args.log_dir)
+    routes = [route_for_job(log_dir, job_id) for job_id in job_ids]
+    missing = [job_id for job_id, route in zip(job_ids, routes) if route is None]
+    routes = [route for route in routes if route is not None]
+
+    if missing:
+        print("No route summary yet: {}".format(", ".join(missing)))
+    if not routes:
+        raise SystemExit("No semantic slot routes found.")
+
+    print("\nLATEST ROUTE SUMMARY")
+    print("{:<8} {:<10} {:>10} {:>7} {:>8} {:>7} {:>7}".format(
+        "LABEL", "JOB", "T_ENV", "FROZEN", "VERSION", "TOKEN", "BIAS"
+    ))
+    for route in routes:
+        print("{:<8} {:<10} {:>10} {:>7} {:>8} {:>7} {:>7}".format(
+            route["label"],
+            route["job"],
+            route["t_env"],
+            route["frozen"],
+            route["version"],
+            len(route["token"]),
+            len(route["bias"]),
+        ))
+
+    slots = []
+    seen = set()
+    for route in routes:
+        for name in route["token"] + route["bias"]:
+            if name not in seen:
+                seen.add(name)
+                slots.append(name)
+
+    slots.sort(key=slot_sort_key)
+
+    route_maps = []
+    for route in routes:
+        mapping = {name: "T" for name in route["token"]}
+        mapping.update({name: "B" for name in route["bias"]})
+        route_maps.append(mapping)
+
+    slot_width = max(28, max(len(name) for name in slots))
+    labels = [route["label"] for route in routes]
+    print("\nSLOT ROUTE MATRIX  (T=Transformer token, B=Simple bias)")
+    print("{:<{width}}  {}".format(
+        "SLOT", "  ".join("{:>6}".format(label) for label in labels), width=slot_width
+    ))
+    print("-" * (slot_width + 2 + 8 * len(labels)))
+
+    previous_group = None
+    for slot in slots:
+        group = slot_group(slot)
+        if previous_group is not None and group != previous_group:
+            print()
+        values = [mapping.get(slot, "-") for mapping in route_maps]
+        print("{:<{width}}  {}".format(
+            slot, "  ".join("{:>6}".format(value) for value in values), width=slot_width
+        ))
+        previous_group = group
+
+
+if __name__ == "__main__":
+    main()
