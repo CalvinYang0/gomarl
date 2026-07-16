@@ -977,6 +977,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         self._semantic_online_score_count = 0
         self._semantic_forced_group = None
         self._semantic_forced_token_branch = None
+        self.capture_semantic_observation_score = False
 
         self.public_self_dim = 1 + unit_type_bits
         self.public_ally_dim = 1 + unit_type_bits
@@ -1056,10 +1057,20 @@ class PublicTransformerRelationCapturer(nn.Module):
         return self.semantic_router_mode is not None
 
     def semantic_router_uses_probe(self):
-        return self.semantic_probe_scale is not None
+        return self.semantic_probe_scale is not None and not bool(
+            self.semantic_route_frozen.item()
+        )
 
     def semantic_router_needs_parameter_graph(self):
-        return self.semantic_router_mode == "parameter_sensitivity"
+        return self.semantic_router_mode == "parameter_sensitivity" and not bool(
+            self.semantic_route_frozen.item()
+        )
+
+    def semantic_router_needs_observation_score(self):
+        return self.semantic_router_mode in {
+            "observer_consistency",
+            "temporal_stability",
+        } and not bool(self.semantic_route_frozen.item())
 
     def semantic_router_needs_counterfactual(self):
         return self.semantic_router_mode == "counterfactual"
@@ -1079,7 +1090,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         return route
 
     def _semantic_scales(self, reference):
-        if self.semantic_probe_scale is None:
+        if not self.semantic_router_uses_probe():
             return reference.new_ones(len(self.semantic_names))
         return self.semantic_probe_scale.to(device=reference.device, dtype=reference.dtype)
 
@@ -1217,7 +1228,7 @@ class PublicTransformerRelationCapturer(nn.Module):
     def _side(self, side_id, device):
         if self.private_owner_side:
             return self.side_embedding.weight.new_zeros(self.relation_dim).to(device)
-        return self.side_embedding(th.tensor(side_id, device=device, dtype=th.long))
+        return self.side_embedding.weight[int(side_id)]
 
     def _own_feat(self, self_feat):
         return self_feat[:, :, self.move_dim :]
@@ -1461,16 +1472,26 @@ class PublicTransformerRelationCapturer(nn.Module):
         return self_embed, ally_embed, enemy_embed
 
     def _private_side(self, side_id, device):
-        return self.private_side_embedding(th.tensor(side_id, device=device, dtype=th.long))
+        return self.private_side_embedding.weight[int(side_id)]
 
-    def _scaled_public_features(self, features, value_dim, route, scales):
+    def _scaled_public_features(
+        self,
+        features,
+        value_dim,
+        route,
+        scales,
+        need_token_features=True,
+        apply_probe_scales=False,
+    ):
         value_end = 1 + value_dim
-        parts = [
-            features[..., :1] * scales[0],
-            features[..., 1:value_end] * scales[1],
-            features[..., value_end:] * scales[2],
-        ]
-        full_features = th.cat(parts, dim=-1)
+        parts = [features[..., :1], features[..., 1:value_end], features[..., value_end:]]
+        if apply_probe_scales:
+            parts = [part * scales[index] for index, part in enumerate(parts)]
+            full_features = th.cat(parts, dim=-1)
+        else:
+            full_features = features
+        if not need_token_features:
+            return full_features, None
         token_features = th.cat(
             [part * route[index] for index, part in enumerate(parts)],
             dim=-1,
@@ -1487,24 +1508,41 @@ class PublicTransformerRelationCapturer(nn.Module):
     ):
         route = self._current_semantic_token_route(self_feat)
         scales = self._semantic_scales(self_feat)
+        apply_probe_scales = self.semantic_router_uses_probe() and th.is_grad_enabled()
+        public_route_all = bool((route[:3] > 0.5).all().item())
         self_public = self._self_public_features(self_feat)
         ally_public = self._ally_public_features(ally_feat, ally_mask)
         enemy_public = self._enemy_public_features(enemy_feat, enemy_mask)
         self_full, self_token_features = self._scaled_public_features(
-            self_public, self.self_value_dim, route, scales
+            self_public,
+            self.self_value_dim,
+            route,
+            scales,
+            need_token_features=not public_route_all,
+            apply_probe_scales=apply_probe_scales,
         )
         ally_full, ally_token_features = self._scaled_public_features(
-            ally_public, self.ally_value_dim, route, scales
+            ally_public,
+            self.ally_value_dim,
+            route,
+            scales,
+            need_token_features=not public_route_all,
+            apply_probe_scales=apply_probe_scales,
         )
         enemy_full, enemy_token_features = self._scaled_public_features(
-            enemy_public, self.enemy_value_dim, route, scales
+            enemy_public,
+            self.enemy_value_dim,
+            route,
+            scales,
+            need_token_features=not public_route_all,
+            apply_probe_scales=apply_probe_scales,
         )
 
         ally_encoder = self.self_public_encoder if self.merge_friendly_public_side else self.ally_public_encoder
         self_full_embed = self.self_public_encoder(self_full)
         ally_full_embed = ally_encoder(ally_full) * ally_mask.unsqueeze(-1).float()
         enemy_full_embed = self.enemy_public_encoder(enemy_full) * enemy_mask.unsqueeze(-1).float()
-        if bool((route[:3] > 0.5).all().item()):
+        if public_route_all:
             self_token_base = self_full_embed
             ally_token_base = ally_full_embed
             enemy_token_base = enemy_full_embed
@@ -1524,24 +1562,33 @@ class PublicTransformerRelationCapturer(nn.Module):
         enemy_tokens = enemy_tokens * enemy_mask.unsqueeze(-1).float()
 
         geometry_scale = scales[3]
-        self_geometry = self.self_private_encoder(self_feat[:, :, : self.move_dim] * geometry_scale)
-        ally_geometry = self.ally_private_encoder(ally_feat[:, :, :, :4] * geometry_scale)
-        enemy_geometry = self.enemy_private_encoder(enemy_feat[:, :, :, :4] * geometry_scale)
+        self_geometry_input = self_feat[:, :, : self.move_dim]
+        ally_geometry_input = ally_feat[:, :, :, :4]
+        enemy_geometry_input = enemy_feat[:, :, :, :4]
+        if apply_probe_scales:
+            self_geometry_input = self_geometry_input * geometry_scale
+            ally_geometry_input = ally_geometry_input * geometry_scale
+            enemy_geometry_input = enemy_geometry_input * geometry_scale
+        self_geometry = self.self_private_encoder(self_geometry_input)
+        ally_geometry = self.ally_private_encoder(ally_geometry_input)
+        enemy_geometry = self.enemy_private_encoder(enemy_geometry_input)
         ally_geometry = ally_geometry * ally_mask.unsqueeze(-1).float()
         enemy_geometry = enemy_geometry * enemy_mask.unsqueeze(-1).float()
 
         owner_scale = scales[4]
-        self_owner = self._private_side(0, self_feat.device).view(1, 1, -1) * owner_scale
+        self_owner = self._private_side(0, self_feat.device).view(1, 1, -1)
         ally_owner = (
             self._private_side(1, self_feat.device).view(1, 1, 1, -1)
             * ally_mask.unsqueeze(-1).float()
-            * owner_scale
         )
         enemy_owner = (
             self._private_side(2, self_feat.device).view(1, 1, 1, -1)
             * enemy_mask.unsqueeze(-1).float()
-            * owner_scale
         )
+        if apply_probe_scales:
+            self_owner = self_owner * owner_scale
+            ally_owner = ally_owner * owner_scale
+            enemy_owner = enemy_owner * owner_scale
 
         self_token = self_token + route[3] * self_geometry + route[4] * self_owner
         ally_tokens = ally_tokens + route[3] * ally_geometry + route[4] * ally_owner
@@ -1696,6 +1743,15 @@ class PublicTransformerRelationCapturer(nn.Module):
         prev_enemy_feat,
     ):
         if self.semantic_router_mode not in {"observer_consistency", "temporal_stability"}:
+            return
+        # Rollout and target-network forwards run under no_grad and cannot
+        # contribute to the learner-side routing estimate. Once the route is
+        # frozen, collecting further statistics is also redundant.
+        if (
+            not th.is_grad_enabled()
+            or not self.capture_semantic_observation_score
+            or bool(self.semantic_route_frozen.item())
+        ):
             return
         if self.semantic_router_mode == "observer_consistency":
             current = self._observer_consistency_signatures(
@@ -1982,7 +2038,6 @@ class PublicTransformerRelationCapturer(nn.Module):
             enemy_start = 2 + ally_tokens.size(2)
             enemy_tokens = encoded[:, :, enemy_start:] * enemy_mask.unsqueeze(-1).float()
         self.latest_encoded_enemy_tokens = enemy_tokens
-        self.latest_aux_stats.update(self.semantic_router_stats())
         return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
 
 
@@ -5018,6 +5073,10 @@ class CleanHyperAgent(nn.Module):
         self.latest_teacher_q = None
         self.latest_generated_interaction_head = None
         self.latest_generated_interaction_head_graph = None
+        self.capture_semantic_parameter_graph = False
+        self.capture_generated_interaction_head = bool(
+            getattr(args, "save_battle_trace", False)
+        )
         self.latest_route_logits = None
         self.latest_route_indices = None
         self.latest_graph_adj = None
@@ -6472,18 +6531,29 @@ class CleanHyperAgent(nn.Module):
             batch_size * n_agents, self.rpg_interaction_input_dim, 1
         )
         interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(batch_size * n_agents, 1, 1)
-        generated_head = th.cat(
-            [
-                interaction_out_w.reshape(batch_size * n_agents, -1),
-                interaction_out_b.reshape(batch_size * n_agents, -1),
-            ],
-            dim=-1,
-        )
-        self.latest_generated_interaction_head = generated_head.detach().view(batch_size, n_agents, -1)
-        if (
+        capture_parameter_graph = (
             SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
             == "parameter_sensitivity"
+            and self.capture_semantic_parameter_graph
+        )
+        generated_head = None
+        if (
+            self.capture_generated_interaction_head
+            or capture_parameter_graph
+            or self.model_type in PUBLIC_TRANSFORMER_SMOOTH_HEAD_VARIANTS
         ):
+            generated_head = th.cat(
+                [
+                    interaction_out_w.reshape(batch_size * n_agents, -1),
+                    interaction_out_b.reshape(batch_size * n_agents, -1),
+                ],
+                dim=-1,
+            )
+        if self.capture_generated_interaction_head and generated_head is not None:
+            self.latest_generated_interaction_head = generated_head.detach().view(
+                batch_size, n_agents, -1
+            )
+        if capture_parameter_graph:
             self.latest_generated_interaction_head_graph = generated_head.view(
                 batch_size, n_agents, -1
             )
@@ -6827,15 +6897,20 @@ class CleanHyperAgent(nn.Module):
             ego_out_b = self.rpg_ego_out_b(flat_condition).view(
                 batch_size * n_agents, 1, self.rpg_n_ego_actions
             )
-            generated_ego_head = th.cat(
-                [
-                    ego_bottleneck_w.reshape(batch_size * n_agents, -1),
-                    ego_bottleneck_b.reshape(batch_size * n_agents, -1),
-                    ego_out_w.reshape(batch_size * n_agents, -1),
-                    ego_out_b.reshape(batch_size * n_agents, -1),
-                ],
-                dim=-1,
-            )
+            if (
+                SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
+                == "parameter_sensitivity"
+                and self.capture_semantic_parameter_graph
+            ):
+                generated_ego_head = th.cat(
+                    [
+                        ego_bottleneck_w.reshape(batch_size * n_agents, -1),
+                        ego_bottleneck_b.reshape(batch_size * n_agents, -1),
+                        ego_out_w.reshape(batch_size * n_agents, -1),
+                        ego_out_b.reshape(batch_size * n_agents, -1),
+                    ],
+                    dim=-1,
+                )
 
             if self.model_type in PUBLIC_TRANSFORMER_PARAM_RESIDUAL_HEAD_VARIANTS:
                 gate = th.sigmoid(self.rpg_residual_ego_gate(flat_condition)).view(
@@ -7058,6 +7133,7 @@ class CleanHyperAgent(nn.Module):
         if (
             SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
             == "parameter_sensitivity"
+            and self.capture_semantic_parameter_graph
             and generated_ego_head is not None
             and self.latest_generated_interaction_head_graph is not None
         ):

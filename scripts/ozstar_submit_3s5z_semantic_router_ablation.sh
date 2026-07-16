@@ -15,6 +15,7 @@ TIME="${TIME:-20:00:00}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
 BUFFER_SIZE="${BUFFER_SIZE:-500}"
+THREADS_PER_PROCESS="${THREADS_PER_PROCESS:-4}"
 T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 USE_WANDB="${USE_WANDB:-True}"
@@ -40,7 +41,7 @@ short_name() {
 echo "== Submit 3s5z semantic-router ablation =="
 echo "models: $MODELS"
 echo "seeds: $SEEDS"
-echo "setting: ${CPUS_PER_TASK}c ${MEM} ${TIME}, br=${BATCH_SIZE_RUN}, batch=${BATCH_SIZE}, buffer=${BUFFER_SIZE}"
+echo "setting: ${CPUS_PER_TASK}c ${MEM} ${TIME}, br=${BATCH_SIZE_RUN}, batch=${BATCH_SIZE}, buffer=${BUFFER_SIZE}, threads=${THREADS_PER_PROCESS}"
 
 for model_type in $MODELS; do
   for seed in $SEEDS; do
@@ -56,7 +57,7 @@ for model_type in $MODELS; do
       --job-name="$job_name" \
       --output=ozstar_logs/%x_%j.out \
       --error=ozstar_logs/%x_%j.err \
-      --export=ALL,MAP_NAME="$MAP_NAME",MODEL_TYPE="$model_type",SEED="$seed",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",EXTRA_ARGS="$EXTRA_ARGS" \
+      --export=ALL,MAP_NAME="$MAP_NAME",MODEL_TYPE="$model_type",SEED="$seed",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",OMP_NUM_THREADS="$THREADS_PER_PROCESS",MKL_NUM_THREADS="$THREADS_PER_PROCESS",EXTRA_ARGS="$EXTRA_ARGS torch_num_threads=$THREADS_PER_PROCESS torch_num_interop_threads=1" \
       scripts/ozstar_train_offline.sbatch
   done
 done

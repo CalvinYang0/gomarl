@@ -68,6 +68,12 @@ class CleanLearner:
         self.semantic_router_audit_interval = int(
             getattr(args, "clean_semantic_router_audit_interval", 250000)
         )
+        self.semantic_parameter_probe_timesteps = max(
+            1, int(getattr(args, "clean_semantic_parameter_probe_timesteps", 4))
+        )
+        self.semantic_observation_probe_timesteps = max(
+            1, int(getattr(args, "clean_semantic_observation_probe_timesteps", 8))
+        )
         self.last_semantic_router_audit_t = -self.semantic_router_audit_interval
         self.latest_semantic_counterfactual_stats = {}
 
@@ -80,6 +86,17 @@ class CleanLearner:
         if capturer is None or not bool(getattr(capturer, "semantic_router_active", False)):
             return None
         return capturer
+
+    @staticmethod
+    def _uniform_probe_times(sequence_length, probe_count):
+        sequence_length = max(1, int(sequence_length))
+        probe_count = min(max(1, int(probe_count)), sequence_length)
+        if probe_count == 1:
+            return {sequence_length // 2}
+        return {
+            round(index * (sequence_length - 1) / (probe_count - 1))
+            for index in range(probe_count)
+        }
 
     def _sync_semantic_router_to_target(self, router):
         target_router = self._semantic_router(self.target_mac)
@@ -118,15 +135,25 @@ class CleanLearner:
         stats = {}
         try:
             with th.no_grad():
+                current_route = router.semantic_token_route.detach().clone()
+                router.clear_semantic_route_override()
+                baseline_loss = self._counterfactual_td_loss(
+                    batch, actions, targets, td_mask
+                )
                 for group_index, group_name in enumerate(router.semantic_names):
-                    router.set_semantic_route_override(group_index, True)
-                    token_loss = self._counterfactual_td_loss(
+                    current_token_branch = bool(current_route[group_index].item())
+                    router.set_semantic_route_override(
+                        group_index, not current_token_branch
+                    )
+                    alternative_loss = self._counterfactual_td_loss(
                         batch, actions, targets, td_mask
                     )
-                    router.set_semantic_route_override(group_index, False)
-                    bias_loss = self._counterfactual_td_loss(
-                        batch, actions, targets, td_mask
-                    )
+                    if current_token_branch:
+                        token_loss = baseline_loss
+                        bias_loss = alternative_loss
+                    else:
+                        token_loss = alternative_loss
+                        bias_loss = baseline_loss
                     score = bias_loss - token_loss
                     scores.append(score)
                     stats[
@@ -150,6 +177,22 @@ class CleanLearner:
         avail_actions = batch["avail_actions"]
         semantic_router = self._semantic_router(self.mac)
         generated_parameter_graphs = []
+        parameter_probe_times = set()
+        observation_probe_times = set()
+        if (
+            semantic_router is not None
+            and semantic_router.semantic_router_needs_parameter_graph()
+        ):
+            parameter_probe_times = self._uniform_probe_times(
+                batch.max_seq_length, self.semantic_parameter_probe_timesteps
+            )
+        if (
+            semantic_router is not None
+            and semantic_router.semantic_router_needs_observation_score()
+        ):
+            observation_probe_times = self._uniform_probe_times(
+                batch.max_seq_length, self.semantic_observation_probe_timesteps
+            )
 
         with self._amp_context():
             mac_out = []
@@ -159,6 +202,13 @@ class CleanLearner:
             aux_stat_values = {}
             self.mac.init_hidden(batch.batch_size)
             for t in range(batch.max_seq_length):
+                self.mac.agent.capture_semantic_parameter_graph = (
+                    t in parameter_probe_times
+                )
+                if semantic_router is not None:
+                    semantic_router.capture_semantic_observation_score = (
+                        t in observation_probe_times
+                    )
                 mac_out.append(self.mac.forward(batch, t=t))
                 if (
                     semantic_router is not None
@@ -188,6 +238,9 @@ class CleanLearner:
                 teacher_q = getattr(self.mac, "latest_teacher_q", None)
                 if teacher_q is not None:
                     teacher_mac_out.append(teacher_q)
+            self.mac.agent.capture_semantic_parameter_graph = False
+            if semantic_router is not None:
+                semantic_router.capture_semantic_observation_score = False
             mac_out = th.stack(mac_out, dim=1)
             teacher_mac_out = (
                 th.stack(teacher_mac_out, dim=1)

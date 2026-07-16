@@ -727,6 +727,8 @@ clean_semantic_router_temperature: 0.1
 clean_semantic_router_warmup_steps: 250000
 clean_semantic_router_freeze_steps: 1500000
 clean_semantic_router_audit_interval: 250000
+clean_semantic_parameter_probe_timesteps: 4
+clean_semantic_observation_probe_timesteps: 8
 clean_relation_distill_coef: 0.05
 clean_relation_teacher_td_coef: 0.2
 clean_smooth_head_loss_coef: 0.01
