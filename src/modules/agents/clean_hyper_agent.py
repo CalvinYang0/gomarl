@@ -917,7 +917,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         private_bias_style="pair_mlp",
         semantic_router_mode=None,
         semantic_router_ema=0.99,
-        semantic_router_token_budget=-1,
+        semantic_router_threshold=0.5,
         semantic_router_temperature=0.1,
         semantic_router_warmup_steps=250000,
         semantic_router_freeze_steps=1500000,
@@ -949,7 +949,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.latest_encoded_enemy_tokens = None
         self.semantic_router_mode = semantic_router_mode
         self.semantic_router_ema = float(semantic_router_ema)
-        requested_token_budget = int(semantic_router_token_budget)
+        self.semantic_router_threshold = float(semantic_router_threshold)
+        if not 0.0 < self.semantic_router_threshold < 1.0:
+            raise ValueError("semantic_router_threshold must be strictly between 0 and 1")
         self.semantic_router_temperature = float(semantic_router_temperature)
         self.semantic_router_warmup_steps = int(semantic_router_warmup_steps)
         self.semantic_router_freeze_steps = int(semantic_router_freeze_steps)
@@ -995,10 +997,6 @@ class PublicTransformerRelationCapturer(nn.Module):
             self.semantic_fields,
             manual_route,
         ) = self._build_semantic_slot_layout()
-        manual_budget = int(manual_route.sum().item())
-        self.semantic_router_token_budget = (
-            requested_token_budget if requested_token_budget > 0 else manual_budget
-        )
         self.register_buffer("semantic_manual_token_route", manual_route)
         self.register_buffer("semantic_token_route", manual_route.clone())
         self.register_buffer("semantic_token_probability", manual_route.clone())
@@ -1300,11 +1298,27 @@ class PublicTransformerRelationCapturer(nn.Module):
         return score
 
     def _semantic_route_probabilities(self, scores):
-        budget = max(1, min(self.semantic_router_token_budget, scores.numel() - 1))
-        ordered = th.sort(scores, descending=True).values
-        boundary = 0.5 * (ordered[budget - 1] + ordered[budget])
         temperature = max(self.semantic_router_temperature, 1e-6)
-        return th.sigmoid((scores - boundary) / temperature)
+        if self.semantic_router_mode in {
+            "observer_consistency",
+            "temporal_stability",
+            "gradient_consistency",
+        }:
+            # These criteria are already normalized to [0, 1].
+            return scores.clamp(min=0.0, max=1.0)
+        if self.semantic_router_mode in {
+            "gradient_importance",
+            "parameter_sensitivity",
+        }:
+            # Their absolute scales drift during learning. Compare every slot
+            # with the current mean sensitivity without fixing how many pass.
+            reference = scores.mean().clamp(min=1e-8)
+            relative_score = scores / reference
+            return th.sigmoid((relative_score - 1.0) / temperature)
+        # Counterfactual scores are signed: positive means TOKEN is expected to
+        # lower TD loss. Normalize magnitude but preserve the zero boundary.
+        reference = scores.abs().mean().clamp(min=1e-8)
+        return th.sigmoid(scores / (reference * temperature))
 
     def _apply_semantic_route_scores(self, scores, t_env):
         scores = scores.detach().to(self.semantic_route_score)
@@ -1334,19 +1348,16 @@ class PublicTransformerRelationCapturer(nn.Module):
         if bool(self.semantic_route_frozen.item()):
             return
 
-        budget = max(1, min(self.semantic_router_token_budget, len(self.semantic_names) - 1))
-        tie_break = self.semantic_manual_token_route * 1e-7
-        top_indices = th.topk(self.semantic_route_score + tie_break, k=budget).indices
-        route = th.zeros_like(self.semantic_token_route)
-        route[top_indices] = 1.0
+        probability = self._semantic_route_probabilities(self.semantic_route_score)
+        route = (probability > self.semantic_router_threshold).to(
+            dtype=self.semantic_token_route.dtype
+        )
         self.semantic_token_route.copy_(route)
         switch_rate = (route != previous_route).float().mean()
         self.semantic_route_last_switch_rate.copy_(switch_rate)
         if bool(switch_rate.item() > 0):
             self.semantic_route_version.add_(1)
-        self.semantic_token_probability.copy_(
-            self._semantic_route_probabilities(self.semantic_route_score)
-        )
+        self.semantic_token_probability.copy_(probability)
         if t_env >= self.semantic_router_freeze_steps:
             if not bool(self.semantic_route_frozen.item()):
                 self.semantic_route_version.add_(1)
@@ -1391,12 +1402,8 @@ class PublicTransformerRelationCapturer(nn.Module):
             probability * probability.log()
             + (1.0 - probability) * (1.0 - probability).log()
         ).mean()
-        budget = max(
-            1,
-            min(self.semantic_router_token_budget, len(self.semantic_names) - 1),
-        )
-        ordered_scores = th.sort(self.semantic_route_score, descending=True).values
-        score_margin = ordered_scores[budget - 1] - ordered_scores[budget]
+        threshold_distance = (probability - self.semantic_router_threshold).abs()
+        threshold_margin = threshold_distance.min()
         stats = {
             "semantic_route_token_count": self.semantic_token_route.sum().detach(),
             "semantic_route_bias_count": (1.0 - self.semantic_token_route).sum().detach(),
@@ -1406,7 +1413,11 @@ class PublicTransformerRelationCapturer(nn.Module):
             "semantic_route_stability": (1.0 - self.semantic_route_last_switch_rate).detach(),
             "semantic_route_score_mean": self.semantic_route_score.mean().detach(),
             "semantic_route_score_std": self.semantic_route_score.std(unbiased=False).detach(),
-            "semantic_route_score_margin": score_margin.detach(),
+            "semantic_route_score_margin": threshold_margin.detach(),
+            "semantic_route_threshold": probability.new_tensor(
+                self.semantic_router_threshold
+            ),
+            "semantic_route_threshold_margin": threshold_margin.detach(),
             "semantic_route_probability_entropy": entropy.detach(),
             "semantic_route_manual_agreement": (
                 self.semantic_token_route == self.semantic_manual_token_route
@@ -4259,8 +4270,8 @@ class CleanHyperAgent(nn.Module):
         self.public_transformer_layers = int(getattr(args, "clean_public_transformer_layers", 1))
         self.public_transformer_heads = int(getattr(args, "clean_public_transformer_heads", 4))
         self.semantic_router_ema = float(getattr(args, "clean_semantic_router_ema", 0.99))
-        self.semantic_router_token_budget = int(
-            getattr(args, "clean_semantic_router_token_budget", -1)
+        self.semantic_router_threshold = float(
+            getattr(args, "clean_semantic_router_threshold", 0.5)
         )
         self.semantic_router_temperature = float(
             getattr(args, "clean_semantic_router_temperature", 0.1)
@@ -5656,7 +5667,7 @@ class CleanHyperAgent(nn.Module):
                 ),
                 semantic_router_mode=SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type),
                 semantic_router_ema=self.semantic_router_ema,
-                semantic_router_token_budget=self.semantic_router_token_budget,
+                semantic_router_threshold=self.semantic_router_threshold,
                 semantic_router_temperature=self.semantic_router_temperature,
                 semantic_router_warmup_steps=self.semantic_router_warmup_steps,
                 semantic_router_freeze_steps=self.semantic_router_freeze_steps,

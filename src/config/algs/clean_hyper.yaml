@@ -723,9 +723,9 @@ clean_public_transformer_layers: 1
 clean_public_transformer_heads: 4
 clean_public_transformer_delta_loss_coef: 0.05
 clean_semantic_router_ema: 0.99
-# <= 0 preserves the simple-bias baseline capacity by routing the same number
-# of raw observation slots through the Transformer-token path.
-clean_semantic_router_token_budget: -1
+# Every raw observation slot is routed independently. TOKEN/BIAS branch counts
+# are learned rather than fixed; higher values make TOKEN admission stricter.
+clean_semantic_router_threshold: 0.5
 clean_semantic_router_temperature: 0.1
 clean_semantic_router_warmup_steps: 250000
 clean_semantic_router_freeze_steps: 1500000
