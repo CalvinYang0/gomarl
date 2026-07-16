@@ -27,13 +27,25 @@ results_path = join(dirname(dirname(abspath(__file__))), "results")
 def my_main(_run, _config, _log):
     # Setting the random seed throughout the modules
     config = config_copy(_config)
-    if config.get("torch_num_threads") is not None:
-        th.set_num_threads(int(config["torch_num_threads"]))
+    torch_num_threads = config.get("torch_num_threads")
+    if torch_num_threads is None and not bool(config.get("use_cuda", False)):
+        torch_num_threads = os.environ.get("SLURM_CPUS_PER_TASK")
+    if torch_num_threads is not None:
+        torch_num_threads = max(1, int(torch_num_threads))
+        th.set_num_threads(torch_num_threads)
+        config["torch_num_threads"] = torch_num_threads
     if config.get("torch_num_interop_threads") is not None:
         try:
             th.set_num_interop_threads(int(config["torch_num_interop_threads"]))
         except RuntimeError as exc:
             _log.warning("Could not set torch_num_interop_threads: {}".format(exc))
+    _log.info(
+        "PyTorch CPU threads: intra_op={}, inter_op={}, slurm_cpus={}".format(
+            th.get_num_threads(),
+            th.get_num_interop_threads(),
+            os.environ.get("SLURM_CPUS_PER_TASK", "unset"),
+        )
+    )
     np.random.seed(config["seed"])
     th.manual_seed(config["seed"])
     if th.cuda.is_available():

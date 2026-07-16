@@ -67,6 +67,9 @@ try:
     import torch
     print("torch:", torch.__version__)
     print("cuda_available:", torch.cuda.is_available())
+    print("torch_num_threads_preflight:", torch.get_num_threads())
+    print("torch_num_interop_threads_preflight:", torch.get_num_interop_threads())
+    print("slurm_cpus_per_task:", os.environ.get("SLURM_CPUS_PER_TASK"))
 except Exception as exc:
     print("torch_check_failed:", repr(exc))
 try:
