@@ -11,7 +11,7 @@ MODELS="${MODELS:-rpg_simple_bias_observer_consistency_router_hypercond rpg_simp
 
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
 MEM="${MEM:-64G}"
-TIME="${TIME:-24:00:00}"
+TIME="${TIME:-20:00:00}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
 BUFFER_SIZE="${BUFFER_SIZE:-500}"
