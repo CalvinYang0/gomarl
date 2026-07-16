@@ -10,8 +10,10 @@ MAP_NAME="${MAP_NAME:-3s5z_vs_3s6z}"
 SEEDS="${SEEDS:-1}"
 MODELS="${MODELS:-rpg_simple_bias_observer_consistency_router_hypercond rpg_simple_bias_temporal_stability_router_hypercond rpg_simple_bias_gradient_importance_router_hypercond rpg_simple_bias_gradient_consistency_router_hypercond rpg_simple_bias_parameter_sensitivity_router_hypercond rpg_simple_bias_counterfactual_router_hypercond}"
 
-CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
-MEM="${MEM:-64G}"
+# Jobmonitor shows these CPU-only runs sustain roughly four busy cores. Keep
+# one spare core for environment/runner overhead instead of reserving a node.
+CPUS_PER_TASK="${CPUS_PER_TASK:-5}"
+MEM="${MEM:-32G}"
 TIME="${TIME:-20:00:00}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
