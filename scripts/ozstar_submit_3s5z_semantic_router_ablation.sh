@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # Keep the proven legacy CPU setting fixed. Every raw self/ally/enemy
-# observation scalar is threshold-routed independently; jobs change only the
-# criterion, while TOKEN/BIAS counts are free to vary.
+# observation scalar is threshold-routed independently. This reduced batch
+# retains only the three routing criteria selected after the 3s5z pilot.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 MAP_NAME="${MAP_NAME:-3s5z_vs_3s6z}"
 SEEDS="${SEEDS:-1}"
-MODELS="${MODELS:-rpg_simple_bias_observer_consistency_router_hypercond rpg_simple_bias_temporal_stability_router_hypercond rpg_simple_bias_gradient_importance_router_hypercond rpg_simple_bias_gradient_consistency_router_hypercond rpg_simple_bias_parameter_sensitivity_router_hypercond rpg_simple_bias_counterfactual_router_hypercond}"
+MODELS="${MODELS:-rpg_simple_bias_gradient_importance_router_hypercond rpg_simple_bias_parameter_sensitivity_router_hypercond rpg_simple_bias_counterfactual_router_hypercond}"
 
 # Preserve the legacy training setting. The batch script derives OMP/MKL thread
 # counts from SLURM_CPUS_PER_TASK, so do not cap PyTorch to four threads here.
@@ -20,7 +20,7 @@ BATCH_SIZE="${BATCH_SIZE:-32}"
 BUFFER_SIZE="${BUFFER_SIZE:-500}"
 TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-$CPUS_PER_TASK}"
 TORCH_NUM_INTEROP_THREADS="${TORCH_NUM_INTEROP_THREADS:-1}"
-T_MAX="${T_MAX:-10050000}"
+T_MAX="${T_MAX:-5050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 USE_WANDB="${USE_WANDB:-True}"
 WANDB_MODE="${WANDB_MODE:-offline}"
@@ -45,7 +45,7 @@ short_name() {
 echo "== Submit 3s5z semantic-router ablation =="
 echo "models: $MODELS"
 echo "seeds: $SEEDS"
-echo "setting: ${CPUS_PER_TASK}c ${MEM} ${TIME}, br=${BATCH_SIZE_RUN}, batch=${BATCH_SIZE}, buffer=${BUFFER_SIZE}, torch_threads=${TORCH_NUM_THREADS}/${TORCH_NUM_INTEROP_THREADS}"
+echo "setting: ${CPUS_PER_TASK}c ${MEM} ${TIME}, t_max=${T_MAX}, br=${BATCH_SIZE_RUN}, batch=${BATCH_SIZE}, buffer=${BUFFER_SIZE}, torch_threads=${TORCH_NUM_THREADS}/${TORCH_NUM_INTEROP_THREADS}"
 
 for model_type in $MODELS; do
   for seed in $SEEDS; do
