@@ -169,6 +169,34 @@ def print_job_route(route):
         print("  BIAS  : {}".format(", ".join(bias) if bias else "-"))
 
 
+def print_binary_mask(route):
+    """Print the exact shared 0/1 route tensor reconstructed from the log."""
+    mapping = {name: 1 for name in route["token"]}
+    mapping.update({name: 0 for name in route["bias"]})
+    groups = {}
+    for name in sorted(mapping, key=slot_sort_key):
+        groups.setdefault(slot_group(name), []).append(name)
+
+    print("\n" + "=" * 88)
+    print("{} | job={} | t_env={} | frozen={} | version={}".format(
+        route["label"],
+        route["job"],
+        route["t_env"],
+        route["frozen"],
+        route["version"],
+    ))
+    print("Shared mask: 1=Transformer TOKEN, 0=Simple BIAS")
+    print("Broadcast shape: self [1,1,D], ally [1,1,N_ally,D], enemy [1,1,N_enemy,D]")
+    print("All agents receive this same mask; only their observation values differ.")
+    print("=" * 88)
+    for group, names in groups.items():
+        fields = [feature_name(name, group) for name in names]
+        values = [str(mapping[name]) for name in names]
+        print("\n[{}]".format(group))
+        print("  fields: [{}]".format(", ".join(fields)))
+        print("  mask:   [{}]".format(", ".join(values)))
+
+
 def print_route_matrix(routes):
     print("\nLATEST ROUTE SUMMARY")
     print("{:<8} {:<10} {:>10} {:>7} {:>8} {:>7} {:>7}".format(
@@ -230,6 +258,11 @@ def main():
         action="store_true",
         help="compare jobs side by side instead of printing one job per section",
     )
+    parser.add_argument(
+        "--raw-mask",
+        action="store_true",
+        help="print the exact shared 1/0 route mask in self/ally/enemy tensor order",
+    )
     args = parser.parse_args()
 
     job_ids = args.job_ids or active_job_ids()
@@ -243,8 +276,13 @@ def main():
     if not routes:
         raise SystemExit("No semantic slot routes found.")
 
+    if args.matrix and args.raw_mask:
+        parser.error("--matrix and --raw-mask cannot be used together")
     if args.matrix:
         print_route_matrix(routes)
+    elif args.raw_mask:
+        for route in routes:
+            print_binary_mask(route)
     else:
         for route in routes:
             print_job_route(route)
