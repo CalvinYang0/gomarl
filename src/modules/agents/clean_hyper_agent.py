@@ -920,7 +920,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         semantic_router_threshold=0.5,
         semantic_router_temperature=0.1,
         semantic_router_warmup_steps=250000,
-        semantic_router_freeze_steps=1500000,
+        semantic_router_freeze_steps=5000000,
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -4280,7 +4280,7 @@ class CleanHyperAgent(nn.Module):
             getattr(args, "clean_semantic_router_warmup_steps", 250000)
         )
         self.semantic_router_freeze_steps = int(
-            getattr(args, "clean_semantic_router_freeze_steps", 1500000)
+            getattr(args, "clean_semantic_router_freeze_steps", 5000000)
         )
         self.public_transformer_delta_loss_coef = float(
             getattr(args, "clean_public_transformer_delta_loss_coef", self.public_delta_loss_coef)
