@@ -47,8 +47,8 @@ echo "setting: ${CPUS_PER_TASK}c ${MEM} ${TIME}, br=${BATCH_SIZE_RUN}, batch=${B
 for model_type in $MODELS; do
   for seed in $SEEDS; do
     tag="$(short_name "$model_type")"
-    run_name="${MAP_NAME}_${model_type}_slotthreshold_s${seed}"
-    job_name="3s5z_thr_${tag}_s${seed}"
+    run_name="${MAP_NAME}_${model_type}_slotthreshold_f5m_s${seed}"
+    job_name="3s5z_f5m_${tag}_s${seed}"
 
     echo "submit: model=$model_type seed=$seed run=$run_name"
     sbatch \
