@@ -8,7 +8,7 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 MAP_NAME="${MAP_NAME:-3s5z_vs_3s6z}"
 SEEDS="${SEEDS:-1}"
-MODELS="${MODELS:-rpg_simple_bias_observer_consistency_router_hypercond rpg_simple_bias_gradient_consistency_router_hypercond rpg_simple_bias_parameter_sensitivity_router_hypercond rpg_simple_bias_counterfactual_router_hypercond}"
+MODELS="${MODELS:-rpg_simple_bias_observer_consistency_router_hypercond rpg_simple_bias_temporal_stability_router_hypercond rpg_simple_bias_gradient_importance_router_hypercond rpg_simple_bias_gradient_consistency_router_hypercond rpg_simple_bias_parameter_sensitivity_router_hypercond rpg_simple_bias_counterfactual_router_hypercond}"
 
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
 MEM="${MEM:-64G}"
