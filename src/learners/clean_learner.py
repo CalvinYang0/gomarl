@@ -22,7 +22,7 @@ class CleanLearner:
         self.logger = logger
         self.params = [
             parameter
-            for name, parameter in self.mac.named_parameters()
+            for name, parameter in self.mac.agent.named_parameters()
             if not name.endswith("semantic_probe_scale")
         ]
         self.relation_mixer_gate = None
