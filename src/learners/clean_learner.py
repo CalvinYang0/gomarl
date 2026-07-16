@@ -23,7 +23,7 @@ class CleanLearner:
         self.params = [
             parameter
             for name, parameter in self.mac.agent.named_parameters()
-            if not name.endswith("semantic_probe_scale")
+            if not name.endswith(("semantic_probe_scale", "semantic_route_probe"))
         ]
         self.relation_mixer_gate = None
         self.target_relation_mixer_gate = None
@@ -76,6 +76,7 @@ class CleanLearner:
         )
         self.last_semantic_router_audit_t = -self.semantic_router_audit_interval
         self.latest_semantic_counterfactual_stats = {}
+        self.last_semantic_route_version_logged = -1
 
     def _amp_context(self):
         return th.cuda.amp.autocast(enabled=True) if self.use_amp else nullcontext()
@@ -346,13 +347,29 @@ class CleanLearner:
         self.optimiser.zero_grad()
         if semantic_router is not None and semantic_router.semantic_probe_scale is not None:
             semantic_router.semantic_probe_scale.grad = None
+        if semantic_router is not None and semantic_router.semantic_route_probe is not None:
+            semantic_router.semantic_route_probe.grad = None
         if self.use_amp:
             self.amp_scaler.scale(loss).backward()
             self.amp_scaler.unscale_(self.optimiser)
             semantic_gradient = (
                 None
-                if semantic_router is None or semantic_router.semantic_probe_scale is None
+                if (
+                    semantic_router is None
+                    or semantic_router.semantic_probe_scale is None
+                    or semantic_router.semantic_probe_scale.grad is None
+                )
                 else semantic_router.semantic_probe_scale.grad.detach()
+                / float(self.amp_scaler.get_scale())
+            )
+            semantic_route_gradient = (
+                None
+                if (
+                    semantic_router is None
+                    or semantic_router.semantic_route_probe is None
+                    or semantic_router.semantic_route_probe.grad is None
+                )
+                else semantic_router.semantic_route_probe.grad.detach()
                 / float(self.amp_scaler.get_scale())
             )
             grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
@@ -362,8 +379,21 @@ class CleanLearner:
             loss.backward()
             semantic_gradient = (
                 None
-                if semantic_router is None or semantic_router.semantic_probe_scale is None
+                if (
+                    semantic_router is None
+                    or semantic_router.semantic_probe_scale is None
+                    or semantic_router.semantic_probe_scale.grad is None
+                )
                 else semantic_router.semantic_probe_scale.grad.detach().clone()
+            )
+            semantic_route_gradient = (
+                None
+                if (
+                    semantic_router is None
+                    or semantic_router.semantic_route_probe is None
+                    or semantic_router.semantic_route_probe.grad is None
+                )
+                else semantic_router.semantic_route_probe.grad.detach().clone()
             )
             grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
             self.optimiser.step()
@@ -386,8 +416,19 @@ class CleanLearner:
                 semantic_router.update_semantic_router(
                     t_env, parameter_sensitivity_score.detach()
                 )
+            elif (
+                semantic_router.semantic_router_mode == "counterfactual"
+                and semantic_route_gradient is not None
+            ):
+                # First-order approximation of L_bias - L_token. Positive
+                # values mean routing the slot through TOKEN should lower TD loss.
+                semantic_router.update_semantic_router(
+                    t_env, -semantic_route_gradient
+                )
             if semantic_router.semantic_probe_scale is not None:
                 semantic_router.semantic_probe_scale.grad = None
+            if semantic_router.semantic_route_probe is not None:
+                semantic_router.semantic_route_probe.grad = None
             self._sync_semantic_router_to_target(semantic_router)
 
         self._audit_semantic_counterfactual(
@@ -408,6 +449,14 @@ class CleanLearner:
             if semantic_router is not None:
                 for stat_name, stat_value in semantic_router.semantic_router_stats().items():
                     self.logger.log_stat(stat_name, float(stat_value.item()), t_env)
+                route_version = int(semantic_router.semantic_route_version.item())
+                if route_version != self.last_semantic_route_version_logged:
+                    self.logger.console_logger.info(
+                        "Semantic slot route | t_env={} | {}".format(
+                            t_env, semantic_router.semantic_route_summary()
+                        )
+                    )
+                    self.last_semantic_route_version_logged = route_version
                 for stat_name, stat_value in self.latest_semantic_counterfactual_stats.items():
                     self.logger.log_stat(stat_name, float(stat_value.item()), t_env)
             if teacher_mac_out is not None:

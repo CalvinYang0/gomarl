@@ -227,8 +227,8 @@ hypernet_layers: 2
 #                                                  smoothness regularization.
 # - rpg_simple_bias_observer_consistency_router_hypercond: unchanged simple-bias
 #                                                  public Transformer with a
-#                                                  static semantic split learned
-#                                                  from observer consistency.
+#                                                  raw-slot split learned from
+#                                                  observer consistency.
 # - rpg_simple_bias_temporal_stability_router_hypercond: same controlled split,
 #                                                  scored by temporal stability.
 # - rpg_simple_bias_gradient_importance_router_hypercond: same controlled split,
@@ -239,8 +239,9 @@ hypernet_layers: 2
 #                                                  scored by generated-parameter
 #                                                  sensitivity.
 # - rpg_simple_bias_counterfactual_router_hypercond: same controlled split,
-#                                                  scored by low-frequency token
-#                                                  versus bias TD-loss audits.
+#                                                  scored by the signed first-
+#                                                  order TOKEN-vs-BIAS TD-loss
+#                                                  route gradient.
 # - rpg_public_private_selfattn_bias_transformer_hypercond: same owner-private
 #                                                  setup, but private tokens run
 #                                                  one self-attention block
@@ -722,7 +723,9 @@ clean_public_transformer_layers: 1
 clean_public_transformer_heads: 4
 clean_public_transformer_delta_loss_coef: 0.05
 clean_semantic_router_ema: 0.99
-clean_semantic_router_token_budget: 3
+# <= 0 preserves the simple-bias baseline capacity by routing the same number
+# of raw observation slots through the Transformer-token path.
+clean_semantic_router_token_budget: -1
 clean_semantic_router_temperature: 0.1
 clean_semantic_router_warmup_steps: 250000
 clean_semantic_router_freeze_steps: 1500000

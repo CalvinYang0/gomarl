@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# Keep the proven legacy CPU setting fixed. Each job changes only the semantic
-# routing criterion used by the simple-bias public Transformer model.
+# Keep the proven legacy CPU setting fixed. Every raw self/ally/enemy
+# observation scalar is routed independently; jobs change only the criterion.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 MAP_NAME="${MAP_NAME:-3s5z_vs_3s6z}"
@@ -46,8 +46,8 @@ echo "setting: ${CPUS_PER_TASK}c ${MEM} ${TIME}, br=${BATCH_SIZE_RUN}, batch=${B
 for model_type in $MODELS; do
   for seed in $SEEDS; do
     tag="$(short_name "$model_type")"
-    run_name="${MAP_NAME}_${model_type}_legacycfg_s${seed}"
-    job_name="3s5z_sem_${tag}_s${seed}"
+    run_name="${MAP_NAME}_${model_type}_slotwise_s${seed}"
+    job_name="3s5z_slot_${tag}_s${seed}"
 
     echo "submit: model=$model_type seed=$seed run=$run_name"
     sbatch \
