@@ -85,6 +85,14 @@ def run_sequential(args, logger):
     args.n_actions = env_info["n_actions"]
     args.state_shape = env_info["state_shape"]
     args.accumulated_episodes = getattr(args, "accumulated_episodes", None)
+    args.learner_updates_per_collect = max(
+        1, int(getattr(args, "learner_updates_per_collect", 1))
+    )
+    if args.batch_size_run % args.learner_updates_per_collect != 0:
+        raise ValueError(
+            "batch_size_run must be divisible by learner_updates_per_collect "
+            "to preserve a uniform episode cadence"
+        )
 
     if getattr(args, "agent_own_state_size", False):
         args.agent_own_state_size = get_agent_own_state_size(args.env_args)
@@ -157,24 +165,37 @@ def run_sequential(args, logger):
     logger.console_logger.info("Beginning training for {} timesteps".format(args.t_max))
 
     while runner.t_env <= args.t_max:
+        collect_start_t_env = runner.t_env
         with th.no_grad():
             episode_batch = runner.run(test_mode=False)
             buffer.insert_episode_batch(episode_batch)
 
         if buffer.can_sample(args.batch_size):
             next_episode = episode + args.batch_size_run
-            if args.accumulated_episodes and next_episode % args.accumulated_episodes != 0:
-                continue
+            should_train = not (
+                args.accumulated_episodes
+                and next_episode % args.accumulated_episodes != 0
+            )
+            if should_train:
+                collected_t_env = runner.t_env - collect_start_t_env
+                for update_index in range(args.learner_updates_per_collect):
+                    episode_sample = buffer.sample(args.batch_size)
+                    max_ep_t = episode_sample.max_t_filled()
+                    episode_sample = episode_sample[:, :max_ep_t]
 
-            episode_sample = buffer.sample(args.batch_size)
-            max_ep_t = episode_sample.max_t_filled()
-            episode_sample = episode_sample[:, :max_ep_t]
+                    if episode_sample.device != args.device:
+                        episode_sample.to(args.device)
 
-            if episode_sample.device != args.device:
-                episode_sample.to(args.device)
-
-            learner.train(episode_sample, runner.t_env, episode)
-            del episode_sample
+                    update_t_env = collect_start_t_env + (
+                        (update_index + 1) * collected_t_env
+                        // args.learner_updates_per_collect
+                    )
+                    update_episode = episode + (
+                        update_index * args.batch_size_run
+                        // args.learner_updates_per_collect
+                    )
+                    learner.train(episode_sample, update_t_env, update_episode)
+                    del episode_sample
 
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
         if (runner.t_env - last_test_T) / args.test_interval >= 1.0:
