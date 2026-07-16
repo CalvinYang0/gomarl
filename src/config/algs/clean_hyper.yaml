@@ -233,11 +233,17 @@ hypernet_layers: 2
 #                                                  scored by temporal stability.
 # - rpg_simple_bias_gradient_importance_router_hypercond: same controlled split,
 #                                                  scored by absolute TD gradient.
+# - rpg_simple_bias_gradient_importance_inverse_router_hypercond: identical
+#                                                  TOKEN budget, assigned to
+#                                                  the lowest-scoring slots.
 # - rpg_simple_bias_gradient_consistency_router_hypercond: same controlled split,
 #                                                  scored by gradient consistency.
 # - rpg_simple_bias_parameter_sensitivity_router_hypercond: same controlled split,
 #                                                  scored by generated-parameter
 #                                                  sensitivity.
+# - rpg_simple_bias_parameter_sensitivity_inverse_router_hypercond: identical
+#                                                  TOKEN budget, assigned to
+#                                                  the least-sensitive slots.
 # - rpg_simple_bias_counterfactual_router_hypercond: same controlled split,
 #                                                  scored by the signed first-
 #                                                  order TOKEN-vs-BIAS TD-loss

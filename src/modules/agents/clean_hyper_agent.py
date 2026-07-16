@@ -169,9 +169,15 @@ SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "rpg_simple_bias_observer_consistency_router_hypercond": "observer_consistency",
     "rpg_simple_bias_temporal_stability_router_hypercond": "temporal_stability",
     "rpg_simple_bias_gradient_importance_router_hypercond": "gradient_importance",
+    "rpg_simple_bias_gradient_importance_inverse_router_hypercond": "gradient_importance",
     "rpg_simple_bias_gradient_consistency_router_hypercond": "gradient_consistency",
     "rpg_simple_bias_parameter_sensitivity_router_hypercond": "parameter_sensitivity",
+    "rpg_simple_bias_parameter_sensitivity_inverse_router_hypercond": "parameter_sensitivity",
     "rpg_simple_bias_counterfactual_router_hypercond": "counterfactual",
+}
+SEMANTIC_ROUTER_INVERSE_VARIANTS = {
+    "rpg_simple_bias_gradient_importance_inverse_router_hypercond",
+    "rpg_simple_bias_parameter_sensitivity_inverse_router_hypercond",
 }
 PUBLIC_TRANSFORMER_SEMANTIC_ROUTER_VARIANTS = set(SEMANTIC_ROUTER_MODE_BY_MODEL)
 PUBLIC_TRANSFORMER_SIMPLE_BIAS_FAMILY = {
@@ -916,6 +922,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         private_owner_side=False,
         private_bias_style="pair_mlp",
         semantic_router_mode=None,
+        semantic_router_inverse=False,
         semantic_router_ema=0.99,
         semantic_router_threshold=0.5,
         semantic_router_temperature=0.1,
@@ -948,6 +955,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.latest_encoded_self_token = None
         self.latest_encoded_enemy_tokens = None
         self.semantic_router_mode = semantic_router_mode
+        self.semantic_router_inverse = bool(semantic_router_inverse)
         self.semantic_router_ema = float(semantic_router_ema)
         self.semantic_router_threshold = float(semantic_router_threshold)
         if not 0.0 < self.semantic_router_threshold < 1.0:
@@ -1349,9 +1357,22 @@ class PublicTransformerRelationCapturer(nn.Module):
             return
 
         probability = self._semantic_route_probabilities(self.semantic_route_score)
-        route = (probability > self.semantic_router_threshold).to(
+        normal_route = (probability > self.semantic_router_threshold).to(
             dtype=self.semantic_token_route.dtype
         )
+        if self.semantic_router_inverse:
+            # Preserve the TOKEN budget selected by the normal threshold, but
+            # assign that budget to the lowest-scoring slots. This isolates
+            # routing direction from branch-capacity changes.
+            token_count = int(normal_route.sum().item())
+            route = th.zeros_like(normal_route)
+            if token_count > 0:
+                inverse_indices = probability.topk(
+                    token_count, largest=False, sorted=False
+                ).indices
+                route.scatter_(0, inverse_indices, 1.0)
+        else:
+            route = normal_route
         self.semantic_token_route.copy_(route)
         switch_rate = (route != previous_route).float().mean()
         self.semantic_route_last_switch_rate.copy_(switch_rate)
@@ -1408,6 +1429,9 @@ class PublicTransformerRelationCapturer(nn.Module):
             "semantic_route_token_count": self.semantic_token_route.sum().detach(),
             "semantic_route_bias_count": (1.0 - self.semantic_token_route).sum().detach(),
             "semantic_route_token_fraction": self.semantic_token_route.mean().detach(),
+            "semantic_route_inverse": probability.new_tensor(
+                float(self.semantic_router_inverse)
+            ),
             "semantic_route_frozen": self.semantic_route_frozen.float().detach(),
             "semantic_route_switch_rate": self.semantic_route_last_switch_rate.detach(),
             "semantic_route_stability": (1.0 - self.semantic_route_last_switch_rate).detach(),
@@ -5666,6 +5690,8 @@ class CleanHyperAgent(nn.Module):
                     else "pair_mlp"
                 ),
                 semantic_router_mode=SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type),
+                semantic_router_inverse=self.model_type
+                in SEMANTIC_ROUTER_INVERSE_VARIANTS,
                 semantic_router_ema=self.semantic_router_ema,
                 semantic_router_threshold=self.semantic_router_threshold,
                 semantic_router_temperature=self.semantic_router_temperature,
