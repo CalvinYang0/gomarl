@@ -1361,16 +1361,9 @@ class PublicTransformerRelationCapturer(nn.Module):
             dtype=self.semantic_token_route.dtype
         )
         if self.semantic_router_inverse:
-            # Preserve the TOKEN budget selected by the normal threshold, but
-            # assign that budget to the lowest-scoring slots. This isolates
-            # routing direction from branch-capacity changes.
-            token_count = int(normal_route.sum().item())
-            route = th.zeros_like(normal_route)
-            if token_count > 0:
-                inverse_indices = probability.topk(
-                    token_count, largest=False, sorted=False
-                ).indices
-                route.scatter_(0, inverse_indices, 1.0)
+            # Strict inverse ablation: exchange the two processing branches.
+            # Every normal TOKEN coordinate becomes BIAS, and vice versa.
+            route = 1.0 - normal_route
         else:
             route = normal_route
         self.semantic_token_route.copy_(route)

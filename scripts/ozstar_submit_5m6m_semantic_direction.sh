@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Controlled direction ablation on 5m_vs_6m. The inverse variants reuse the
-# exact same score, threshold-derived TOKEN budget, and shared warmup, but
-# assign that budget to the lowest-scoring rather than highest-scoring slots.
+# Controlled direction ablation on 5m_vs_6m. The inverse variants use the
+# same scores, threshold, and warmup, then swap the complete TOKEN and BIAS
+# assignments selected by the normal route.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 MAP_NAME="${MAP_NAME:-5m_vs_6m}"
