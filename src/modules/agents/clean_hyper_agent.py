@@ -169,11 +169,17 @@ SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "rpg_simple_bias_observer_consistency_router_hypercond": "observer_consistency",
     "rpg_simple_bias_temporal_stability_router_hypercond": "temporal_stability",
     "rpg_simple_bias_gradient_importance_router_hypercond": "gradient_importance",
+    "rpg_simple_bias_gradient_importance_learnable_threshold_router_hypercond": "gradient_importance",
     "rpg_simple_bias_gradient_importance_inverse_router_hypercond": "gradient_importance",
     "rpg_simple_bias_gradient_consistency_router_hypercond": "gradient_consistency",
     "rpg_simple_bias_parameter_sensitivity_router_hypercond": "parameter_sensitivity",
+    "rpg_simple_bias_parameter_sensitivity_learnable_threshold_router_hypercond": "parameter_sensitivity",
     "rpg_simple_bias_parameter_sensitivity_inverse_router_hypercond": "parameter_sensitivity",
     "rpg_simple_bias_counterfactual_router_hypercond": "counterfactual",
+}
+SEMANTIC_ROUTER_LEARNABLE_THRESHOLD_VARIANTS = {
+    "rpg_simple_bias_gradient_importance_learnable_threshold_router_hypercond",
+    "rpg_simple_bias_parameter_sensitivity_learnable_threshold_router_hypercond",
 }
 SEMANTIC_ROUTER_INVERSE_VARIANTS = {
     "rpg_simple_bias_gradient_importance_inverse_router_hypercond",
@@ -923,6 +929,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         private_bias_style="pair_mlp",
         semantic_router_mode=None,
         semantic_router_inverse=False,
+        semantic_router_learnable_threshold=False,
         semantic_router_ema=0.99,
         semantic_router_threshold=0.5,
         semantic_router_temperature=0.1,
@@ -956,6 +963,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.latest_encoded_enemy_tokens = None
         self.semantic_router_mode = semantic_router_mode
         self.semantic_router_inverse = bool(semantic_router_inverse)
+        self.semantic_router_learnable_threshold = bool(
+            semantic_router_learnable_threshold
+        )
         self.semantic_router_ema = float(semantic_router_ema)
         self.semantic_router_threshold = float(semantic_router_threshold)
         if not 0.0 < self.semantic_router_threshold < 1.0:
@@ -1011,6 +1021,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.register_buffer("semantic_route_score", th.zeros(len(self.semantic_names)))
         self.register_buffer("semantic_route_score_initialized", th.tensor(False))
         self.register_buffer("semantic_route_frozen", th.tensor(False))
+        self.register_buffer("semantic_learnable_threshold_active", th.tensor(False))
         self.register_buffer("semantic_gradient_mean", th.zeros(len(self.semantic_names)))
         self.register_buffer("semantic_gradient_abs_mean", th.zeros(len(self.semantic_names)))
         self.register_buffer("semantic_route_last_switch_rate", th.tensor(0.0))
@@ -1027,6 +1038,14 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.semantic_route_probe = (
             nn.Parameter(th.zeros(len(self.semantic_names)), requires_grad=True)
             if semantic_router_mode == "counterfactual"
+            else None
+        )
+        threshold_logit = math.log(
+            self.semantic_router_threshold / (1.0 - self.semantic_router_threshold)
+        )
+        self.semantic_router_threshold_logit = (
+            nn.Parameter(th.tensor(threshold_logit, dtype=th.float32))
+            if self.semantic_router_learnable_threshold
             else None
         )
         self._semantic_online_score_sum = None
@@ -1281,7 +1300,33 @@ class PublicTransformerRelationCapturer(nn.Module):
         if self.semantic_router_uses_route_probe() and th.is_grad_enabled():
             probe = self.semantic_route_probe.to(device=reference.device, dtype=reference.dtype)
             route = route + probe - probe.detach()
+        if (
+            self.semantic_router_learnable_threshold
+            and bool(self.semantic_learnable_threshold_active.item())
+            and not bool(self.semantic_route_frozen.item())
+            and th.is_grad_enabled()
+        ):
+            probability = self._semantic_route_probabilities(
+                self.semantic_route_score.detach()
+            ).to(device=reference.device, dtype=reference.dtype)
+            threshold = th.sigmoid(self.semantic_router_threshold_logit).to(
+                device=reference.device, dtype=reference.dtype
+            )
+            temperature = max(self.semantic_router_temperature, 1e-6)
+            soft_route = th.sigmoid((probability - threshold) / temperature)
+            route = route + soft_route - soft_route.detach()
         return route
+
+    def _current_semantic_route_threshold(self, reference=None):
+        if self.semantic_router_learnable_threshold:
+            threshold = th.sigmoid(self.semantic_router_threshold_logit)
+        else:
+            threshold = self.semantic_route_score.new_tensor(
+                self.semantic_router_threshold
+            )
+        if reference is not None:
+            threshold = threshold.to(device=reference.device, dtype=reference.dtype)
+        return threshold
 
     def _semantic_scales(self, reference):
         if not self.semantic_router_uses_probe():
@@ -1347,6 +1392,7 @@ class PublicTransformerRelationCapturer(nn.Module):
             )
 
         if t_env < self.semantic_router_warmup_steps:
+            self.semantic_learnable_threshold_active.fill_(False)
             self.semantic_token_route.copy_(self.semantic_manual_token_route)
             self.semantic_token_probability.copy_(self.semantic_manual_token_route)
             self.semantic_route_last_switch_rate.copy_(
@@ -1356,8 +1402,13 @@ class PublicTransformerRelationCapturer(nn.Module):
         if bool(self.semantic_route_frozen.item()):
             return
 
+        self.semantic_learnable_threshold_active.fill_(
+            self.semantic_router_learnable_threshold
+        )
+
         probability = self._semantic_route_probabilities(self.semantic_route_score)
-        normal_route = (probability > self.semantic_router_threshold).to(
+        threshold = self._current_semantic_route_threshold(probability).detach()
+        normal_route = (probability > threshold).to(
             dtype=self.semantic_token_route.dtype
         )
         if self.semantic_router_inverse:
@@ -1376,6 +1427,7 @@ class PublicTransformerRelationCapturer(nn.Module):
             if not bool(self.semantic_route_frozen.item()):
                 self.semantic_route_version.add_(1)
             self.semantic_route_frozen.fill_(True)
+            self.semantic_learnable_threshold_active.fill_(False)
 
     def update_semantic_router(self, t_env, external_score=None):
         if not self.semantic_router_active:
@@ -1416,7 +1468,8 @@ class PublicTransformerRelationCapturer(nn.Module):
             probability * probability.log()
             + (1.0 - probability) * (1.0 - probability).log()
         ).mean()
-        threshold_distance = (probability - self.semantic_router_threshold).abs()
+        threshold = self._current_semantic_route_threshold(probability).detach()
+        threshold_distance = (probability - threshold).abs()
         threshold_margin = threshold_distance.min()
         stats = {
             "semantic_route_token_count": self.semantic_token_route.sum().detach(),
@@ -1431,8 +1484,9 @@ class PublicTransformerRelationCapturer(nn.Module):
             "semantic_route_score_mean": self.semantic_route_score.mean().detach(),
             "semantic_route_score_std": self.semantic_route_score.std(unbiased=False).detach(),
             "semantic_route_score_margin": threshold_margin.detach(),
-            "semantic_route_threshold": probability.new_tensor(
-                self.semantic_router_threshold
+            "semantic_route_threshold": threshold,
+            "semantic_route_threshold_learnable": probability.new_tensor(
+                float(self.semantic_router_learnable_threshold)
             ),
             "semantic_route_threshold_margin": threshold_margin.detach(),
             "semantic_route_probability_entropy": entropy.detach(),
@@ -1485,6 +1539,7 @@ class PublicTransformerRelationCapturer(nn.Module):
             "semantic_route_score",
             "semantic_route_score_initialized",
             "semantic_route_frozen",
+            "semantic_learnable_threshold_active",
             "semantic_gradient_mean",
             "semantic_gradient_abs_mean",
             "semantic_route_last_switch_rate",
@@ -5685,6 +5740,8 @@ class CleanHyperAgent(nn.Module):
                 semantic_router_mode=SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type),
                 semantic_router_inverse=self.model_type
                 in SEMANTIC_ROUTER_INVERSE_VARIANTS,
+                semantic_router_learnable_threshold=self.model_type
+                in SEMANTIC_ROUTER_LEARNABLE_THRESHOLD_VARIANTS,
                 semantic_router_ema=self.semantic_router_ema,
                 semantic_router_threshold=self.semantic_router_threshold,
                 semantic_router_temperature=self.semantic_router_temperature,

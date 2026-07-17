@@ -233,6 +233,10 @@ hypernet_layers: 2
 #                                                  scored by temporal stability.
 # - rpg_simple_bias_gradient_importance_router_hypercond: same controlled split,
 #                                                  scored by absolute TD gradient.
+# - rpg_simple_bias_gradient_importance_learnable_threshold_router_hypercond:
+#                                                  same score and architecture,
+#                                                  but TD loss learns the scalar
+#                                                  TOKEN/BIAS threshold.
 # - rpg_simple_bias_gradient_importance_inverse_router_hypercond: identical
 #                                                  TOKEN budget, assigned to
 #                                                  the lowest-scoring slots.
@@ -241,6 +245,9 @@ hypernet_layers: 2
 # - rpg_simple_bias_parameter_sensitivity_router_hypercond: same controlled split,
 #                                                  scored by generated-parameter
 #                                                  sensitivity.
+# - rpg_simple_bias_parameter_sensitivity_learnable_threshold_router_hypercond:
+#                                                  same sensitivity score, with
+#                                                  a TD-learned scalar threshold.
 # - rpg_simple_bias_parameter_sensitivity_inverse_router_hypercond: identical
 #                                                  TOKEN budget, assigned to
 #                                                  the least-sensitive slots.
