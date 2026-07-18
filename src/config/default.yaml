@@ -17,6 +17,10 @@ use_cuda: True # Use gpu by default unless it isn't available
 buffer_cpu_only: True # If true we won't keep all of the replay buffer in vram
 torch_num_threads: null # Optional cap for PyTorch CPU worker threads
 torch_num_interop_threads: null # Optional cap for PyTorch inter-op threads
+env_worker_startup_stagger: 0.0 # Delay between initial parallel env resets
+env_worker_reset_retries: 0 # Recreate and retry an env after reset failure
+env_worker_reset_retry_delay: 1.0 # Linear backoff base in seconds
+env_worker_response_timeout: 180.0 # Fail instead of hanging on a dead worker
 cuda_benchmark: True # Let cuDNN autotune kernels when CUDA is enabled
 cuda_deterministic: False # Set True only when strict deterministic CUDA behavior is needed
 cuda_allow_tf32: True # Use TensorFloat-32 matmul/convolution on Ampere+ GPUs

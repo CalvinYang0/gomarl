@@ -5,6 +5,8 @@ from multiprocessing import Pipe, Process
 from utils.battle_trace import model_diagnostics
 import numpy as np
 import torch as th
+import time
+import traceback
 
 class ParallelRunner:
 
@@ -13,23 +15,46 @@ class ParallelRunner:
         self.logger = logger
         self.batch_size = self.args.batch_size_run
         self.logger.console_logger.info(
-            "ParallelRunner starting {} SC2 environment workers".format(self.batch_size)
+            "ParallelRunner starting {} {} environment workers".format(
+                self.batch_size, self.args.env
+            )
         )
+        self.worker_startup_stagger = float(
+            getattr(self.args, "env_worker_startup_stagger", 0.0)
+        )
+        self.worker_reset_retries = int(
+            getattr(self.args, "env_worker_reset_retries", 0)
+        )
+        self.worker_reset_retry_delay = float(
+            getattr(self.args, "env_worker_reset_retry_delay", 1.0)
+        )
+        self.worker_response_timeout = float(
+            getattr(self.args, "env_worker_response_timeout", 180.0)
+        )
+        self._initial_reset = True
+        self._closed = False
 
         self.parent_conns, self.worker_conns = zip(*[Pipe() for _ in range(self.batch_size)])
         env_fn = env_REGISTRY[self.args.env]
         self.ps = []
         for i, worker_conn in enumerate(self.worker_conns):
-            ps = Process(target=env_worker, 
-                    args=(worker_conn, CloudpickleWrapper(partial(env_fn, **self.args.env_args))))
+            ps = Process(
+                target=env_worker,
+                args=(
+                    worker_conn,
+                    CloudpickleWrapper(partial(env_fn, **self.args.env_args)),
+                    self.worker_reset_retries,
+                    self.worker_reset_retry_delay,
+                ),
+            )
             self.ps.append(ps)
 
         for p in self.ps:
             p.daemon = True
             p.start()
 
-        self.parent_conns[0].send(("get_env_info", None))
-        self.env_info = self.parent_conns[0].recv()
+        self._send_worker(0, "get_env_info", None)
+        self.env_info = self._recv_worker(0, "get_env_info")
         self.episode_limit = self.env_info["episode_limit"]
 
         self.t = 0
@@ -68,15 +93,83 @@ class ParallelRunner:
         self.last_battle_trace = None
         return trace
 
+    def _send_worker(self, env_idx, command, data):
+        process = self.ps[env_idx]
+        if not process.is_alive():
+            raise RuntimeError(
+                "Environment worker {} exited before command {!r} "
+                "(exitcode={}).".format(env_idx, command, process.exitcode)
+            )
+        try:
+            self.parent_conns[env_idx].send((command, data))
+        except (BrokenPipeError, EOFError, OSError) as err:
+            raise RuntimeError(
+                "Failed to send command {!r} to environment worker {} "
+                "(alive={}, exitcode={}).".format(
+                    command, env_idx, process.is_alive(), process.exitcode
+                )
+            ) from err
+
+    def _recv_worker(self, env_idx, command):
+        parent_conn = self.parent_conns[env_idx]
+        process = self.ps[env_idx]
+        if not parent_conn.poll(self.worker_response_timeout):
+            raise RuntimeError(
+                "Timed out after {:.1f}s waiting for environment worker {} "
+                "to answer {!r} (alive={}, exitcode={}).".format(
+                    self.worker_response_timeout,
+                    env_idx,
+                    command,
+                    process.is_alive(),
+                    process.exitcode,
+                )
+            )
+        try:
+            response = parent_conn.recv()
+        except (EOFError, OSError) as err:
+            raise RuntimeError(
+                "Environment worker {} closed its pipe while handling {!r} "
+                "(exitcode={}).".format(env_idx, command, process.exitcode)
+            ) from err
+
+        if isinstance(response, dict) and response.get("__worker_error__"):
+            raise RuntimeError(
+                "Environment worker {} failed while handling {!r}: {}\n{}".format(
+                    env_idx,
+                    response.get("command", command),
+                    response.get("error", "unknown worker error"),
+                    response.get("traceback", ""),
+                )
+            )
+        return response
+
     def close_env(self):
-        for parent_conn in self.parent_conns:
-            parent_conn.send(("close", None))
+        if self._closed:
+            return
+        self._closed = True
+        for env_idx, process in enumerate(self.ps):
+            if process.is_alive():
+                try:
+                    self.parent_conns[env_idx].send(("close", None))
+                except (BrokenPipeError, EOFError, OSError):
+                    pass
+        for process in self.ps:
+            process.join(timeout=5)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
 
     def reset(self, test_mode=False):
         self.batch = self.new_batch()
 
-        for parent_conn in self.parent_conns:
-            parent_conn.send(("reset", None))
+        for env_idx in range(self.batch_size):
+            self._send_worker(env_idx, "reset", None)
+            if (
+                self._initial_reset
+                and self.worker_startup_stagger > 0
+                and env_idx + 1 < self.batch_size
+            ):
+                time.sleep(self.worker_startup_stagger)
 
         pre_transition_data = {
             "state": [],
@@ -84,12 +177,14 @@ class ParallelRunner:
             "obs": []
         }
 
-        for env_idx, parent_conn in enumerate(self.parent_conns):
-            data = parent_conn.recv()
+        for env_idx in range(self.batch_size):
+            data = self._recv_worker(env_idx, "reset")
             pre_transition_data["state"].append(data["state"])
             pre_transition_data["avail_actions"].append(data["avail_actions"])
             pre_transition_data["obs"].append(data["obs"])
             self.latest_snapshots[env_idx] = data.get("snapshot")
+
+        self._initial_reset = False
 
         self.batch.update(pre_transition_data, ts=0)
 
@@ -149,7 +244,7 @@ class ParallelRunner:
                 if idx in envs_not_terminated:
                     if not terminated[idx]:
                         cmd = "step_trace" if trace_request is not None and idx == trace_env_idx else "step"
-                        parent_conn.send((cmd, cpu_actions[action_idx]))
+                        self._send_worker(idx, cmd, cpu_actions[action_idx])
                     action_idx += 1
 
             envs_not_terminated = [b_idx for b_idx, termed in enumerate(terminated) if not termed]
@@ -168,9 +263,9 @@ class ParallelRunner:
                 "obs": []
             }
 
-            for idx, parent_conn in enumerate(self.parent_conns):
+            for idx in range(self.batch_size):
                 if not terminated[idx]:
-                    data = parent_conn.recv()
+                    data = self._recv_worker(idx, "step")
                     post_transition_data["reward"].append((data["reward"],))
                     if "snapshot" in data:
                         self.latest_snapshots[idx] = data["snapshot"]
@@ -217,12 +312,12 @@ class ParallelRunner:
                 "frames": trace_frames,
             }
 
-        for parent_conn in self.parent_conns:
-            parent_conn.send(("get_stats",None))
+        for env_idx in range(self.batch_size):
+            self._send_worker(env_idx, "get_stats", None)
 
         env_stats = []
-        for parent_conn in self.parent_conns:
-            env_stat = parent_conn.recv()
+        for env_idx in range(self.batch_size):
+            env_stat = self._recv_worker(env_idx, "get_stats")
             env_stats.append(env_stat)
 
         cur_stats = self.test_stats if test_mode else self.train_stats
@@ -258,8 +353,40 @@ class ParallelRunner:
         stats.clear()
 
 
-def env_worker(remote, env_fn):
-    env = env_fn.x()
+def env_worker(remote, env_fn, reset_retries=0, reset_retry_delay=1.0):
+    env = None
+
+    def close_current_env():
+        nonlocal env
+        if env is not None:
+            try:
+                env.close()
+            except Exception:
+                pass
+            env = None
+
+    def create_env():
+        nonlocal env
+        env = env_fn.x()
+
+    def reset_with_retry():
+        last_error = None
+        for attempt in range(reset_retries + 1):
+            try:
+                if env is None:
+                    create_env()
+                env.reset()
+                return
+            except Exception as err:
+                last_error = err
+                close_current_env()
+                if attempt < reset_retries:
+                    time.sleep(reset_retry_delay * (attempt + 1))
+        raise RuntimeError(
+            "Environment reset failed after {} attempt(s).".format(
+                reset_retries + 1
+            )
+        ) from last_error
 
     def safe_battle_snapshot():
         snapshot_fn = getattr(env, "get_battle_snapshot", None)
@@ -270,48 +397,81 @@ def env_worker(remote, env_fn):
         except Exception:
             return None
 
-    while True:
-        cmd, data = remote.recv()
-        if cmd in {"step", "step_trace"}:
-            actions = data
-            reward, terminated, env_info = env.step(actions)
-            state = env.get_state()
-            avail_actions = env.get_avail_actions()
-            obs = env.get_obs()
-            response = {
-                "state": state,
-                "avail_actions": avail_actions,
-                "obs": obs,
-                "reward": reward,
-                "terminated": terminated,
-                "info": env_info
-            }
-            if cmd == "step_trace":
-                snapshot = safe_battle_snapshot()
-                if snapshot is not None:
-                    response["snapshot"] = snapshot
-            remote.send(response)
-        elif cmd == "reset":
-            env.reset()
-            response = {
-                "state": env.get_state(),
-                "avail_actions": env.get_avail_actions(),
-                "obs": env.get_obs(),
-            }
-            snapshot = safe_battle_snapshot()
-            if snapshot is not None:
-                response["snapshot"] = snapshot
-            remote.send(response)
-        elif cmd == "close":
-            env.close()
-            remote.close()
-            break
-        elif cmd == "get_env_info":
-            remote.send(env.get_env_info())
-        elif cmd == "get_stats":
-            remote.send(env.get_stats())
-        else:
-            raise NotImplementedError
+    try:
+        create_env()
+        while True:
+            try:
+                cmd, data = remote.recv()
+            except EOFError:
+                break
+
+            try:
+                if cmd in {"step", "step_trace"}:
+                    actions = data
+                    reward, terminated, env_info = env.step(actions)
+                    state = env.get_state()
+                    avail_actions = env.get_avail_actions()
+                    obs = env.get_obs()
+                    response = {
+                        "state": state,
+                        "avail_actions": avail_actions,
+                        "obs": obs,
+                        "reward": reward,
+                        "terminated": terminated,
+                        "info": env_info
+                    }
+                    if cmd == "step_trace":
+                        snapshot = safe_battle_snapshot()
+                        if snapshot is not None:
+                            response["snapshot"] = snapshot
+                    remote.send(response)
+                elif cmd == "reset":
+                    reset_with_retry()
+                    response = {
+                        "state": env.get_state(),
+                        "avail_actions": env.get_avail_actions(),
+                        "obs": env.get_obs(),
+                    }
+                    snapshot = safe_battle_snapshot()
+                    if snapshot is not None:
+                        response["snapshot"] = snapshot
+                    remote.send(response)
+                elif cmd == "close":
+                    break
+                elif cmd == "get_env_info":
+                    remote.send(env.get_env_info())
+                elif cmd == "get_stats":
+                    remote.send(env.get_stats())
+                else:
+                    raise NotImplementedError
+            except Exception as err:
+                try:
+                    remote.send(
+                        {
+                            "__worker_error__": True,
+                            "command": cmd,
+                            "error": repr(err),
+                            "traceback": traceback.format_exc(),
+                        }
+                    )
+                except Exception:
+                    pass
+                break
+    except Exception as err:
+        try:
+            remote.send(
+                {
+                    "__worker_error__": True,
+                    "command": "initialise",
+                    "error": repr(err),
+                    "traceback": traceback.format_exc(),
+                }
+            )
+        except Exception:
+            pass
+    finally:
+        close_current_env()
+        remote.close()
 
 
 class CloudpickleWrapper():
