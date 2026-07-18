@@ -294,12 +294,24 @@ GRF_LINEAR_HEAD_VARIANTS = {
     "grf_public_private_bias_transformer_linear_head_hypercond",
     "grf_abs_public_private_bias_transformer_linear_head_hypercond",
 }
+GRF_SEMANTIC_ROUTER_MODE_BY_MODEL = {
+    "grf_abs_simple_bias_gradient_importance_router_hypercond": "gradient_importance",
+    "grf_abs_simple_bias_gradient_importance_learnable_threshold_router_hypercond": "gradient_importance",
+    "grf_abs_simple_bias_parameter_sensitivity_router_hypercond": "parameter_sensitivity",
+    "grf_abs_simple_bias_parameter_sensitivity_learnable_threshold_router_hypercond": "parameter_sensitivity",
+}
+GRF_SEMANTIC_ROUTER_LEARNABLE_THRESHOLD_VARIANTS = {
+    "grf_abs_simple_bias_gradient_importance_learnable_threshold_router_hypercond",
+    "grf_abs_simple_bias_parameter_sensitivity_learnable_threshold_router_hypercond",
+}
+GRF_SEMANTIC_ROUTER_VARIANTS = set(GRF_SEMANTIC_ROUTER_MODE_BY_MODEL)
 GRF_PUBLIC_TRANSFORMER_VARIANTS = {
     "grf_public_private_bias_transformer_hypercond",
     "grf_abs_public_private_bias_transformer_hypercond",
     *GRF_TWO_LAYER_HEAD_VARIANTS,
     *GRF_LINEAR_HEAD_VARIANTS,
     *GRF_DECISION_MAKER_VARIANTS,
+    *GRF_SEMANTIC_ROUTER_VARIANTS,
 }
 PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_transformer_hypercond": "baseline",
@@ -2230,7 +2242,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         return condition, relation_hidden, ally_attn, enemy_attn, enemy_tokens, enemy_mask
 
 
-class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
+class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer):
     # GRF compact observations expose fixed semantic blocks rather than SMAC
     # visibility slots. This capturer builds public entity tokens and lets local
     # observer-dependent geometry modulate attention through a private bias.
@@ -2242,8 +2254,15 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
         num_heads=4,
         num_layers=1,
         use_absolute_public=False,
+        semantic_router_mode=None,
+        semantic_router_learnable_threshold=False,
+        semantic_router_ema=0.99,
+        semantic_router_threshold=0.5,
+        semantic_router_temperature=0.1,
+        semantic_router_warmup_steps=250000,
+        semantic_router_freeze_steps=5000000,
     ):
-        super().__init__()
+        nn.Module.__init__(self)
         self.n_agents = n_agents
         self.relation_dim = relation_dim
         self.output_dim = output_dim
@@ -2251,6 +2270,54 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
         self.use_absolute_public = use_absolute_public
         self.n_opponents = 2
         self.expected_obs_dim = 4 * n_agents + 14
+        self.semantic_router_mode = semantic_router_mode
+        self.semantic_router_inverse = False
+        self.semantic_router_learnable_threshold = bool(
+            semantic_router_learnable_threshold
+        )
+        self.semantic_router_ema = float(semantic_router_ema)
+        self.semantic_router_threshold = float(semantic_router_threshold)
+        if not 0.0 < self.semantic_router_threshold < 1.0:
+            raise ValueError("semantic_router_threshold must be strictly between 0 and 1")
+        self.semantic_router_temperature = float(semantic_router_temperature)
+        self.semantic_router_warmup_steps = int(semantic_router_warmup_steps)
+        self.semantic_router_freeze_steps = int(semantic_router_freeze_steps)
+
+        (
+            self.semantic_names,
+            self.semantic_fields,
+            manual_route,
+        ) = self._build_semantic_slot_layout()
+        self.register_buffer("semantic_manual_token_route", manual_route)
+        self.register_buffer("semantic_token_route", manual_route.clone())
+        self.register_buffer("semantic_token_probability", manual_route.clone())
+        self.register_buffer("semantic_route_score", th.zeros(len(self.semantic_names)))
+        self.register_buffer("semantic_route_score_initialized", th.tensor(False))
+        self.register_buffer("semantic_route_frozen", th.tensor(False))
+        self.register_buffer("semantic_learnable_threshold_active", th.tensor(False))
+        self.register_buffer("semantic_gradient_mean", th.zeros(len(self.semantic_names)))
+        self.register_buffer("semantic_gradient_abs_mean", th.zeros(len(self.semantic_names)))
+        self.register_buffer("semantic_route_last_switch_rate", th.tensor(0.0))
+        self.register_buffer("semantic_route_version", th.tensor(0, dtype=th.long))
+        self.semantic_probe_scale = (
+            nn.Parameter(th.ones(len(self.semantic_names)), requires_grad=True)
+            if semantic_router_mode in {"gradient_importance", "parameter_sensitivity"}
+            else None
+        )
+        self.semantic_route_probe = None
+        threshold_logit = math.log(
+            self.semantic_router_threshold / (1.0 - self.semantic_router_threshold)
+        )
+        self.semantic_router_threshold_logit = (
+            nn.Parameter(th.tensor(threshold_logit, dtype=th.float32))
+            if self.semantic_router_learnable_threshold
+            else None
+        )
+        self._semantic_online_score_sum = None
+        self._semantic_online_score_count = 0
+        self._semantic_forced_group = None
+        self._semantic_forced_token_branch = None
+        self.capture_semantic_observation_score = False
 
         self.cls_token = nn.Parameter(th.zeros(1, 1, relation_dim))
         self.side_embedding = nn.Embedding(4, relation_dim)  # self, ally, opponent, ball
@@ -2264,6 +2331,8 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(relation_dim, num_heads),
         )
+        self.private_ball_encoder = self._make_encoder(6)
+        self.simple_bias = nn.Linear(relation_dim, num_heads)
         self.transformer_layers = nn.ModuleList(
             BiasTransformerEncoderLayer(relation_dim, num_heads)
             for _ in range(max(1, num_layers))
@@ -2274,6 +2343,83 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(output_dim, output_dim),
         )
+
+    def _build_semantic_slot_layout(self):
+        names = []
+        fields = []
+        manual_route = []
+
+        def add(name, field, token_branch):
+            names.append(name)
+            fields.append(field)
+            manual_route.append(float(bool(token_branch)))
+
+        for axis in ("x", "y"):
+            add(f"self_position_{axis}", "position", True)
+        for ally_index in range(self.n_agents - 1):
+            for axis in ("x", "y"):
+                add(f"ally_{ally_index}_relative_{axis}", "relative_position", False)
+        for axis in ("x", "y"):
+            add(f"self_direction_{axis}", "direction", True)
+        for ally_index in range(self.n_agents - 1):
+            for axis in ("x", "y"):
+                add(f"ally_{ally_index}_direction_{axis}", "direction", True)
+        for opponent_index in range(self.n_opponents):
+            for axis in ("x", "y"):
+                add(
+                    f"opponent_{opponent_index}_relative_{axis}",
+                    "relative_position",
+                    False,
+                )
+        for opponent_index in range(self.n_opponents):
+            for axis in ("x", "y"):
+                add(
+                    f"opponent_{opponent_index}_direction_{axis}",
+                    "direction",
+                    True,
+                )
+        for name, field, token_branch in (
+            ("ball_relative_x", "relative_position", False),
+            ("ball_relative_y", "relative_position", False),
+            ("ball_height", "ball_height", True),
+            ("ball_direction_x", "direction", True),
+            ("ball_direction_y", "direction", True),
+            ("ball_direction_z", "direction", True),
+        ):
+            add(name, field, token_branch)
+
+        if len(names) != self.expected_obs_dim:
+            raise ValueError(
+                "GRF semantic slot layout built {} entries for obs_dim={}".format(
+                    len(names), self.expected_obs_dim
+                )
+            )
+        return tuple(names), tuple(fields), th.tensor(manual_route, dtype=th.float32)
+
+    def _semantic_slot_views(self, values):
+        idx = 0
+        self_pos = values[idx : idx + 2].view(1, 1, 2)
+        idx += 2
+        ally_pos = values[idx : idx + 2 * (self.n_agents - 1)].view(
+            1, 1, self.n_agents - 1, 2
+        )
+        idx += 2 * (self.n_agents - 1)
+        self_dir = values[idx : idx + 2].view(1, 1, 2)
+        idx += 2
+        ally_dir = values[idx : idx + 2 * (self.n_agents - 1)].view(
+            1, 1, self.n_agents - 1, 2
+        )
+        idx += 2 * (self.n_agents - 1)
+        opponent_pos = values[idx : idx + 2 * self.n_opponents].view(
+            1, 1, self.n_opponents, 2
+        )
+        idx += 2 * self.n_opponents
+        opponent_dir = values[idx : idx + 2 * self.n_opponents].view(
+            1, 1, self.n_opponents, 2
+        )
+        idx += 2 * self.n_opponents
+        ball = values[idx : idx + 6].view(1, 1, 6)
+        return self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball
 
     def _make_encoder(self, input_dim):
         return nn.Sequential(
@@ -2358,17 +2504,41 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
         bias[:, :, :, 1:, 1:] = pair_bias
         return bias.reshape(batch_size * n_agents, self.num_heads, token_count, token_count)
 
-    def forward(self, obs, prev_relation_hidden):
+    def _semantic_routed_inputs(self, obs):
+        route = self._current_semantic_token_route(obs)
+        scales = self._semantic_scales(obs)
+        if self.semantic_router_uses_probe() and th.is_grad_enabled():
+            obs = obs.clone()
+            obs[..., : self.expected_obs_dim] = (
+                obs[..., : self.expected_obs_dim]
+                * scales.view(1, 1, self.expected_obs_dim)
+            )
+        values = self._split_obs(obs)
+        route_values = self._semantic_slot_views(route)
+        return values, route_values
+
+    def _build_semantic_tokens_and_bias(self, obs):
         batch_size, n_agents, _ = obs.shape
         (
-            self_pos,
-            ally_pos,
-            self_dir,
-            ally_dir,
-            opponent_pos,
-            opponent_dir,
-            ball,
-        ) = self._split_obs(obs)
+            (
+                self_pos,
+                ally_pos,
+                self_dir,
+                ally_dir,
+                opponent_pos,
+                opponent_dir,
+                ball,
+            ),
+            (
+                self_pos_route,
+                ally_pos_route,
+                self_dir_route,
+                ally_dir_route,
+                opponent_pos_route,
+                opponent_dir_route,
+                ball_route,
+            ),
+        ) = self._semantic_routed_inputs(obs)
         (
             public_self_pos,
             public_ally_pos,
@@ -2381,16 +2551,26 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
             self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball
         )
 
-        self_token = self.self_encoder(th.cat([public_self_pos, public_self_dir], dim=-1))
-        ally_token = self.ally_encoder(th.cat([public_ally_pos, public_ally_dir], dim=-1))
-        opponent_token = self.opponent_encoder(th.cat([public_opponent_pos, public_opponent_dir], dim=-1))
-        ball_token = self.ball_encoder(public_ball).unsqueeze(2)
+        self_route = th.cat([self_pos_route, self_dir_route], dim=-1)
+        ally_route = th.cat([ally_pos_route, ally_dir_route], dim=-1)
+        opponent_route = th.cat([opponent_pos_route, opponent_dir_route], dim=-1)
+        self_public = th.cat([public_self_pos, public_self_dir], dim=-1)
+        ally_public = th.cat([public_ally_pos, public_ally_dir], dim=-1)
+        opponent_public = th.cat([public_opponent_pos, public_opponent_dir], dim=-1)
+
+        self_token = self._centered_encode(self.self_encoder, self_public * self_route)
+        ally_token = self._centered_encode(self.ally_encoder, ally_public * ally_route)
+        opponent_token = self._centered_encode(
+            self.opponent_encoder, opponent_public * opponent_route
+        )
+        ball_token = self._centered_encode(
+            self.ball_encoder, public_ball * ball_route
+        ).unsqueeze(2)
 
         self_side = self.side_embedding.weight[0].view(1, 1, 1, -1)
         ally_side = self.side_embedding.weight[1].view(1, 1, 1, -1)
         opponent_side = self.side_embedding.weight[2].view(1, 1, 1, -1)
         ball_side = self.side_embedding.weight[3].view(1, 1, 1, -1)
-
         entity_tokens = th.cat(
             [
                 self_token.unsqueeze(2) + self_side,
@@ -2400,14 +2580,83 @@ class GRFPublicPrivateBiasTransformerCapturer(nn.Module):
             ],
             dim=2,
         )
+
+        self_bias = self._centered_encode(
+            self.private_encoder,
+            th.cat([self_pos, self_dir], dim=-1) * (1.0 - self_route),
+        ).unsqueeze(2)
+        ally_bias = self._centered_encode(
+            self.private_encoder,
+            th.cat([ally_pos, ally_dir], dim=-1) * (1.0 - ally_route),
+        )
+        opponent_bias = self._centered_encode(
+            self.private_encoder,
+            th.cat([opponent_pos, opponent_dir], dim=-1) * (1.0 - opponent_route),
+        )
+        ball_bias = self._centered_encode(
+            self.private_ball_encoder, ball * (1.0 - ball_route)
+        ).unsqueeze(2)
+        mod_tokens = th.cat(
+            [self_bias, ally_bias, opponent_bias, ball_bias], dim=2
+        )
+        attn_bias = self._simple_private_bias(mod_tokens, batch_size, n_agents)
+        return entity_tokens, attn_bias
+
+    def forward(self, obs, prev_relation_hidden):
+        batch_size, n_agents, _ = obs.shape
+        if self.semantic_router_active:
+            entity_tokens, attn_bias = self._build_semantic_tokens_and_bias(obs)
+        else:
+            (
+                self_pos,
+                ally_pos,
+                self_dir,
+                ally_dir,
+                opponent_pos,
+                opponent_dir,
+                ball,
+            ) = self._split_obs(obs)
+            (
+                public_self_pos,
+                public_ally_pos,
+                public_self_dir,
+                public_ally_dir,
+                public_opponent_pos,
+                public_opponent_dir,
+                public_ball,
+            ) = self._build_public_features(
+                self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball
+            )
+
+            self_token = self.self_encoder(th.cat([public_self_pos, public_self_dir], dim=-1))
+            ally_token = self.ally_encoder(th.cat([public_ally_pos, public_ally_dir], dim=-1))
+            opponent_token = self.opponent_encoder(
+                th.cat([public_opponent_pos, public_opponent_dir], dim=-1)
+            )
+            ball_token = self.ball_encoder(public_ball).unsqueeze(2)
+
+            self_side = self.side_embedding.weight[0].view(1, 1, 1, -1)
+            ally_side = self.side_embedding.weight[1].view(1, 1, 1, -1)
+            opponent_side = self.side_embedding.weight[2].view(1, 1, 1, -1)
+            ball_side = self.side_embedding.weight[3].view(1, 1, 1, -1)
+
+            entity_tokens = th.cat(
+                [
+                    self_token.unsqueeze(2) + self_side,
+                    ally_token + ally_side,
+                    opponent_token + opponent_side,
+                    ball_token + ball_side,
+                ],
+                dim=2,
+            )
+            token_count = entity_tokens.size(2) + 1
+            entity_private = self._build_private_features(
+                self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball
+            )
+            attn_bias = self._build_private_bias(entity_private, token_count)
         token_count = entity_tokens.size(2) + 1
         cls = self.cls_token.expand(batch_size, n_agents, -1).unsqueeze(2)
         tokens = th.cat([cls, entity_tokens], dim=2)
-
-        entity_private = self._build_private_features(
-            self_pos, ally_pos, self_dir, ally_dir, opponent_pos, opponent_dir, ball
-        )
-        attn_bias = self._build_private_bias(entity_private, token_count)
 
         flat_tokens = tokens.reshape(batch_size * n_agents, token_count, self.relation_dim)
         key_mask = th.ones(batch_size * n_agents, token_count, dtype=th.bool, device=obs.device)
@@ -5580,7 +5829,18 @@ class CleanHyperAgent(nn.Module):
                 "grf_abs_public_private_bias_transformer_two_layer_head_hypercond",
                 "grf_abs_public_private_bias_transformer_linear_head_hypercond",
                 "grf_abs_public_private_bias_transformer_decision_maker_hypercond",
+                *GRF_SEMANTIC_ROUTER_VARIANTS,
             },
+            semantic_router_mode=GRF_SEMANTIC_ROUTER_MODE_BY_MODEL.get(
+                self.model_type
+            ),
+            semantic_router_learnable_threshold=self.model_type
+            in GRF_SEMANTIC_ROUTER_LEARNABLE_THRESHOLD_VARIANTS,
+            semantic_router_ema=self.semantic_router_ema,
+            semantic_router_threshold=self.semantic_router_threshold,
+            semantic_router_temperature=self.semantic_router_temperature,
+            semantic_router_warmup_steps=self.semantic_router_warmup_steps,
+            semantic_router_freeze_steps=self.semantic_router_freeze_steps,
         )
 
     def _init_grf_decision_maker_head(self):
@@ -6378,6 +6638,25 @@ class CleanHyperAgent(nn.Module):
             batch_size * n_agents, self.hidden_dim, self.n_actions
         )
         out_b = self.hyper_out_b(flat_condition).view(batch_size * n_agents, 1, self.n_actions)
+
+        semantic_router = getattr(self, "rpg_relation_capturer", None)
+        if (
+            self.capture_semantic_parameter_graph
+            and getattr(semantic_router, "semantic_router_mode", None)
+            == "parameter_sensitivity"
+        ):
+            generated_head = th.cat(
+                [
+                    bottleneck_w.reshape(batch_size * n_agents, -1),
+                    bottleneck_b.reshape(batch_size * n_agents, -1),
+                    out_w.reshape(batch_size * n_agents, -1),
+                    out_b.reshape(batch_size * n_agents, -1),
+                ],
+                dim=-1,
+            )
+            self.latest_generated_interaction_head_graph = generated_head.view(
+                batch_size, n_agents, -1
+            )
 
         mid = F.elu(th.bmm(flat_hidden, bottleneck_w) + bottleneck_b)
         q = th.bmm(mid, out_w) + out_b
