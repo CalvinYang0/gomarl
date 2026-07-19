@@ -2508,11 +2508,15 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         route = self._current_semantic_token_route(obs)
         scales = self._semantic_scales(obs)
         if self.semantic_router_uses_probe() and th.is_grad_enabled():
-            obs = obs.clone()
-            obs[..., : self.expected_obs_dim] = (
+            routed_obs = (
                 obs[..., : self.expected_obs_dim]
                 * scales.view(1, 1, self.expected_obs_dim)
             )
+            if obs.size(-1) > self.expected_obs_dim:
+                routed_obs = th.cat(
+                    [routed_obs, obs[..., self.expected_obs_dim :]], dim=-1
+                )
+            obs = routed_obs
         values = self._split_obs(obs)
         route_values = self._semantic_slot_views(route)
         return values, route_values
