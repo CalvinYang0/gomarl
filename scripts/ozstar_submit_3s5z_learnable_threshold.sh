@@ -52,7 +52,9 @@ short_name() {
   esac
 }
 
-echo "== Submit 3s5z fixed-vs-learnable threshold ablation =="
+map_tag="$(printf '%s' "$MAP_NAME" | tr -c '[:alnum:]_' '_')"
+
+echo "== Submit ${MAP_NAME} fixed-vs-learnable threshold ablation =="
 echo "models: $MODELS"
 echo "setting: 1 node, 1 task, ${CPUS_PER_TASK}c ${MEM} ${TIME}, t_max=${T_MAX}, env_workers=${BATCH_SIZE_RUN}, learner_updates=${LEARNER_UPDATES_PER_COLLECT}"
 echo "cpu plan: ${BATCH_SIZE_RUN} single-threaded SC2 workers + one single-threaded learner/controller process"
@@ -62,7 +64,7 @@ for model_type in $MODELS; do
   for seed in $SEEDS; do
     tag="$(short_name "$model_type")"
     run_name="${MAP_NAME}_${tag}_10m_env${BATCH_SIZE_RUN}_u${LEARNER_UPDATES_PER_COLLECT}_s${seed}"
-    job_name="3s5z_${tag}_10m_s${seed}"
+    job_name="${map_tag}_${tag}_10m_s${seed}"
 
     echo "submit: model=$model_type seed=$seed run=$run_name"
     sbatch \
