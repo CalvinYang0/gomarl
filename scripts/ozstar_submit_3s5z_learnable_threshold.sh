@@ -12,12 +12,12 @@ MODELS="${MODELS:-rpg_simple_bias_gradient_importance_router_hypercond rpg_simpl
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
 MEM="${MEM:-64G}"
 TIME="${TIME:-2-00:00:00}"
-BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-32}"
+BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
 BUFFER_SIZE="${BUFFER_SIZE:-500}"
 REFERENCE_BATCH_SIZE_RUN="${REFERENCE_BATCH_SIZE_RUN:-8}"
 LEARNER_UPDATES_PER_COLLECT="${LEARNER_UPDATES_PER_COLLECT:-$(( (BATCH_SIZE_RUN + REFERENCE_BATCH_SIZE_RUN - 1) / REFERENCE_BATCH_SIZE_RUN ))}"
-TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-1}"
+TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-$CPUS_PER_TASK}"
 TORCH_NUM_INTEROP_THREADS="${TORCH_NUM_INTEROP_THREADS:-1}"
 ENV_WORKER_STARTUP_STAGGER="${ENV_WORKER_STARTUP_STAGGER:-0.25}"
 ENV_WORKER_RESET_RETRIES="${ENV_WORKER_RESET_RETRIES:-3}"
@@ -33,15 +33,8 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 cd "$REPO_DIR"
 mkdir -p ozstar_logs
 
-# One SC2 process is created per rollout worker. Keep enough workers to occupy
-# the requested cores; PyTorch/BLAS remain single-threaded to avoid nested CPU
-# pools oversubscribing the node.
-if (( BATCH_SIZE_RUN < CPUS_PER_TASK )); then
-  echo "error: BATCH_SIZE_RUN=$BATCH_SIZE_RUN is smaller than CPUS_PER_TASK=$CPUS_PER_TASK" >&2
-  echo "request fewer CPUs or increase BATCH_SIZE_RUN so the allocation is not idle" >&2
-  exit 2
-fi
-
+# Keep the rollout setting compatible with the established 5m6m profile. The
+# learner uses the full CPU allocation while eight SC2 workers collect data.
 short_name() {
   case "$1" in
     rpg_simple_bias_gradient_importance_router_hypercond) echo "gimp_fixed" ;;
@@ -57,7 +50,7 @@ map_tag="$(printf '%s' "$MAP_NAME" | tr -c '[:alnum:]_' '_')"
 echo "== Submit ${MAP_NAME} fixed-vs-learnable threshold ablation =="
 echo "models: $MODELS"
 echo "setting: 1 node, 1 task, ${CPUS_PER_TASK}c ${MEM} ${TIME}, t_max=${T_MAX}, env_workers=${BATCH_SIZE_RUN}, learner_updates=${LEARNER_UPDATES_PER_COLLECT}"
-echo "cpu plan: ${BATCH_SIZE_RUN} single-threaded SC2 workers + one single-threaded learner/controller process"
+echo "cpu plan: ${BATCH_SIZE_RUN} SC2 workers + a ${TORCH_NUM_THREADS}-thread learner/controller process"
 echo "worker startup: stagger=${ENV_WORKER_STARTUP_STAGGER}s, reset_retries=${ENV_WORKER_RESET_RETRIES}, response_timeout=${ENV_WORKER_RESPONSE_TIMEOUT}s"
 
 for model_type in $MODELS; do

@@ -13,12 +13,12 @@ MODELS="${MODELS:-grf_abs_simple_bias_gradient_importance_router_hypercond grf_a
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
 MEM="${MEM:-64G}"
 TIME="${TIME:-2-00:00:00}"
-BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-32}"
+BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 BUFFER_SIZE="${BUFFER_SIZE:-5000}"
 REFERENCE_BATCH_SIZE_RUN="${REFERENCE_BATCH_SIZE_RUN:-8}"
 LEARNER_UPDATES_PER_COLLECT="${LEARNER_UPDATES_PER_COLLECT:-$(( (BATCH_SIZE_RUN + REFERENCE_BATCH_SIZE_RUN - 1) / REFERENCE_BATCH_SIZE_RUN ))}"
-TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-1}"
+TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-$CPUS_PER_TASK}"
 TORCH_NUM_INTEROP_THREADS="${TORCH_NUM_INTEROP_THREADS:-1}"
 ENV_WORKER_STARTUP_STAGGER="${ENV_WORKER_STARTUP_STAGGER:-0.25}"
 ENV_WORKER_RESET_RETRIES="${ENV_WORKER_RESET_RETRIES:-3}"
@@ -38,11 +38,6 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 cd "$REPO_DIR"
 mkdir -p ozstar_logs
-
-if (( BATCH_SIZE_RUN < CPUS_PER_TASK )); then
-  echo "error: BATCH_SIZE_RUN=$BATCH_SIZE_RUN is smaller than CPUS_PER_TASK=$CPUS_PER_TASK" >&2
-  exit 2
-fi
 
 short_model() {
   case "$1" in
@@ -67,7 +62,7 @@ echo "== Submit GRF fixed-vs-learnable threshold ablation =="
 echo "envs: $ENVS"
 echo "models: $MODELS"
 echo "setting: ${CPUS_PER_TASK}c ${MEM} ${TIME}, t_max=${T_MAX}, env_workers=${BATCH_SIZE_RUN}, learner_updates=${LEARNER_UPDATES_PER_COLLECT}"
-echo "cpu plan: ${BATCH_SIZE_RUN} single-threaded GRF workers + one single-threaded learner/controller process"
+echo "cpu plan: ${BATCH_SIZE_RUN} GRF workers + a ${TORCH_NUM_THREADS}-thread learner/controller process"
 
 for env_config in $ENVS; do
   for model_type in $MODELS; do
