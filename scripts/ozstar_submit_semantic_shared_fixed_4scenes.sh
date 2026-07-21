@@ -41,6 +41,7 @@ GRF_COUNTER_FIXED_MASK="${GRF_COUNTER_FIXED_MASK:-}"
 CORRIDOR_FIXED_MASK="${CORRIDOR_FIXED_MASK:-}"
 
 SCENARIOS="${SCENARIOS:-academy_pass_and_shoot_with_keeper academy_3_vs_1_with_keeper academy_counterattack_easy corridor}"
+VARIANTS="${VARIANTS:-shared fixed}"
 
 cd "$REPO_DIR"
 mkdir -p ozstar_logs
@@ -96,20 +97,34 @@ fixed_mask_for_scenario() {
   esac
 }
 
-# Validate every mask before submitting anything, avoiding a partially
-# submitted suite when one scenario was omitted or copied incorrectly.
-for scenario in $SCENARIOS; do
-  fixed_mask=$(fixed_mask_for_scenario "$scenario")
-  if [[ ! "$fixed_mask" =~ ^[01]+$ ]]; then
-    tag=$(scenario_tag "$scenario")
-    echo "ERROR: missing/invalid fixed mask for $scenario ($tag)." >&2
-    echo "Export the corresponding *_FIXED_MASK variable using a mask from" >&2
-    echo "the ordinary gradient-importance router, not shared-field." >&2
+variant_enabled() {
+  [[ " $VARIANTS " == *" $1 "* ]]
+}
+
+for variant in $VARIANTS; do
+  if [[ "$variant" != "shared" && "$variant" != "fixed" ]]; then
+    echo "ERROR: unsupported variant '$variant'; use shared and/or fixed." >&2
     exit 2
   fi
 done
 
-echo "== Semantic routing suite: 4 scenes x 2 variants =="
+# Validate every mask before submitting anything, avoiding a partially
+# submitted suite when one scenario was omitted or copied incorrectly.
+if variant_enabled fixed; then
+  for scenario in $SCENARIOS; do
+    fixed_mask=$(fixed_mask_for_scenario "$scenario")
+    if [[ ! "$fixed_mask" =~ ^[01]+$ ]]; then
+      tag=$(scenario_tag "$scenario")
+      echo "ERROR: missing/invalid fixed mask for $scenario ($tag)." >&2
+      echo "Export the corresponding *_FIXED_MASK variable using a mask from" >&2
+      echo "the ordinary gradient-importance router, not shared-field." >&2
+      exit 2
+    fi
+  done
+fi
+
+echo "== Semantic routing suite: 4 scenes =="
+echo "variants: $VARIANTS"
 echo "resources: GRF=32c/10G, corridor=32c/40G"
 echo "training: time=$TIME t_max=$T_MAX env_workers=$BATCH_SIZE_RUN learner_updates=$LEARNER_UPDATES_PER_COLLECT"
 
@@ -133,19 +148,22 @@ for scenario in $SCENARIOS; do
     scenario_extra_args="env_worker_startup_stagger=$ENV_WORKER_STARTUP_STAGGER env_worker_reset_retries=$ENV_WORKER_RESET_RETRIES env_worker_reset_retry_delay=$ENV_WORKER_RESET_RETRY_DELAY env_worker_response_timeout=$ENV_WORKER_RESPONSE_TIMEOUT env_args.write_video=False"
   fi
 
-  fixed_mask=$(fixed_mask_for_scenario "$scenario")
+  if variant_enabled shared; then
+    shared_run="${tag}_gimp_shared_s${SEED}"
+    shared_job=$(submit_job "${tag}_gshr_s${SEED}" "$shared_run" \
+      "$env_config" "$map_name" "$shared_model" "$cpus" "$memory" \
+      "" "$scenario_extra_args")
+    shared_job="${shared_job%%;*}"
+    echo "submitted shared:  scenario=$scenario job=$shared_job run=$shared_run"
+  fi
 
-  shared_run="${tag}_gimp_shared_s${SEED}"
-  shared_job=$(submit_job "${tag}_gshr_s${SEED}" "$shared_run" \
-    "$env_config" "$map_name" "$shared_model" "$cpus" "$memory" \
-    "" "$scenario_extra_args")
-  shared_job="${shared_job%%;*}"
-  echo "submitted shared:  scenario=$scenario job=$shared_job run=$shared_run"
-
-  fixed_run="${tag}_gimp_fixedmask_s${SEED}"
-  fixed_job=$(submit_job "${tag}_gfix_s${SEED}" "$fixed_run" \
-    "$env_config" "$map_name" "$fixed_model" "$cpus" "$memory" \
-    "clean_semantic_router_fixed_mask=$fixed_mask" "$scenario_extra_args")
-  fixed_job="${fixed_job%%;*}"
-  echo "submitted compact: scenario=$scenario job=$fixed_job run=$fixed_run"
+  if variant_enabled fixed; then
+    fixed_mask=$(fixed_mask_for_scenario "$scenario")
+    fixed_run="${tag}_gimp_fixedmask_s${SEED}"
+    fixed_job=$(submit_job "${tag}_gfix_s${SEED}" "$fixed_run" \
+      "$env_config" "$map_name" "$fixed_model" "$cpus" "$memory" \
+      "clean_semantic_router_fixed_mask=$fixed_mask" "$scenario_extra_args")
+    fixed_job="${fixed_job%%;*}"
+    echo "submitted compact: scenario=$scenario job=$fixed_job run=$fixed_run"
+  fi
 done
