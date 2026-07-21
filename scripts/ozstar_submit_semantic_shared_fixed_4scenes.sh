@@ -9,6 +9,7 @@ set -euo pipefail
 # it must never be learned by or depend on the shared-field run in this suite.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
+PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
 SEED="${SEED:-1}"
 TIME="${TIME:-2-00:00:00}"
 T_MAX="${T_MAX:-10050000}"
@@ -39,6 +40,10 @@ GRF_PASS_FIXED_MASK="${GRF_PASS_FIXED_MASK:-}"
 GRF_3V1_FIXED_MASK="${GRF_3V1_FIXED_MASK:-}"
 GRF_COUNTER_FIXED_MASK="${GRF_COUNTER_FIXED_MASK:-}"
 CORRIDOR_FIXED_MASK="${CORRIDOR_FIXED_MASK:-}"
+GRF_PASS_GIMP_SOURCE_JOB_ID="${GRF_PASS_GIMP_SOURCE_JOB_ID:-}"
+GRF_3V1_GIMP_SOURCE_JOB_ID="${GRF_3V1_GIMP_SOURCE_JOB_ID:-}"
+GRF_COUNTER_GIMP_SOURCE_JOB_ID="${GRF_COUNTER_GIMP_SOURCE_JOB_ID:-}"
+CORRIDOR_GIMP_SOURCE_JOB_ID="${CORRIDOR_GIMP_SOURCE_JOB_ID:-}"
 
 SCENARIOS="${SCENARIOS:-academy_pass_and_shoot_with_keeper academy_3_vs_1_with_keeper academy_counterattack_easy corridor}"
 VARIANTS="${VARIANTS:-shared fixed}"
@@ -97,6 +102,84 @@ fixed_mask_for_scenario() {
   esac
 }
 
+ordinary_gimp_model_for_scenario() {
+  if [[ "$1" == "corridor" ]]; then
+    printf '%s' "rpg_simple_bias_gradient_importance_router_hypercond"
+  else
+    printf '%s' "grf_abs_simple_bias_gradient_importance_router_hypercond"
+  fi
+}
+
+source_job_for_scenario() {
+  case "$1" in
+    academy_pass_and_shoot_with_keeper) printf '%s' "$GRF_PASS_GIMP_SOURCE_JOB_ID" ;;
+    academy_3_vs_1_with_keeper) printf '%s' "$GRF_3V1_GIMP_SOURCE_JOB_ID" ;;
+    academy_counterattack_easy) printf '%s' "$GRF_COUNTER_GIMP_SOURCE_JOB_ID" ;;
+    corridor) printf '%s' "$CORRIDOR_GIMP_SOURCE_JOB_ID" ;;
+    *) return 1 ;;
+  esac
+}
+
+extract_mask_from_job() {
+  local job_id="$1"
+  local output mask
+  output=$("$PYTHON_BIN" scripts/show_semantic_slot_routes.py \
+    "$job_id" --log-dir ozstar_logs --flat-mask 2>/dev/null) || return 1
+  mask=$(printf '%s\n' "$output" | tail -n 1)
+  [[ "$mask" =~ ^[01]+$ ]] || return 1
+  printf '%s' "$mask"
+}
+
+resolve_fixed_mask() {
+  local scenario="$1"
+  local explicit source_job model log_file job_id mask
+
+  explicit=$(fixed_mask_for_scenario "$scenario")
+  if [[ "$explicit" =~ ^[01]+$ ]]; then
+    printf '%s' "$explicit"
+    return 0
+  fi
+
+  source_job=$(source_job_for_scenario "$scenario")
+  if [[ -n "$source_job" ]]; then
+    mask=$(extract_mask_from_job "$source_job") || {
+      echo "ERROR: could not extract an ordinary GIMP mask from job $source_job." >&2
+      return 1
+    }
+    echo "resolved fixed mask: scenario=$scenario source_job=$source_job" >&2
+    printf '%s' "$mask"
+    return 0
+  fi
+
+  model=$(ordinary_gimp_model_for_scenario "$scenario")
+  while IFS= read -r log_file; do
+    grep -qF "model: $model" "$log_file" || continue
+    grep -qF "map: $scenario" "$log_file" || continue
+    job_id="${log_file%.out}"
+    job_id="${job_id##*_}"
+    [[ "$job_id" =~ ^[0-9]+$ ]] || continue
+    mask=$(extract_mask_from_job "$job_id") || continue
+    echo "resolved fixed mask: scenario=$scenario source_job=$job_id" >&2
+    printf '%s' "$mask"
+    return 0
+  done < <(find ozstar_logs -maxdepth 1 -type f -name '*.out' -print0 \
+    | xargs -0 -r ls -1t 2>/dev/null)
+
+  return 1
+}
+
+set_fixed_mask_for_scenario() {
+  local scenario="$1"
+  local mask="$2"
+  case "$scenario" in
+    academy_pass_and_shoot_with_keeper) GRF_PASS_FIXED_MASK="$mask" ;;
+    academy_3_vs_1_with_keeper) GRF_3V1_FIXED_MASK="$mask" ;;
+    academy_counterattack_easy) GRF_COUNTER_FIXED_MASK="$mask" ;;
+    corridor) CORRIDOR_FIXED_MASK="$mask" ;;
+    *) return 1 ;;
+  esac
+}
+
 variant_enabled() {
   [[ " $VARIANTS " == *" $1 "* ]]
 }
@@ -112,14 +195,13 @@ done
 # submitted suite when one scenario was omitted or copied incorrectly.
 if variant_enabled fixed; then
   for scenario in $SCENARIOS; do
-    fixed_mask=$(fixed_mask_for_scenario "$scenario")
-    if [[ ! "$fixed_mask" =~ ^[01]+$ ]]; then
+    if ! fixed_mask=$(resolve_fixed_mask "$scenario"); then
       tag=$(scenario_tag "$scenario")
-      echo "ERROR: missing/invalid fixed mask for $scenario ($tag)." >&2
-      echo "Export the corresponding *_FIXED_MASK variable using a mask from" >&2
-      echo "the ordinary gradient-importance router, not shared-field." >&2
+      echo "ERROR: no ordinary GIMP mask is available for $scenario ($tag)." >&2
+      echo "Run ordinary non-shared GIMP first, or set its *_GIMP_SOURCE_JOB_ID." >&2
       exit 2
     fi
+    set_fixed_mask_for_scenario "$scenario" "$fixed_mask"
   done
 fi
 
