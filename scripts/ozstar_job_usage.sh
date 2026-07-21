@@ -26,6 +26,21 @@ while IFS='|' read -r job_id job_name; do
 
   IFS='|' read -r elapsed elapsed_raw total_cpu alloc_cpus max_rss <<< "$usage"
 
+  # On OzSTAR, sacct may leave TotalCPU and MaxRSS empty until a running job
+  # finishes. sstat exposes the live batch-step counters instead.
+  live_usage=$(sstat -j "${job_id}.batch" -n -P \
+    --format=JobID,AveCPU,MaxRSS 2>/dev/null |
+    awk -F'|' '$1 ~ /\.batch/ {print $2 "|" $3; exit}')
+  if [[ -n "$live_usage" ]]; then
+    IFS='|' read -r live_cpu live_max_rss <<< "$live_usage"
+    if [[ -n "$live_cpu" && "$live_cpu" != "00:00:00" ]]; then
+      total_cpu="$live_cpu"
+    fi
+    if [[ -n "$live_max_rss" && "$live_max_rss" != "0" ]]; then
+      max_rss="$live_max_rss"
+    fi
+  fi
+
   req_mem=$(scontrol show job -o "$job_id" 2>/dev/null |
     sed -n 's/.*ReqTRES=[^ ]*mem=\([^, ]*\).*/\1/p' | head -1)
 
