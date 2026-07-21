@@ -120,6 +120,15 @@ def slot_sort_key(name):
         side_order = 1 if match.group(1) == "ally" else 2
         entity_index = int(match.group(2))
         feature = match.group(3)
+    elif name.startswith("opponent_"):
+        match = re.match(r"opponent_(\d+)_(.*)", name)
+        side_order = 2
+        entity_index = int(match.group(1))
+        feature = match.group(2)
+    elif name.startswith("ball_"):
+        side_order = 3
+        entity_index = 0
+        feature = name[5:]
     else:
         side_order = 0
         entity_index = 0
@@ -133,6 +142,53 @@ def slot_sort_key(name):
         else:
             feature_rank = 12
     return side_order, entity_index, feature_rank, feature
+
+
+def print_flat_mask(route):
+    """Print a stage-two config value in the capturer's internal slot order."""
+    mapping = {name: 1 for name in route["token"]}
+    mapping.update({name: 0 for name in route["bias"]})
+    if any(name.startswith("self_position_") for name in mapping):
+        # GRF compact-observation order differs from the display grouping.
+        axis_rank = {"x": 0, "y": 1, "z": 2}
+
+        def grf_internal_key(name):
+            match = re.match(r"self_position_(x|y)$", name)
+            if match:
+                return 0, 0, axis_rank[match.group(1)]
+            match = re.match(r"ally_(\d+)_relative_(x|y)$", name)
+            if match:
+                return 1, int(match.group(1)), axis_rank[match.group(2)]
+            match = re.match(r"self_direction_(x|y)$", name)
+            if match:
+                return 2, 0, axis_rank[match.group(1)]
+            match = re.match(r"ally_(\d+)_direction_(x|y)$", name)
+            if match:
+                return 3, int(match.group(1)), axis_rank[match.group(2)]
+            match = re.match(r"opponent_(\d+)_relative_(x|y)$", name)
+            if match:
+                return 4, int(match.group(1)), axis_rank[match.group(2)]
+            match = re.match(r"opponent_(\d+)_direction_(x|y)$", name)
+            if match:
+                return 5, int(match.group(1)), axis_rank[match.group(2)]
+            ball_rank = {
+                "ball_relative_x": 0,
+                "ball_relative_y": 1,
+                "ball_height": 2,
+                "ball_direction_x": 3,
+                "ball_direction_y": 4,
+                "ball_direction_z": 5,
+            }
+            if name in ball_rank:
+                return 6, 0, ball_rank[name]
+            raise ValueError("Unknown GRF semantic slot: {}".format(name))
+
+        ordered_names = sorted(mapping, key=grf_internal_key)
+    else:
+        ordered_names = sorted(mapping, key=slot_sort_key)
+    # A compact bit-string survives Slurm --export; commas do not.
+    mask = "".join(str(mapping[name]) for name in ordered_names)
+    print(mask)
 
 
 def feature_name(name, group):
@@ -263,6 +319,11 @@ def main():
         action="store_true",
         help="print the exact shared 1/0 route mask in self/ally/enemy tensor order",
     )
+    parser.add_argument(
+        "--flat-mask",
+        action="store_true",
+        help="print only the stage-two 0/1 bit-string",
+    )
     args = parser.parse_args()
 
     job_ids = args.job_ids or active_job_ids()
@@ -276,13 +337,18 @@ def main():
     if not routes:
         raise SystemExit("No semantic slot routes found.")
 
-    if args.matrix and args.raw_mask:
-        parser.error("--matrix and --raw-mask cannot be used together")
+    output_modes = sum((args.matrix, args.raw_mask, args.flat_mask))
+    if output_modes > 1:
+        parser.error("--matrix, --raw-mask and --flat-mask are mutually exclusive")
     if args.matrix:
         print_route_matrix(routes)
     elif args.raw_mask:
         for route in routes:
             print_binary_mask(route)
+    elif args.flat_mask:
+        if len(routes) != 1:
+            parser.error("--flat-mask requires exactly one job with a route summary")
+        print_flat_mask(routes[0])
     else:
         for route in routes:
             print_job_route(route)

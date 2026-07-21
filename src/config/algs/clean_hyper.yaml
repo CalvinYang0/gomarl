@@ -740,10 +740,15 @@ clean_semantic_router_ema: 0.99
 # are learned rather than fixed; higher values make TOKEN admission stricter.
 clean_semantic_router_threshold: 0.5
 clean_semantic_router_temperature: 0.1
+# Discovery begins with every raw observation slot on the TOKEN branch. After
+# warmup, the selected criterion updates the route as before.
 clean_semantic_router_warmup_steps: 250000
 # Keep adapting while the policy and hypernetwork become meaningful; early TD
 # and generated-parameter signals are too noisy to freeze at 1.5M.
 clean_semantic_router_freeze_steps: 5000000
+# Stage two accepts the exact first-stage route in internal slot order, for
+# example "0011...", and builds compact branch encoders from selected fields.
+clean_semantic_router_fixed_mask: ""
 clean_semantic_router_audit_interval: 250000
 clean_semantic_parameter_probe_timesteps: 4
 clean_semantic_observation_probe_timesteps: 8
