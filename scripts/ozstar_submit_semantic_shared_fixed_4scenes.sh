@@ -14,11 +14,14 @@ TIME="${TIME:-2-00:00:00}"
 T_MAX="${T_MAX:-10050000}"
 DISCOVERY_T_MAX="${DISCOVERY_T_MAX:-5000000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
-BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-32}"
+# Keep this profile independent from a stale BATCH_SIZE_RUN exported by an
+# earlier experiment. One single-threaded environment worker occupies each
+# allocated CPU, which is the GRF profile previously measured at ~90% CPU use.
+ENV_WORKERS_PER_JOB="${ENV_WORKERS_PER_JOB:-32}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 BUFFER_SIZE="${BUFFER_SIZE:-5000}"
 LEARNER_UPDATES_PER_COLLECT="${LEARNER_UPDATES_PER_COLLECT:-4}"
-TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-4}"
+LEARNER_THREADS_PER_JOB="${LEARNER_THREADS_PER_JOB:-1}"
 TORCH_NUM_INTEROP_THREADS="${TORCH_NUM_INTEROP_THREADS:-1}"
 ENV_WORKER_STARTUP_STAGGER="${ENV_WORKER_STARTUP_STAGGER:-0.25}"
 ENV_WORKER_RESET_RETRIES="${ENV_WORKER_RESET_RETRIES:-3}"
@@ -51,7 +54,7 @@ scenario_tag() {
 }
 
 common_args() {
-  printf '%s' "$EXTRA_ARGS torch_num_threads=$TORCH_NUM_THREADS torch_num_interop_threads=$TORCH_NUM_INTEROP_THREADS learner_updates_per_collect=$LEARNER_UPDATES_PER_COLLECT clean_semantic_router_ema=$ROUTER_EMA clean_semantic_router_threshold=$ROUTER_THRESHOLD clean_semantic_router_temperature=$ROUTER_TEMPERATURE clean_semantic_router_warmup_steps=$ROUTER_WARMUP_STEPS clean_semantic_router_freeze_steps=$ROUTER_FREEZE_STEPS clean_relation_teacher_td_coef=0.0 clean_relation_distill_coef=0.0 clean_smooth_head_loss_coef=0.0 clean_action_pred_loss_coef=0.0 clean_public_delta_loss_coef=0.0 save_battle_trace=False"
+  printf '%s' "$EXTRA_ARGS torch_num_threads=$LEARNER_THREADS_PER_JOB torch_num_interop_threads=$TORCH_NUM_INTEROP_THREADS learner_updates_per_collect=$LEARNER_UPDATES_PER_COLLECT clean_semantic_router_ema=$ROUTER_EMA clean_semantic_router_threshold=$ROUTER_THRESHOLD clean_semantic_router_temperature=$ROUTER_TEMPERATURE clean_semantic_router_warmup_steps=$ROUTER_WARMUP_STEPS clean_semantic_router_freeze_steps=$ROUTER_FREEZE_STEPS clean_relation_teacher_td_coef=0.0 clean_relation_distill_coef=0.0 clean_smooth_head_loss_coef=0.0 clean_action_pred_loss_coef=0.0 clean_public_delta_loss_coef=0.0 save_battle_trace=False"
 }
 
 submit_job() {
@@ -66,6 +69,12 @@ submit_job() {
   local memory="$9"
   local scenario_extra_args="${10:-}"
 
+  if (( ENV_WORKERS_PER_JOB != cpus )); then
+    echo "ERROR: ENV_WORKERS_PER_JOB=$ENV_WORKERS_PER_JOB must equal allocated CPUs=$cpus." >&2
+    echo "This suite requires one single-threaded environment worker per CPU." >&2
+    return 2
+  fi
+
   sbatch --parsable \
     --nodes=1 \
     --ntasks=1 \
@@ -75,7 +84,7 @@ submit_job() {
     --job-name="$job_name" \
     --output=ozstar_logs/%x_%j.out \
     --error=ozstar_logs/%x_%j.err \
-    --export=ALL,CONFIG=clean_hyper,ENV_CONFIG="$env_config",MAP_NAME="$map_name",MODEL_TYPE="$model_type",DISCOVERY_MODEL_TYPE="$discovery_model_type",DISCOVERY_T_MAX="$DISCOVERY_T_MAX",SEED="$SEED",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",GROUP_NAME="$run_name",OMP_NUM_THREADS=1,MKL_NUM_THREADS=1,OPENBLAS_NUM_THREADS=1,NUMEXPR_NUM_THREADS=1,EXTRA_ARGS="$(common_args) $scenario_extra_args" \
+    --export=ALL,CONFIG=clean_hyper,ENV_CONFIG="$env_config",MAP_NAME="$map_name",MODEL_TYPE="$model_type",DISCOVERY_MODEL_TYPE="$discovery_model_type",DISCOVERY_T_MAX="$DISCOVERY_T_MAX",SEED="$SEED",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$ENV_WORKERS_PER_JOB",EXPECTED_BATCH_SIZE_RUN="$ENV_WORKERS_PER_JOB",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",GROUP_NAME="$run_name",OMP_NUM_THREADS=1,MKL_NUM_THREADS=1,OPENBLAS_NUM_THREADS=1,NUMEXPR_NUM_THREADS=1,EXTRA_ARGS="$(common_args) $scenario_extra_args" \
     "$train_script"
 }
 
@@ -93,6 +102,7 @@ done
 echo "== Adaptive semantic routing suite: 4 scenes =="
 echo "variants: $VARIANTS"
 echo "resources: GRF=32c/10G, corridor=32c/40G"
+echo "cpu profile: ${ENV_WORKERS_PER_JOB} single-threaded rollout workers; ${LEARNER_THREADS_PER_JOB}-thread learner"
 echo "shared: adaptive field-shared routing for $T_MAX steps"
 echo "compact: adaptive discovery for $DISCOVERY_T_MAX steps, then rebuilt compact training for $T_MAX steps"
 

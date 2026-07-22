@@ -28,6 +28,7 @@ WANDB_MODE="${WANDB_MODE:-offline}"
 USE_WANDB="${USE_WANDB:-True}"
 
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-1}"
+EXPECTED_BATCH_SIZE_RUN="${EXPECTED_BATCH_SIZE_RUN:-}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
 BUFFER_SIZE="${BUFFER_SIZE:-50}"
 T_MAX="${T_MAX:-10000}"
@@ -36,6 +37,11 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 cd "$REPO_DIR"
 mkdir -p ozstar_logs
+
+if [[ -n "$EXPECTED_BATCH_SIZE_RUN" && "$BATCH_SIZE_RUN" != "$EXPECTED_BATCH_SIZE_RUN" ]]; then
+  echo "ERROR: batch_size_run=$BATCH_SIZE_RUN, expected $EXPECTED_BATCH_SIZE_RUN" >&2
+  exit 2
+fi
 
 export SC2PATH
 export WANDB_MODE
@@ -66,6 +72,8 @@ echo "omp_num_threads: $OMP_NUM_THREADS"
 echo "mkl_num_threads: $MKL_NUM_THREADS"
 echo "openblas_num_threads: $OPENBLAS_NUM_THREADS"
 echo "numexpr_num_threads: $NUMEXPR_NUM_THREADS"
+echo "batch_size_run: $BATCH_SIZE_RUN"
+echo "expected_batch_size_run: ${EXPECTED_BATCH_SIZE_RUN:-<not enforced>}"
 echo "extra_args: $EXTRA_ARGS"
 
 "$PYTHON_BIN" - <<'PY'
