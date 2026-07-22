@@ -20,6 +20,10 @@ TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 ENV_WORKERS_PER_JOB="${ENV_WORKERS_PER_JOB:-8}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 BUFFER_SIZE="${BUFFER_SIZE:-5000}"
+GRF_MEM="${GRF_MEM:-10G}"
+# Corridor peaks just above 40 GiB with this env/buffer profile. 48G leaves
+# enough allocator headroom while keeping observed peak utilization above 80%.
+CORRIDOR_MEM="${CORRIDOR_MEM:-48G}"
 REFERENCE_BATCH_SIZE_RUN="${REFERENCE_BATCH_SIZE_RUN:-8}"
 LEARNER_UPDATES_PER_COLLECT="${LEARNER_UPDATES_PER_COLLECT:-$(( (ENV_WORKERS_PER_JOB + REFERENCE_BATCH_SIZE_RUN - 1) / REFERENCE_BATCH_SIZE_RUN ))}"
 LEARNER_THREADS_PER_JOB="${LEARNER_THREADS_PER_JOB:-32}"
@@ -106,7 +110,7 @@ done
 
 echo "== Adaptive semantic routing suite: 4 scenes =="
 echo "variants: $VARIANTS"
-echo "resources: GRF=32c/10G, corridor=32c/40G"
+echo "resources: GRF=32c/${GRF_MEM}, corridor=32c/${CORRIDOR_MEM}"
 echo "cpu profile: ${ENV_WORKERS_PER_JOB} rollout workers; ${LEARNER_THREADS_PER_JOB}-thread learner; ${LEARNER_UPDATES_PER_COLLECT} update(s)/collect"
 echo "shared: adaptive field-shared routing for $T_MAX steps"
 echo "compact: adaptive discovery for $DISCOVERY_T_MAX steps, then rebuilt compact training for $T_MAX steps"
@@ -117,7 +121,7 @@ for scenario in $SCENARIOS; do
     env_config="sc2"
     map_name="corridor"
     cpus=32
-    memory="40G"
+    memory="$CORRIDOR_MEM"
     discovery_model="rpg_simple_bias_gradient_importance_router_hypercond"
     shared_model="rpg_simple_bias_gradient_importance_shared_field_router_hypercond"
     compact_model="rpg_simple_bias_gradient_importance_fixed_mask_router_hypercond"
@@ -126,7 +130,7 @@ for scenario in $SCENARIOS; do
     env_config="$scenario"
     map_name="$scenario"
     cpus=32
-    memory="10G"
+    memory="$GRF_MEM"
     discovery_model="grf_abs_simple_bias_gradient_importance_router_hypercond"
     shared_model="grf_abs_simple_bias_gradient_importance_shared_field_router_hypercond"
     compact_model="grf_abs_simple_bias_gradient_importance_fixed_mask_router_hypercond"
