@@ -178,6 +178,18 @@ SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "rpg_simple_bias_parameter_sensitivity_learnable_threshold_router_hypercond": "parameter_sensitivity",
     "rpg_simple_bias_parameter_sensitivity_inverse_router_hypercond": "parameter_sensitivity",
     "rpg_simple_bias_counterfactual_router_hypercond": "counterfactual",
+    "rpg_simple_bias_gradient_importance_film_router_hypercond": "gradient_importance",
+    "rpg_simple_bias_gradient_importance_drop_router_hypercond": "gradient_importance",
+    "rpg_simple_bias_gradient_importance_hierarchical_drop_router_hypercond": "gradient_importance",
+    "rpg_simple_bias_gradient_importance_sparse_drop_router_hypercond": "gradient_importance",
+}
+SEMANTIC_ROUTER_FILM_VARIANTS = {
+    "rpg_simple_bias_gradient_importance_film_router_hypercond",
+}
+SEMANTIC_ROUTER_DROP_MODE_BY_MODEL = {
+    "rpg_simple_bias_gradient_importance_drop_router_hypercond": "threshold",
+    "rpg_simple_bias_gradient_importance_hierarchical_drop_router_hypercond": "hierarchical",
+    "rpg_simple_bias_gradient_importance_sparse_drop_router_hypercond": "topk",
 }
 SEMANTIC_ROUTER_LEARNABLE_THRESHOLD_VARIANTS = {
     "rpg_simple_bias_gradient_importance_learnable_threshold_router_hypercond",
@@ -1096,6 +1108,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         semantic_router_freeze_steps=5000000,
         semantic_router_share_fields=False,
         semantic_router_fixed_mask="",
+        semantic_router_drop_mode="none",
+        semantic_router_keep_threshold=0.35,
+        semantic_router_keep_ratio=0.5,
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -1135,6 +1150,26 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.semantic_router_warmup_steps = int(semantic_router_warmup_steps)
         self.semantic_router_freeze_steps = int(semantic_router_freeze_steps)
         self.semantic_router_share_fields = bool(semantic_router_share_fields)
+        self.semantic_router_drop_mode = str(semantic_router_drop_mode)
+        if self.semantic_router_drop_mode not in {
+            "none",
+            "threshold",
+            "hierarchical",
+            "topk",
+        }:
+            raise ValueError(
+                "semantic_router_drop_mode must be none, threshold, hierarchical, or topk"
+            )
+        self.semantic_router_keep_threshold = float(semantic_router_keep_threshold)
+        if not 0.0 < self.semantic_router_keep_threshold < 1.0:
+            raise ValueError(
+                "semantic_router_keep_threshold must be strictly between 0 and 1"
+            )
+        self.semantic_router_keep_ratio = float(semantic_router_keep_ratio)
+        if not 0.0 < self.semantic_router_keep_ratio <= 1.0:
+            raise ValueError(
+                "semantic_router_keep_ratio must be in the interval (0, 1]"
+            )
         self.public_self_dim = 1 + unit_type_bits
         self.public_ally_dim = 1 + unit_type_bits
         self.public_enemy_dim = 1 + unit_type_bits
@@ -1192,11 +1227,14 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.semantic_field_count = field_count
         self.register_buffer("semantic_manual_token_route", manual_route)
         self.register_buffer("semantic_token_route", manual_route.clone())
+        self.register_buffer("semantic_bias_route", 1.0 - manual_route.clone())
+        self.register_buffer("semantic_keep_route", th.ones_like(manual_route))
         self.register_buffer("semantic_token_probability", manual_route.clone())
         self.register_buffer("semantic_route_score", th.zeros(len(self.semantic_names)))
         self.register_buffer("semantic_route_score_initialized", th.tensor(False))
         self.register_buffer("semantic_route_frozen", th.tensor(fixed_route is not None))
         self.register_buffer("semantic_learnable_threshold_active", th.tensor(False))
+        self.register_buffer("semantic_hierarchical_usage_active", th.tensor(False))
         self.register_buffer("semantic_gradient_mean", th.zeros(len(self.semantic_names)))
         self.register_buffer("semantic_gradient_abs_mean", th.zeros(len(self.semantic_names)))
         self.register_buffer("semantic_route_last_switch_rate", th.tensor(0.0))
@@ -1222,6 +1260,13 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.semantic_router_threshold_logit = (
             nn.Parameter(th.tensor(threshold_logit, dtype=th.float32))
             if self.semantic_router_learnable_threshold
+            else None
+        )
+        self.semantic_usage_logit = (
+            # sigmoid(0)=0.5 keeps the hard route on TOKEN while preserving
+            # the largest possible straight-through gradient at startup.
+            nn.Parameter(th.zeros(len(self.semantic_names)))
+            if self.semantic_router_drop_mode == "hierarchical"
             else None
         )
         self._semantic_online_score_sum = None
@@ -1304,6 +1349,9 @@ class PublicTransformerRelationCapturer(nn.Module):
             nn.Linear(relation_dim, num_heads),
         )
         self.simple_bias = nn.Linear(relation_dim, num_heads)
+        self.film_modulation = nn.Linear(relation_dim, 2 * relation_dim)
+        nn.init.zeros_(self.film_modulation.weight)
+        nn.init.zeros_(self.film_modulation.bias)
         self.private_bias_attention = MaskedSelfAttentionBlock(relation_dim)
         self.transformer_layers = nn.ModuleList(
             BiasTransformerEncoderLayer(relation_dim, num_heads)
@@ -1523,6 +1571,38 @@ class PublicTransformerRelationCapturer(nn.Module):
             route = route + soft_route - soft_route.detach()
         return route
 
+    def _current_semantic_routes(self, reference):
+        """Return differentiable TOKEN and BIAS masks; zero in both means DROP."""
+        token_route = self._current_semantic_token_route(reference)
+        if self.semantic_router_drop_mode == "none":
+            return token_route, 1.0 - token_route
+        if self.semantic_router_drop_mode in {"threshold", "topk"}:
+            return token_route, th.zeros_like(token_route)
+
+        keep_route = self.semantic_keep_route.to(
+            device=reference.device, dtype=reference.dtype
+        )
+        if (
+            self.semantic_usage_logit is not None
+            and bool(self.semantic_hierarchical_usage_active.item())
+            and not bool(self.semantic_route_frozen.item())
+            and th.is_grad_enabled()
+        ):
+            temperature = max(self.semantic_router_temperature, 1e-6)
+            probability = th.sigmoid(
+                self.semantic_usage_logit.to(
+                    device=reference.device, dtype=reference.dtype
+                )
+                / temperature
+            )
+            hard_usage = (probability >= 0.5).to(dtype=reference.dtype)
+            usage = hard_usage + probability - probability.detach()
+        else:
+            usage = self.semantic_token_route.to(
+                device=reference.device, dtype=reference.dtype
+            )
+        return keep_route * usage, keep_route * (1.0 - usage)
+
     def _current_semantic_route_threshold(self, reference=None):
         if self.semantic_router_learnable_threshold:
             threshold = th.sigmoid(self.semantic_router_threshold_logit)
@@ -1597,7 +1677,9 @@ class PublicTransformerRelationCapturer(nn.Module):
             ).to(dtype=scores.dtype)
             field_means = field_sums / field_counts.clamp(min=1.0)
             scores = field_means.index_select(0, field_ids)
-        previous_route = self.semantic_token_route.clone()
+        previous_token_route = self.semantic_token_route.clone()
+        previous_bias_route = self.semantic_bias_route.clone()
+        previous_keep_route = self.semantic_keep_route.clone()
         if not bool(self.semantic_route_score_initialized.item()):
             self.semantic_route_score.copy_(scores)
             self.semantic_route_score_initialized.fill_(True)
@@ -1608,10 +1690,13 @@ class PublicTransformerRelationCapturer(nn.Module):
 
         if t_env < self.semantic_router_warmup_steps:
             self.semantic_learnable_threshold_active.fill_(False)
+            self.semantic_hierarchical_usage_active.fill_(False)
             self.semantic_token_route.copy_(self.semantic_manual_token_route)
+            self.semantic_bias_route.copy_(1.0 - self.semantic_manual_token_route)
+            self.semantic_keep_route.fill_(1.0)
             self.semantic_token_probability.copy_(self.semantic_manual_token_route)
             self.semantic_route_last_switch_rate.copy_(
-                (self.semantic_token_route != previous_route).float().mean()
+                (self.semantic_token_route != previous_token_route).float().mean()
             )
             return
         if bool(self.semantic_route_frozen.item()):
@@ -1632,8 +1717,55 @@ class PublicTransformerRelationCapturer(nn.Module):
             route = 1.0 - normal_route
         else:
             route = normal_route
-        self.semantic_token_route.copy_(route)
-        switch_rate = (route != previous_route).float().mean()
+
+        if self.semantic_router_drop_mode == "threshold":
+            keep_route = (
+                probability > self.semantic_router_keep_threshold
+            ).to(dtype=self.semantic_token_route.dtype)
+            if self.semantic_router_inverse:
+                keep_route = 1.0 - keep_route
+            token_route = keep_route
+            bias_route = th.zeros_like(keep_route)
+        elif self.semantic_router_drop_mode == "topk":
+            keep_count = max(
+                1,
+                min(
+                    probability.numel(),
+                    int(math.ceil(probability.numel() * self.semantic_router_keep_ratio)),
+                ),
+            )
+            keep_route = th.zeros_like(probability)
+            keep_indices = th.topk(probability, k=keep_count, sorted=False).indices
+            keep_route.scatter_(0, keep_indices, 1.0)
+            if self.semantic_router_inverse:
+                keep_route = 1.0 - keep_route
+            token_route = keep_route
+            bias_route = th.zeros_like(keep_route)
+        elif self.semantic_router_drop_mode == "hierarchical":
+            keep_route = (probability > self.semantic_router_keep_threshold).to(
+                dtype=self.semantic_token_route.dtype
+            )
+            usage_route = (th.sigmoid(self.semantic_usage_logit.detach()) >= 0.5).to(
+                dtype=self.semantic_token_route.dtype,
+                device=self.semantic_token_route.device,
+            )
+            token_route = keep_route * usage_route
+            bias_route = keep_route * (1.0 - usage_route)
+            self.semantic_hierarchical_usage_active.fill_(True)
+        else:
+            keep_route = th.ones_like(route)
+            token_route = route
+            bias_route = 1.0 - route
+
+        self.semantic_keep_route.copy_(keep_route)
+        self.semantic_token_route.copy_(token_route)
+        self.semantic_bias_route.copy_(bias_route)
+        route_change = (
+            (token_route != previous_token_route)
+            | (bias_route != previous_bias_route)
+            | (keep_route != previous_keep_route)
+        )
+        switch_rate = route_change.float().mean()
         self.semantic_route_last_switch_rate.copy_(switch_rate)
         if bool(switch_rate.item() > 0):
             self.semantic_route_version.add_(1)
@@ -1643,6 +1775,7 @@ class PublicTransformerRelationCapturer(nn.Module):
                 self.semantic_route_version.add_(1)
             self.semantic_route_frozen.fill_(True)
             self.semantic_learnable_threshold_active.fill_(False)
+            self.semantic_hierarchical_usage_active.fill_(False)
 
     def update_semantic_router(self, t_env, external_score=None):
         if not self.semantic_router_active:
@@ -1688,8 +1821,26 @@ class PublicTransformerRelationCapturer(nn.Module):
         threshold_margin = threshold_distance.min()
         stats = {
             "semantic_route_token_count": self.semantic_token_route.sum().detach(),
-            "semantic_route_bias_count": (1.0 - self.semantic_token_route).sum().detach(),
+            "semantic_route_bias_count": self.semantic_bias_route.sum().detach(),
+            "semantic_route_drop_count": (1.0 - self.semantic_keep_route).sum().detach(),
             "semantic_route_token_fraction": self.semantic_token_route.mean().detach(),
+            "semantic_route_bias_fraction": self.semantic_bias_route.mean().detach(),
+            "semantic_route_keep_fraction": self.semantic_keep_route.mean().detach(),
+            "semantic_route_drop_fraction": (1.0 - self.semantic_keep_route).mean().detach(),
+            "semantic_route_drop_mode": probability.new_tensor(
+                {
+                    "none": 0.0,
+                    "threshold": 1.0,
+                    "hierarchical": 2.0,
+                    "topk": 3.0,
+                }[self.semantic_router_drop_mode]
+            ),
+            "semantic_route_keep_threshold": probability.new_tensor(
+                self.semantic_router_keep_threshold
+            ),
+            "semantic_route_keep_ratio": probability.new_tensor(
+                self.semantic_router_keep_ratio
+            ),
             "semantic_route_inverse": probability.new_tensor(
                 float(self.semantic_router_inverse)
             ),
@@ -1716,6 +1867,17 @@ class PublicTransformerRelationCapturer(nn.Module):
             ).float().mean().detach(),
             "semantic_route_version": self.semantic_route_version.float().detach(),
         }
+        if self.semantic_usage_logit is not None:
+            usage_probability = th.sigmoid(self.semantic_usage_logit.detach())
+            stats["semantic_route_usage_token_probability_mean"] = (
+                usage_probability.mean()
+            )
+            stats["semantic_route_usage_token_probability_entropy"] = -(
+                usage_probability.clamp(1e-6, 1.0 - 1e-6)
+                * usage_probability.clamp(1e-6, 1.0 - 1e-6).log()
+                + (1.0 - usage_probability).clamp(1e-6, 1.0 - 1e-6)
+                * (1.0 - usage_probability).clamp(1e-6, 1.0 - 1e-6).log()
+            ).mean()
         compact_encoders = self._compact_semantic_encoders()
         stats.update(
             {
@@ -1785,12 +1947,18 @@ class PublicTransformerRelationCapturer(nn.Module):
         ]
         bias_names = [
             name
-            for name, branch in zip(self.semantic_names, self.semantic_token_route.tolist())
+            for name, branch in zip(self.semantic_names, self.semantic_bias_route.tolist())
+            if branch >= 0.5
+        ]
+        drop_names = [
+            name
+            for name, branch in zip(self.semantic_names, self.semantic_keep_route.tolist())
             if branch < 0.5
         ]
-        return "TOKEN=[{}] | BIAS=[{}] | frozen={} | version={}".format(
+        return "TOKEN=[{}] | BIAS=[{}] | DROP=[{}] | frozen={} | version={}".format(
             ",".join(token_names),
             ",".join(bias_names),
+            ",".join(drop_names),
             int(self.semantic_route_frozen.item()),
             int(self.semantic_route_version.item()),
         )
@@ -1800,11 +1968,14 @@ class PublicTransformerRelationCapturer(nn.Module):
             return
         for name in (
             "semantic_token_route",
+            "semantic_bias_route",
+            "semantic_keep_route",
             "semantic_token_probability",
             "semantic_route_score",
             "semantic_route_score_initialized",
             "semantic_route_frozen",
             "semantic_learnable_threshold_active",
+            "semantic_hierarchical_usage_active",
             "semantic_gradient_mean",
             "semantic_gradient_abs_mean",
             "semantic_route_last_switch_rate",
@@ -2087,10 +2258,13 @@ class PublicTransformerRelationCapturer(nn.Module):
             return self._fixed_semantic_routed_embeddings(
                 self_feat, ally_feat, enemy_feat, ally_mask, enemy_mask
             )
-        route = self._current_semantic_token_route(self_feat)
+        token_route, bias_route = self._current_semantic_routes(self_feat)
         scales = self._semantic_scales(self_feat)
         apply_probe_scales = self.semantic_router_uses_probe() and th.is_grad_enabled()
-        self_route, ally_route, enemy_route = self._semantic_slot_views(route)
+        self_route, ally_route, enemy_route = self._semantic_slot_views(token_route)
+        self_bias_route, ally_bias_route, enemy_bias_route = self._semantic_slot_views(
+            bias_route
+        )
         self_scales, ally_scales, enemy_scales = self._semantic_slot_views(scales)
         if apply_probe_scales:
             scaled_self_feat = self_feat * self_scales
@@ -2107,7 +2281,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         self_public_end = self.move_dim + self.self_value_dim + self.unit_type_bits
         self_public_route = th.cat(
             [
-                route.new_ones(1, 1, 1),
+                token_route.new_ones(1, 1, 1),
                 self_route[:, :, self.move_dim : self_public_end],
             ],
             dim=-1,
@@ -2116,15 +2290,36 @@ class PublicTransformerRelationCapturer(nn.Module):
         enemy_public_end = 4 + self.enemy_value_dim + self.unit_type_bits
         ally_public_route = th.cat(
             [
-                route.new_ones(1, 1, self.n_allies, 1),
+                token_route.new_ones(1, 1, self.n_allies, 1),
                 ally_route[:, :, :, 4:ally_public_end],
             ],
             dim=-1,
         )
         enemy_public_route = th.cat(
             [
-                route.new_ones(1, 1, self.n_enemies, 1),
+                token_route.new_ones(1, 1, self.n_enemies, 1),
                 enemy_route[:, :, :, 4:enemy_public_end],
+            ],
+            dim=-1,
+        )
+        self_public_bias_route = th.cat(
+            [
+                bias_route.new_zeros(1, 1, 1),
+                self_bias_route[:, :, self.move_dim : self_public_end],
+            ],
+            dim=-1,
+        )
+        ally_public_bias_route = th.cat(
+            [
+                bias_route.new_zeros(1, 1, self.n_allies, 1),
+                ally_bias_route[:, :, :, 4:ally_public_end],
+            ],
+            dim=-1,
+        )
+        enemy_public_bias_route = th.cat(
+            [
+                bias_route.new_zeros(1, 1, self.n_enemies, 1),
+                enemy_bias_route[:, :, :, 4:enemy_public_end],
             ],
             dim=-1,
         )
@@ -2145,6 +2340,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         self_geometry_route = self_route[:, :, : self.move_dim]
         ally_geometry_route = ally_route[:, :, :, :4]
         enemy_geometry_route = enemy_route[:, :, :, :4]
+        self_geometry_bias_route = self_bias_route[:, :, : self.move_dim]
+        ally_geometry_bias_route = ally_bias_route[:, :, :, :4]
+        enemy_geometry_bias_route = enemy_bias_route[:, :, :, :4]
         self_geometry_token = self._centered_encode(
             self.self_private_encoder,
             self_geometry_input * self_geometry_route,
@@ -2169,6 +2367,13 @@ class PublicTransformerRelationCapturer(nn.Module):
         ).view(1, 1, 1, -1)
         ally_tokens = ally_tokens * ally_mask.unsqueeze(-1).float()
         enemy_tokens = enemy_tokens * enemy_mask.unsqueeze(-1).float()
+
+        if self.semantic_router_drop_mode in {"threshold", "topk"}:
+            # Direct and budgeted DROP have only TOKEN and DROP branches. Do
+            # not let owner embeddings or projection biases recreate an
+            # implicit BIAS path after a coordinate has been dropped.
+            return self_token, ally_tokens, enemy_tokens, None, None, None
+
         self_owner = self._private_side(0, self_feat.device).view(1, 1, -1)
         ally_owner = (
             self._private_side(1, self_feat.device).view(1, 1, 1, -1)
@@ -2178,21 +2383,60 @@ class PublicTransformerRelationCapturer(nn.Module):
             self._private_side(2, self_feat.device).view(1, 1, 1, -1)
             * enemy_mask.unsqueeze(-1).float()
         )
-        self_geometry_bias = self.self_private_encoder(
-            self_geometry_input * (1.0 - self_geometry_route)
-        )
-        ally_geometry_bias = self.ally_private_encoder(
-            ally_geometry_input * (1.0 - ally_geometry_route)
-        ) * ally_mask.unsqueeze(-1).float()
-        enemy_geometry_bias = self.enemy_private_encoder(
-            enemy_geometry_input * (1.0 - enemy_geometry_route)
-        ) * enemy_mask.unsqueeze(-1).float()
+        if self.semantic_router_drop_mode == "none":
+            # Preserve the original TOKEN/BIAS implementation exactly for the
+            # baseline and FiLM ablation.
+            self_geometry_bias = self.self_private_encoder(
+                self_geometry_input * self_geometry_bias_route
+            )
+            ally_geometry_bias = self.ally_private_encoder(
+                ally_geometry_input * ally_geometry_bias_route
+            ) * ally_mask.unsqueeze(-1).float()
+            enemy_geometry_bias = self.enemy_private_encoder(
+                enemy_geometry_input * enemy_geometry_bias_route
+            ) * enemy_mask.unsqueeze(-1).float()
+            bias_self = self_full_embed - self_token_base
+            bias_ally = ally_full_embed - ally_token_base
+            bias_enemy = enemy_full_embed - enemy_token_base
+        else:
+            # DROP coordinates must contribute neither their values nor an
+            # encoder-bias constant to either processing branch.
+            self_geometry_bias = self._centered_encode(
+                self.self_private_encoder,
+                self_geometry_input * self_geometry_bias_route,
+            )
+            ally_geometry_bias = self._centered_encode(
+                self.ally_private_encoder,
+                ally_geometry_input * ally_geometry_bias_route,
+            ) * ally_mask.unsqueeze(-1).float()
+            enemy_geometry_bias = self._centered_encode(
+                self.enemy_private_encoder,
+                enemy_geometry_input * enemy_geometry_bias_route,
+            ) * enemy_mask.unsqueeze(-1).float()
+            bias_self = self._centered_encode(
+                self.self_public_encoder,
+                self_public * self_public_bias_route,
+            )
+            bias_ally = self._centered_encode(
+                ally_encoder,
+                ally_public * ally_public_bias_route,
+            ) * ally_mask.unsqueeze(-1).float()
+            bias_enemy = self._centered_encode(
+                self.enemy_public_encoder,
+                enemy_public * enemy_public_bias_route,
+            ) * enemy_mask.unsqueeze(-1).float()
 
-        # Public fields omitted from the entity token are converted into the
-        # same simple attention-bias representation as the private fields.
-        bias_self = self_full_embed - self_token_base
-        bias_ally = ally_full_embed - ally_token_base
-        bias_enemy = enemy_full_embed - enemy_token_base
+            # In hierarchical routing, owner identity belongs to the BIAS
+            # branch only when that entity has at least one BIAS coordinate.
+            # The straight-through route keeps this gate differentiable even
+            # when its hard forward value is zero.
+            self_bias_presence = self_bias_route.amax(dim=-1, keepdim=True)
+            ally_bias_presence = ally_bias_route.amax(dim=-1, keepdim=True)
+            enemy_bias_presence = enemy_bias_route.amax(dim=-1, keepdim=True)
+            self_owner = self_owner * self_bias_presence
+            ally_owner = ally_owner * ally_bias_presence
+            enemy_owner = enemy_owner * enemy_bias_presence
+
         bias_self = bias_self + self_geometry_bias + self_owner
         bias_ally = bias_ally + ally_geometry_bias + ally_owner
         bias_enemy = bias_enemy + enemy_geometry_bias + enemy_owner
@@ -2317,6 +2561,44 @@ class PublicTransformerRelationCapturer(nn.Module):
             batch_size * n_agents, self.num_heads, n_entity_tokens + 1, n_entity_tokens + 1
         )
 
+    def _apply_film_modulation(
+        self,
+        self_token,
+        ally_tokens,
+        enemy_tokens,
+        mod_self,
+        mod_ally,
+        mod_enemy,
+        ally_mask,
+        enemy_mask,
+    ):
+        """Use the BIAS branch as identity-initialized FiLM modulation."""
+        entity_tokens = th.cat(
+            [self_token.unsqueeze(2), ally_tokens, enemy_tokens], dim=2
+        )
+        mod_tokens = th.cat(
+            [mod_self.unsqueeze(2), mod_ally, mod_enemy], dim=2
+        )
+        gamma, beta = self.film_modulation(mod_tokens).chunk(2, dim=-1)
+        entity_tokens = (1.0 + th.tanh(gamma)) * entity_tokens + beta
+
+        self_mask = th.ones(
+            self_token.size(0),
+            self_token.size(1),
+            1,
+            device=self_token.device,
+            dtype=th.bool,
+        )
+        valid_mask = th.cat([self_mask, ally_mask, enemy_mask], dim=2)
+        entity_tokens = entity_tokens * valid_mask.unsqueeze(-1).float()
+
+        ally_end = 1 + ally_tokens.size(2)
+        return (
+            entity_tokens[:, :, 0],
+            entity_tokens[:, :, 1:ally_end],
+            entity_tokens[:, :, ally_end:],
+        )
+
     def _build_attention_bias(self, mod_self, mod_ally, mod_enemy, batch_size, n_agents, ally_mask, enemy_mask):
         mod_tokens = th.cat([mod_self.unsqueeze(2), mod_ally, mod_enemy], dim=2)
         n_entity_tokens = mod_tokens.size(2)
@@ -2326,7 +2608,16 @@ class PublicTransformerRelationCapturer(nn.Module):
             mod_tokens, _ = self.private_bias_attention(mod_tokens, private_mask)
             return self._simple_private_bias(mod_tokens, batch_size, n_agents)
         if self.private_bias_style == "simple":
-            return self._simple_private_bias(mod_tokens, batch_size, n_agents)
+            attention_bias = self._simple_private_bias(
+                mod_tokens, batch_size, n_agents
+            )
+            if self.semantic_router_drop_mode == "hierarchical":
+                # A Linear layer's additive bias must not create modulation
+                # when the hard route assigns no coordinate to BIAS.
+                attention_bias = attention_bias - self._simple_private_bias(
+                    th.zeros_like(mod_tokens), batch_size, n_agents
+                )
+            return attention_bias
 
         left = mod_tokens.unsqueeze(3).expand(-1, -1, -1, n_entity_tokens, -1)
         right = mod_tokens.unsqueeze(2).expand(-1, -1, n_entity_tokens, -1, -1)
@@ -2534,6 +2825,19 @@ class PublicTransformerRelationCapturer(nn.Module):
             self_token = self_token + token_self
             ally_tokens = ally_tokens + token_ally
             enemy_public_tokens = enemy_public_tokens + token_enemy
+
+        if bias_self is not None and self.private_bias_style == "film":
+            self_token, ally_tokens, enemy_public_tokens = self._apply_film_modulation(
+                self_token,
+                ally_tokens,
+                enemy_public_tokens,
+                bias_self,
+                bias_ally,
+                bias_enemy,
+                ally_mask,
+                enemy_mask,
+            )
+            bias_self = bias_ally = bias_enemy = None
 
         cls_token = self.cls_token.expand(batch_size, n_agents, -1, -1)
         tokens = th.cat([cls_token, self_token.unsqueeze(2), ally_tokens, enemy_public_tokens], dim=2)
@@ -5100,6 +5404,12 @@ class CleanHyperAgent(nn.Module):
         self.semantic_router_freeze_steps = int(
             getattr(args, "clean_semantic_router_freeze_steps", 5000000)
         )
+        self.semantic_router_keep_threshold = float(
+            getattr(args, "clean_semantic_router_keep_threshold", 0.35)
+        )
+        self.semantic_router_keep_ratio = float(
+            getattr(args, "clean_semantic_router_keep_ratio", 0.5)
+        )
         self.semantic_router_fixed_mask = getattr(
             args, "clean_semantic_router_fixed_mask", ""
         )
@@ -6513,6 +6823,8 @@ class CleanHyperAgent(nn.Module):
                 private_bias_style=(
                     "pair_mlp_no_side"
                     if self.model_type == "rpg_public_private_owner_bias_transformer_hypercond"
+                    else "film"
+                    if self.model_type in SEMANTIC_ROUTER_FILM_VARIANTS
                     else "simple"
                     if self.model_type in PUBLIC_TRANSFORMER_SIMPLE_BIAS_FAMILY
                     else "selfattn_simple"
@@ -6531,6 +6843,11 @@ class CleanHyperAgent(nn.Module):
                 semantic_router_freeze_steps=self.semantic_router_freeze_steps,
                 semantic_router_share_fields=self.model_type
                 in SEMANTIC_ROUTER_SHARED_FIELD_VARIANTS,
+                semantic_router_drop_mode=SEMANTIC_ROUTER_DROP_MODE_BY_MODEL.get(
+                    self.model_type, "none"
+                ),
+                semantic_router_keep_threshold=self.semantic_router_keep_threshold,
+                semantic_router_keep_ratio=self.semantic_router_keep_ratio,
                 semantic_router_fixed_mask=(
                     self.semantic_router_fixed_mask
                     if self.model_type in SEMANTIC_ROUTER_FIXED_MASK_VARIANTS

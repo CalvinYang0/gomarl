@@ -11,11 +11,16 @@ from pathlib import Path
 ROUTE_MARKER = "Semantic slot route |"
 ROUTE_RE = re.compile(
     r"t_env=(?P<t_env>\d+) \| TOKEN=\[(?P<token>.*?)\] "
-    r"\| BIAS=\[(?P<bias>.*?)\] \| frozen=(?P<frozen>\d+) "
+    r"\| BIAS=\[(?P<bias>.*?)\] "
+    r"(?:\| DROP=\[(?P<drop>.*?)\] )?\| frozen=(?P<frozen>\d+) "
     r"\| version=(?P<version>\d+)"
 )
 
 LABELS = (
+    ("hierarchical_drop", "HDROP"),
+    ("sparse_drop", "SDROP"),
+    ("_film_", "FILM"),
+    ("_drop_", "DROP"),
     ("obscons", "OBS"),
     ("tempstable", "TEMP"),
     ("gradimp", "GIMP"),
@@ -88,6 +93,7 @@ def route_for_job(log_dir, job_id):
             "version": int(match.group("version")),
             "token": split_names(match.group("token")),
             "bias": split_names(match.group("bias")),
+            "drop": split_names(match.group("drop") or ""),
         }
         if best is None or record["t_env"] > best["t_env"]:
             best = record
@@ -146,6 +152,11 @@ def slot_sort_key(name):
 
 def print_flat_mask(route):
     """Print a stage-two config value in the capturer's internal slot order."""
+    if route["drop"]:
+        raise ValueError(
+            "A TOKEN/BIAS/DROP route cannot be represented by the binary "
+            "stage-two fixed mask."
+        )
     mapping = {name: 1 for name in route["token"]}
     mapping.update({name: 0 for name in route["bias"]})
     if any(name.startswith("self_position_") for name in mapping):
@@ -203,6 +214,7 @@ def feature_name(name, group):
 def print_job_route(route):
     mapping = {name: "TOKEN" for name in route["token"]}
     mapping.update({name: "BIAS" for name in route["bias"]})
+    mapping.update({name: "DROP" for name in route["drop"]})
     groups = {}
     for name in sorted(mapping, key=slot_sort_key):
         groups.setdefault(slot_group(name), []).append(name)
@@ -220,13 +232,17 @@ def print_job_route(route):
     for group, names in groups.items():
         token = [feature_name(name, group) for name in names if mapping[name] == "TOKEN"]
         bias = [feature_name(name, group) for name in names if mapping[name] == "BIAS"]
+        drop = [feature_name(name, group) for name in names if mapping[name] == "DROP"]
         print("\n[{}]".format(group))
         print("  TOKEN : {}".format(", ".join(token) if token else "-"))
         print("  BIAS  : {}".format(", ".join(bias) if bias else "-"))
+        print("  DROP  : {}".format(", ".join(drop) if drop else "-"))
 
 
 def print_binary_mask(route):
     """Print the exact shared 0/1 route tensor reconstructed from the log."""
+    if route["drop"]:
+        raise ValueError("--raw-mask only supports binary TOKEN/BIAS routes")
     mapping = {name: 1 for name in route["token"]}
     mapping.update({name: 0 for name in route["bias"]})
     groups = {}
@@ -255,11 +271,11 @@ def print_binary_mask(route):
 
 def print_route_matrix(routes):
     print("\nLATEST ROUTE SUMMARY")
-    print("{:<8} {:<10} {:>10} {:>7} {:>8} {:>7} {:>7}".format(
-        "LABEL", "JOB", "T_ENV", "FROZEN", "VERSION", "TOKEN", "BIAS"
+    print("{:<8} {:<10} {:>10} {:>7} {:>8} {:>7} {:>7} {:>7}".format(
+        "LABEL", "JOB", "T_ENV", "FROZEN", "VERSION", "TOKEN", "BIAS", "DROP"
     ))
     for route in routes:
-        print("{:<8} {:<10} {:>10} {:>7} {:>8} {:>7} {:>7}".format(
+        print("{:<8} {:<10} {:>10} {:>7} {:>8} {:>7} {:>7} {:>7}".format(
             route["label"],
             route["job"],
             route["t_env"],
@@ -267,12 +283,13 @@ def print_route_matrix(routes):
             route["version"],
             len(route["token"]),
             len(route["bias"]),
+            len(route["drop"]),
         ))
 
     slots = []
     seen = set()
     for route in routes:
-        for name in route["token"] + route["bias"]:
+        for name in route["token"] + route["bias"] + route["drop"]:
             if name not in seen:
                 seen.add(name)
                 slots.append(name)
@@ -283,11 +300,12 @@ def print_route_matrix(routes):
     for route in routes:
         mapping = {name: "T" for name in route["token"]}
         mapping.update({name: "B" for name in route["bias"]})
+        mapping.update({name: "D" for name in route["drop"]})
         route_maps.append(mapping)
 
     slot_width = max(28, max(len(name) for name in slots))
     labels = [route["label"] for route in routes]
-    print("\nSLOT ROUTE MATRIX  (T=Transformer token, B=Simple bias)")
+    print("\nSLOT ROUTE MATRIX  (T=Transformer token, B=modulation branch, D=drop)")
     print("{:<{width}}  {}".format(
         "SLOT", "  ".join("{:>6}".format(label) for label in labels), width=slot_width
     ))
