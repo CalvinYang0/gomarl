@@ -14,14 +14,15 @@ TIME="${TIME:-2-00:00:00}"
 T_MAX="${T_MAX:-10050000}"
 DISCOVERY_T_MAX="${DISCOVERY_T_MAX:-5000000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
-# Keep this profile independent from a stale BATCH_SIZE_RUN exported by an
-# earlier experiment. One single-threaded environment worker occupies each
-# allocated CPU, which is the GRF profile previously measured at ~90% CPU use.
-ENV_WORKERS_PER_JOB="${ENV_WORKERS_PER_JOB:-32}"
+# Keep this profile independent from stale generic variables exported by an
+# earlier experiment. The measured high-utilization CPU profile uses eight
+# rollout workers and a full-allocation learner/controller thread pool.
+ENV_WORKERS_PER_JOB="${ENV_WORKERS_PER_JOB:-8}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 BUFFER_SIZE="${BUFFER_SIZE:-5000}"
-LEARNER_UPDATES_PER_COLLECT="${LEARNER_UPDATES_PER_COLLECT:-4}"
-LEARNER_THREADS_PER_JOB="${LEARNER_THREADS_PER_JOB:-1}"
+REFERENCE_BATCH_SIZE_RUN="${REFERENCE_BATCH_SIZE_RUN:-8}"
+LEARNER_UPDATES_PER_COLLECT="${LEARNER_UPDATES_PER_COLLECT:-$(( (ENV_WORKERS_PER_JOB + REFERENCE_BATCH_SIZE_RUN - 1) / REFERENCE_BATCH_SIZE_RUN ))}"
+LEARNER_THREADS_PER_JOB="${LEARNER_THREADS_PER_JOB:-32}"
 TORCH_NUM_INTEROP_THREADS="${TORCH_NUM_INTEROP_THREADS:-1}"
 ENV_WORKER_STARTUP_STAGGER="${ENV_WORKER_STARTUP_STAGGER:-0.25}"
 ENV_WORKER_RESET_RETRIES="${ENV_WORKER_RESET_RETRIES:-3}"
@@ -69,9 +70,13 @@ submit_job() {
   local memory="$9"
   local scenario_extra_args="${10:-}"
 
-  if (( ENV_WORKERS_PER_JOB != cpus )); then
-    echo "ERROR: ENV_WORKERS_PER_JOB=$ENV_WORKERS_PER_JOB must equal allocated CPUs=$cpus." >&2
-    echo "This suite requires one single-threaded environment worker per CPU." >&2
+  if (( ENV_WORKERS_PER_JOB > cpus )); then
+    echo "ERROR: ENV_WORKERS_PER_JOB=$ENV_WORKERS_PER_JOB exceeds allocated CPUs=$cpus." >&2
+    return 2
+  fi
+  if (( LEARNER_THREADS_PER_JOB != cpus )); then
+    echo "ERROR: LEARNER_THREADS_PER_JOB=$LEARNER_THREADS_PER_JOB must equal allocated CPUs=$cpus." >&2
+    echo "This suite uses the verified full-allocation learner profile." >&2
     return 2
   fi
 
@@ -84,7 +89,7 @@ submit_job() {
     --job-name="$job_name" \
     --output=ozstar_logs/%x_%j.out \
     --error=ozstar_logs/%x_%j.err \
-    --export=ALL,CONFIG=clean_hyper,ENV_CONFIG="$env_config",MAP_NAME="$map_name",MODEL_TYPE="$model_type",DISCOVERY_MODEL_TYPE="$discovery_model_type",DISCOVERY_T_MAX="$DISCOVERY_T_MAX",SEED="$SEED",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$ENV_WORKERS_PER_JOB",EXPECTED_BATCH_SIZE_RUN="$ENV_WORKERS_PER_JOB",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",GROUP_NAME="$run_name",OMP_NUM_THREADS=1,MKL_NUM_THREADS=1,OPENBLAS_NUM_THREADS=1,NUMEXPR_NUM_THREADS=1,EXTRA_ARGS="$(common_args) $scenario_extra_args" \
+    --export=ALL,CONFIG=clean_hyper,ENV_CONFIG="$env_config",MAP_NAME="$map_name",MODEL_TYPE="$model_type",DISCOVERY_MODEL_TYPE="$discovery_model_type",DISCOVERY_T_MAX="$DISCOVERY_T_MAX",SEED="$SEED",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$ENV_WORKERS_PER_JOB",EXPECTED_BATCH_SIZE_RUN="$ENV_WORKERS_PER_JOB",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",GROUP_NAME="$run_name",OMP_NUM_THREADS="$LEARNER_THREADS_PER_JOB",MKL_NUM_THREADS="$LEARNER_THREADS_PER_JOB",OPENBLAS_NUM_THREADS="$LEARNER_THREADS_PER_JOB",NUMEXPR_NUM_THREADS="$LEARNER_THREADS_PER_JOB",EXTRA_ARGS="$(common_args) $scenario_extra_args" \
     "$train_script"
 }
 
@@ -102,7 +107,7 @@ done
 echo "== Adaptive semantic routing suite: 4 scenes =="
 echo "variants: $VARIANTS"
 echo "resources: GRF=32c/10G, corridor=32c/40G"
-echo "cpu profile: ${ENV_WORKERS_PER_JOB} single-threaded rollout workers; ${LEARNER_THREADS_PER_JOB}-thread learner"
+echo "cpu profile: ${ENV_WORKERS_PER_JOB} rollout workers; ${LEARNER_THREADS_PER_JOB}-thread learner; ${LEARNER_UPDATES_PER_COLLECT} update(s)/collect"
 echo "shared: adaptive field-shared routing for $T_MAX steps"
 echo "compact: adaptive discovery for $DISCOVERY_T_MAX steps, then rebuilt compact training for $T_MAX steps"
 
