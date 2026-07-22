@@ -750,6 +750,8 @@ clean_semantic_router_freeze_steps: 5000000
 clean_semantic_router_keep_threshold: 0.35
 # Sparse DROP keeps this fixed fraction of highest-scoring raw slots.
 clean_semantic_router_keep_ratio: 0.5
+# STR uses this activity penalty to prefer exact-zero semantic gates.
+clean_semantic_router_sparse_coef: 0.001
 # Stage two accepts the exact first-stage route in internal slot order, for
 # example "0011...", and builds compact branch encoders from selected fields.
 clean_semantic_router_fixed_mask: ""
