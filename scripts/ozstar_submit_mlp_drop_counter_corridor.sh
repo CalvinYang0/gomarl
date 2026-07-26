@@ -13,7 +13,7 @@ T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
-GRF_MEM="${GRF_MEM:-12G}"
+GRF_MEM="${GRF_MEM:-16G}"
 CORRIDOR_MEM="${CORRIDOR_MEM:-40G}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
@@ -39,6 +39,8 @@ WANDB_MODE="${WANDB_MODE:-offline}"
 USE_CUDA="${USE_CUDA:-False}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 SUBMIT_GAP_SECONDS="${SUBMIT_GAP_SECONDS:-1}"
+SUBMIT_GRF="${SUBMIT_GRF:-1}"
+SUBMIT_CORRIDOR="${SUBMIT_CORRIDOR:-1}"
 
 cd "$REPO_DIR"
 mkdir -p ozstar_logs
@@ -53,6 +55,14 @@ if (( BATCH_SIZE_RUN > CPUS_PER_TASK )); then
 fi
 if (( TORCH_NUM_THREADS != CPUS_PER_TASK )); then
   echo "ERROR: TORCH_NUM_THREADS must match CPUS_PER_TASK" >&2
+  exit 2
+fi
+if [[ "$SUBMIT_GRF" != "0" && "$SUBMIT_GRF" != "1" ]]; then
+  echo "ERROR: SUBMIT_GRF must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$SUBMIT_CORRIDOR" != "0" && "$SUBMIT_CORRIDOR" != "1" ]]; then
+  echo "ERROR: SUBMIT_CORRIDOR must be 0 or 1" >&2
   exit 2
 fi
 
@@ -102,17 +112,30 @@ echo "== Lightweight MLP relation/drop ablation =="
 echo "resources: GRF counter=${CPUS_PER_TASK}c/${GRF_MEM}; corridor=${CPUS_PER_TASK}c/${CORRIDOR_MEM}"
 echo "training: ${TIME}, t_max=${T_MAX}, workers=${BATCH_SIZE_RUN}, learner_threads=${TORCH_NUM_THREADS}"
 
-submit_one counter grf_counter grf_abs_mlp_relation_hypercond full "$GRF_MEM"
-sleep "$SUBMIT_GAP_SECONDS"
-submit_one counter grf_counter grf_abs_gimp_lthr_drop_mlp_relation_hypercond gimp_drop "$GRF_MEM"
-sleep "$SUBMIT_GAP_SECONDS"
-submit_one counter grf_counter grf_abs_l0_drop_mlp_relation_hypercond l0_drop "$GRF_MEM"
-sleep "$SUBMIT_GAP_SECONDS"
+submitted=0
+if [[ "$SUBMIT_GRF" == "1" ]]; then
+  submit_one counter grf_counter grf_abs_mlp_relation_hypercond full "$GRF_MEM"
+  submitted=$((submitted + 1))
+  sleep "$SUBMIT_GAP_SECONDS"
+  submit_one counter grf_counter grf_abs_gimp_lthr_drop_mlp_relation_hypercond gimp_drop "$GRF_MEM"
+  submitted=$((submitted + 1))
+  sleep "$SUBMIT_GAP_SECONDS"
+  submit_one counter grf_counter grf_abs_l0_drop_mlp_relation_hypercond l0_drop "$GRF_MEM"
+  submitted=$((submitted + 1))
+fi
 
-submit_one corridor corridor rpg_mlp_relation_hypercond full "$CORRIDOR_MEM"
-sleep "$SUBMIT_GAP_SECONDS"
-submit_one corridor corridor rpg_gimp_lthr_drop_mlp_relation_hypercond gimp_drop "$CORRIDOR_MEM"
-sleep "$SUBMIT_GAP_SECONDS"
-submit_one corridor corridor rpg_l0_drop_mlp_relation_hypercond l0_drop "$CORRIDOR_MEM"
+if [[ "$SUBMIT_CORRIDOR" == "1" ]]; then
+  if (( submitted > 0 )); then
+    sleep "$SUBMIT_GAP_SECONDS"
+  fi
+  submit_one corridor corridor rpg_mlp_relation_hypercond full "$CORRIDOR_MEM"
+  submitted=$((submitted + 1))
+  sleep "$SUBMIT_GAP_SECONDS"
+  submit_one corridor corridor rpg_gimp_lthr_drop_mlp_relation_hypercond gimp_drop "$CORRIDOR_MEM"
+  submitted=$((submitted + 1))
+  sleep "$SUBMIT_GAP_SECONDS"
+  submit_one corridor corridor rpg_l0_drop_mlp_relation_hypercond l0_drop "$CORRIDOR_MEM"
+  submitted=$((submitted + 1))
+fi
 
-echo "submitted total: 6"
+echo "submitted total: $submitted"
