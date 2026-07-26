@@ -182,6 +182,18 @@ SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "rpg_simple_bias_gradient_importance_drop_router_hypercond": "gradient_importance",
     "rpg_simple_bias_gradient_importance_hierarchical_drop_router_hypercond": "gradient_importance",
     "rpg_simple_bias_gradient_importance_sparse_drop_router_hypercond": "gradient_importance",
+    "rpg_gimp_lthr_drop_mlp_relation_hypercond": "gradient_importance",
+}
+MLP_RELATION_VARIANTS = {
+    "rpg_mlp_relation_hypercond",
+    "rpg_gimp_lthr_drop_mlp_relation_hypercond",
+    "rpg_l0_drop_mlp_relation_hypercond",
+}
+MLP_GIMP_DROP_VARIANTS = {
+    "rpg_gimp_lthr_drop_mlp_relation_hypercond",
+}
+MLP_L0_DROP_VARIANTS = {
+    "rpg_l0_drop_mlp_relation_hypercond",
 }
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",
@@ -194,6 +206,7 @@ SEMANTIC_ROUTER_DROP_MODE_BY_MODEL = {
 SEMANTIC_ROUTER_LEARNABLE_THRESHOLD_VARIANTS = {
     "rpg_simple_bias_gradient_importance_learnable_threshold_router_hypercond",
     "rpg_simple_bias_parameter_sensitivity_learnable_threshold_router_hypercond",
+    *MLP_GIMP_DROP_VARIANTS,
 }
 SEMANTIC_ROUTER_INVERSE_VARIANTS = {
     "rpg_simple_bias_gradient_importance_inverse_router_hypercond",
@@ -261,6 +274,7 @@ PUBLIC_TRANSFORMER_BIAS_VARIANTS = {
 } | PUBLIC_TRANSFORMER_SIMPLE_BIAS_FAMILY
 PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
     {"rpg_public_transformer_hypercond"}
+    | MLP_RELATION_VARIANTS
     | PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS
     | PUBLIC_TRANSFORMER_PAST_DELTA_VARIANTS
     | PUBLIC_TRANSFORMER_MIXED_VARIANTS
@@ -291,7 +305,9 @@ PUBLIC_TRANSFORMER_SINGLE_HEAD_VARIANTS = (
     | PUBLIC_TRANSFORMER_PRIVATE_SINGLE_HEAD_VARIANTS
 )
 PUBLIC_TRANSFORMER_CAPTURER_VARIANTS = (
-    PUBLIC_TRANSFORMER_RELATION_VARIANTS | PUBLIC_TRANSFORMER_SINGLE_HEAD_VARIANTS
+    PUBLIC_TRANSFORMER_RELATION_VARIANTS
+    | PUBLIC_TRANSFORMER_SINGLE_HEAD_VARIANTS
+    | MLP_RELATION_VARIANTS
 )
 PUBLIC_TRANSFORMER_FUTURE_DELTA_ALL_VARIANTS = (
     PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS | PUBLIC_TRANSFORMER_FUTURE_DELTA_SINGLE_HEAD_VARIANTS
@@ -300,6 +316,18 @@ GRF_DECISION_MAKER_VARIANTS = {
     "grf_public_private_bias_transformer_decision_maker_hypercond",
     "grf_abs_public_private_bias_transformer_decision_maker_hypercond",
 }
+GRF_MLP_RELATION_VARIANTS = {
+    "grf_abs_mlp_relation_hypercond",
+    "grf_abs_gimp_lthr_drop_mlp_relation_hypercond",
+    "grf_abs_l0_drop_mlp_relation_hypercond",
+}
+GRF_MLP_GIMP_DROP_VARIANTS = {
+    "grf_abs_gimp_lthr_drop_mlp_relation_hypercond",
+}
+GRF_MLP_L0_DROP_VARIANTS = {
+    "grf_abs_l0_drop_mlp_relation_hypercond",
+}
+GRF_DECISION_MAKER_VARIANTS |= GRF_MLP_RELATION_VARIANTS
 GRF_TWO_LAYER_HEAD_VARIANTS = {
     "grf_public_private_bias_transformer_two_layer_head_hypercond",
     "grf_abs_public_private_bias_transformer_two_layer_head_hypercond",
@@ -318,6 +346,7 @@ GRF_SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "grf_abs_simple_bias_gimp_lthr_film_hypercond": "gradient_importance",
     "grf_abs_simple_bias_gimp_lthr_hdrop_hypercond": "gradient_importance",
     "grf_abs_simple_bias_gimp_str_sparse_hypercond": "gradient_importance",
+    "grf_abs_gimp_lthr_drop_mlp_relation_hypercond": "gradient_importance",
 }
 
 GRF_SEMANTIC_ROUTER_USE_MODE_BY_MODEL = {
@@ -348,6 +377,7 @@ GRF_SEMANTIC_ROUTER_LEARNABLE_THRESHOLD_VARIANTS = {
     "grf_abs_simple_bias_gimp_lthr_film_hypercond",
     "grf_abs_simple_bias_gimp_lthr_hdrop_hypercond",
     "grf_abs_simple_bias_gimp_str_sparse_hypercond",
+    *GRF_MLP_GIMP_DROP_VARIANTS,
 }
 GRF_SEMANTIC_ROUTER_VARIANTS = set(GRF_SEMANTIC_ROUTER_MODE_BY_MODEL)
 GRF_PUBLIC_TRANSFORMER_VARIANTS = {
@@ -491,6 +521,9 @@ class CompactSemanticEntityEncoder(nn.Module):
 PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_transformer_hypercond": "baseline",
     "rpg_public_transformer_single_head_hypercond": "baseline",
+    "rpg_mlp_relation_hypercond": "baseline",
+    "rpg_gimp_lthr_drop_mlp_relation_hypercond": "baseline",
+    "rpg_l0_drop_mlp_relation_hypercond": "baseline",
     "rpg_public_future_delta_token_transformer_hypercond": "future_delta_token",
     "rpg_public_future_delta_token_transformer_single_head_hypercond": "future_delta_token",
     "rpg_public_future_delta_bias_transformer_hypercond": "future_delta_bias",
@@ -1128,6 +1161,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         semantic_router_keep_threshold=0.35,
         semantic_router_keep_ratio=0.5,
         semantic_router_sparse_coef=0.001,
+        relation_encoder_style="transformer",
+        l0_drop=False,
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -1193,6 +1228,10 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.semantic_router_sparse_coef = float(semantic_router_sparse_coef)
         if self.semantic_router_sparse_coef < 0.0:
             raise ValueError("semantic_router_sparse_coef must be non-negative")
+        self.relation_encoder_style = str(relation_encoder_style)
+        if self.relation_encoder_style not in {"transformer", "mlp"}:
+            raise ValueError("relation_encoder_style must be transformer or mlp")
+        self.l0_drop = bool(l0_drop)
         self.public_self_dim = 1 + unit_type_bits
         self.public_ally_dim = 1 + unit_type_bits
         self.public_enemy_dim = 1 + unit_type_bits
@@ -1398,6 +1437,24 @@ class PublicTransformerRelationCapturer(nn.Module):
             for _ in range(max(1, num_layers))
         )
         self.temporal_gru = nn.GRUCell(relation_dim * 2, relation_dim)
+        flat_obs_dim = (
+            move_dim
+            + own_dim
+            + n_allies * ally_feat_dim
+            + n_enemies * enemy_feat_dim
+        )
+        self.mlp_relation_encoder = nn.Sequential(
+            nn.Linear(flat_obs_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.mlp_temporal_gru = nn.GRUCell(relation_dim, relation_dim)
+        self.l0_log_alpha = (
+            nn.Parameter(th.full((flat_obs_dim,), 2.0)) if self.l0_drop else None
+        )
+        self.l0_temperature = 2.0 / 3.0
+        self.l0_gamma = -0.1
+        self.l0_zeta = 1.1
         self.output_encoder = nn.Sequential(
             nn.Linear(relation_dim, output_dim),
             nn.ReLU(inplace=True),
@@ -1405,6 +1462,97 @@ class PublicTransformerRelationCapturer(nn.Module):
         )
         self.latest_aux_loss = None
         self.latest_aux_stats = {}
+
+    def _l0_gate(self, reference):
+        if self.l0_log_alpha is None:
+            return reference.new_ones(len(self.semantic_names))
+        log_alpha = self.l0_log_alpha.to(
+            device=reference.device, dtype=reference.dtype
+        )
+        if self.training and th.is_grad_enabled():
+            uniform = th.rand_like(log_alpha).clamp_(1e-6, 1.0 - 1e-6)
+            concrete = th.sigmoid(
+                (uniform.log() - (1.0 - uniform).log() + log_alpha)
+                / self.l0_temperature
+            )
+        else:
+            concrete = th.sigmoid(log_alpha)
+        stretched = concrete * (self.l0_zeta - self.l0_gamma) + self.l0_gamma
+        return stretched.clamp(0.0, 1.0)
+
+    def _mlp_relation_gate(self, reference):
+        if self.l0_drop:
+            gate = self._l0_gate(reference)
+            expected_keep = th.sigmoid(
+                self.l0_log_alpha
+                - self.l0_temperature
+                * math.log(-self.l0_gamma / self.l0_zeta)
+            )
+            sparse_loss = self.semantic_router_sparse_coef * expected_keep.mean()
+            if th.is_grad_enabled():
+                self.latest_aux_loss = sparse_loss
+            self.latest_aux_stats.update(
+                {
+                    "mlp_relation_keep_fraction": (gate > 0.5).float().mean().detach(),
+                    "mlp_relation_gate_mean": gate.mean().detach(),
+                    "mlp_relation_l0_expected": expected_keep.mean().detach(),
+                    "mlp_relation_l0_loss": sparse_loss.detach(),
+                }
+            )
+            return gate
+        if self.semantic_router_active:
+            token_route, _ = self._current_semantic_routes(reference)
+            self.latest_aux_stats.update(
+                {
+                    "mlp_relation_keep_fraction": (token_route > 0.5).float().mean().detach(),
+                    "mlp_relation_gate_mean": token_route.mean().detach(),
+                }
+            )
+            return token_route
+        gate = reference.new_ones(len(self.semantic_names))
+        self.latest_aux_stats.update(
+            {
+                "mlp_relation_keep_fraction": gate.mean(),
+                "mlp_relation_gate_mean": gate.mean(),
+            }
+        )
+        return gate
+
+    def _forward_mlp_relation(
+        self, self_feat, ally_feat, enemy_feat, prev_relation_hidden
+    ):
+        batch_size, n_agents, _ = self_feat.shape
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        flat_obs = self._flatten_semantic_slots(
+            self_feat, ally_feat, enemy_feat
+        )
+        gate = self._mlp_relation_gate(flat_obs)
+        probe_scale = self._semantic_scales(flat_obs)
+        relation_input = flat_obs * gate.view(1, 1, -1) * probe_scale.view(
+            1, 1, -1
+        )
+        relation_embed = self.mlp_relation_encoder(relation_input)
+        if prev_relation_hidden is None:
+            prev_relation_hidden = relation_embed.new_zeros(
+                batch_size, n_agents, self.relation_dim
+            )
+        relation_hidden = self.mlp_temporal_gru(
+            relation_embed.reshape(batch_size * n_agents, -1),
+            prev_relation_hidden.reshape(batch_size * n_agents, -1),
+        ).view(batch_size, n_agents, self.relation_dim)
+        condition = self.output_encoder(relation_hidden)
+        enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
+        self.latest_encoded_self_token = relation_embed
+        self.latest_encoded_enemy_tokens = enemy_tokens
+        ally_mask = ally_feat.abs().sum(dim=-1) > 0
+        return (
+            condition,
+            relation_hidden,
+            self._masked_uniform_attention(ally_mask),
+            self._masked_uniform_attention(enemy_mask),
+            enemy_tokens,
+            enemy_mask,
+        )
 
     def _build_semantic_slot_layout(self):
         """Describe every raw SMAC observation scalar as an independent route slot."""
@@ -2818,6 +2966,10 @@ class PublicTransformerRelationCapturer(nn.Module):
             prev_ally_feat,
             prev_enemy_feat,
         )
+        if self.relation_encoder_style == "mlp":
+            return self._forward_mlp_relation(
+                self_feat, ally_feat, enemy_feat, prev_relation_hidden
+            )
 
         if self.mode == "full_obs":
             self_token = self.self_full_obs_encoder(self_feat) + self._side(0, self_feat.device).view(1, 1, -1)
@@ -3030,6 +3182,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         semantic_router_drop_mode="none",
         semantic_router_keep_threshold=0.35,
         semantic_router_sparse_coef=0.001,
+        relation_encoder_style="transformer",
+        l0_drop=False,
     ):
         nn.Module.__init__(self)
         self.n_agents = n_agents
@@ -3080,6 +3234,10 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.semantic_router_sparse_coef = float(semantic_router_sparse_coef)
         if self.semantic_router_sparse_coef < 0.0:
             raise ValueError("semantic_router_sparse_coef must be non-negative")
+        self.relation_encoder_style = str(relation_encoder_style)
+        if self.relation_encoder_style not in {"transformer", "mlp"}:
+            raise ValueError("relation_encoder_style must be transformer or mlp")
+        self.l0_drop = bool(l0_drop)
 
         (
             self.semantic_names,
@@ -3219,6 +3377,20 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             for _ in range(max(1, num_layers))
         )
         self.temporal_gru = nn.GRUCell(relation_dim * 2, relation_dim)
+        self.mlp_relation_encoder = nn.Sequential(
+            nn.Linear(self.expected_obs_dim, relation_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(relation_dim, relation_dim),
+        )
+        self.mlp_temporal_gru = nn.GRUCell(relation_dim, relation_dim)
+        self.l0_log_alpha = (
+            nn.Parameter(th.full((self.expected_obs_dim,), 2.0))
+            if self.l0_drop
+            else None
+        )
+        self.l0_temperature = 2.0 / 3.0
+        self.l0_gamma = -0.1
+        self.l0_zeta = 1.1
         self.output_encoder = nn.Sequential(
             nn.Linear(relation_dim, output_dim),
             nn.ReLU(inplace=True),
@@ -3226,6 +3398,48 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         )
         self.latest_aux_loss = None
         self.latest_aux_stats = {}
+
+    def _cache_unrouted_grf_entity_tokens(self, obs):
+        (
+            self_pos,
+            ally_pos,
+            self_dir,
+            ally_dir,
+            opponent_pos,
+            opponent_dir,
+            ball,
+        ) = self._split_obs(obs)
+        self.latest_self_token = self.self_encoder(
+            th.cat([self_pos, self_dir], dim=-1)
+        )
+        self.latest_ally_tokens = self.ally_encoder(
+            th.cat([ally_pos, ally_dir], dim=-1)
+        )
+        self.latest_opponent_tokens = self.opponent_encoder(
+            th.cat([opponent_pos, opponent_dir], dim=-1)
+        )
+        self.latest_ball_token = self.ball_encoder(ball)
+
+    def _forward_mlp_relation(self, obs, prev_relation_hidden):
+        batch_size, n_agents, _ = obs.shape
+        flat_obs = obs[..., : self.expected_obs_dim]
+        gate = self._mlp_relation_gate(flat_obs)
+        probe_scale = self._semantic_scales(flat_obs)
+        relation_input = flat_obs * gate.view(1, 1, -1) * probe_scale.view(
+            1, 1, -1
+        )
+        relation_embed = self.mlp_relation_encoder(relation_input)
+        if prev_relation_hidden is None:
+            prev_relation_hidden = relation_embed.new_zeros(
+                batch_size, n_agents, self.relation_dim
+            )
+        next_relation_hidden = self.mlp_temporal_gru(
+            relation_embed.reshape(batch_size * n_agents, -1),
+            prev_relation_hidden.reshape(batch_size * n_agents, -1),
+        ).view(batch_size, n_agents, self.relation_dim)
+        self._cache_unrouted_grf_entity_tokens(obs)
+        self.latest_context_token = relation_embed
+        return self.output_encoder(next_relation_hidden), next_relation_hidden
 
     def _build_semantic_slot_layout(self):
         names = []
@@ -3646,6 +3860,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.latest_aux_loss = None
         self.latest_aux_stats = {}
         batch_size, n_agents, _ = obs.shape
+        if self.relation_encoder_style == "mlp":
+            return self._forward_mlp_relation(obs, prev_relation_hidden)
         if self.semantic_router_active:
             entity_tokens, attn_bias = self._build_semantic_tokens_and_bias(obs)
         else:
@@ -6899,6 +7115,7 @@ class CleanHyperAgent(nn.Module):
                 "grf_abs_public_private_bias_transformer_linear_head_hypercond",
                 "grf_abs_public_private_bias_transformer_decision_maker_hypercond",
                 *GRF_SEMANTIC_ROUTER_VARIANTS,
+                *GRF_MLP_RELATION_VARIANTS,
             },
             semantic_router_mode=GRF_SEMANTIC_ROUTER_MODE_BY_MODEL.get(
                 self.model_type
@@ -6925,6 +7142,12 @@ class CleanHyperAgent(nn.Module):
             ),
             semantic_router_keep_threshold=self.semantic_router_keep_threshold,
             semantic_router_sparse_coef=self.semantic_router_sparse_coef,
+            relation_encoder_style=(
+                "mlp"
+                if self.model_type in GRF_MLP_RELATION_VARIANTS
+                else "transformer"
+            ),
+            l0_drop=self.model_type in GRF_MLP_L0_DROP_VARIANTS,
         )
 
     def _init_grf_decision_maker_head(self):
@@ -7100,11 +7323,18 @@ class CleanHyperAgent(nn.Module):
                 ),
                 semantic_router_keep_threshold=self.semantic_router_keep_threshold,
                 semantic_router_keep_ratio=self.semantic_router_keep_ratio,
+                semantic_router_sparse_coef=self.semantic_router_sparse_coef,
                 semantic_router_fixed_mask=(
                     self.semantic_router_fixed_mask
                     if self.model_type in SEMANTIC_ROUTER_FIXED_MASK_VARIANTS
                     else ""
                 ),
+                relation_encoder_style=(
+                    "mlp"
+                    if self.model_type in MLP_RELATION_VARIANTS
+                    else "transformer"
+                ),
+                l0_drop=self.model_type in MLP_L0_DROP_VARIANTS,
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(
@@ -7523,6 +7753,14 @@ class CleanHyperAgent(nn.Module):
         self.latest_aux_stats.update(
             getattr(self.rpg_relation_capturer, "latest_aux_stats", {})
         )
+        if (
+            self.model_type in MLP_L0_DROP_VARIANTS
+            and th.is_grad_enabled()
+            and not test_mode
+        ):
+            self.latest_aux_loss = getattr(
+                self.rpg_relation_capturer, "latest_aux_loss", None
+            )
         return condition, new_relation_hidden, enemy_tokens, enemy_mask
 
     def _build_action_edge_graph_condition(self, context, relation_hidden, test_mode=False):
