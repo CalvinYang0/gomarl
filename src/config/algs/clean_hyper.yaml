@@ -736,6 +736,13 @@ clean_public_transformer_layers: 1
 clean_public_transformer_heads: 4
 clean_public_transformer_delta_loss_coef: 0.05
 clean_semantic_router_ema: 0.99
+# Optional asymmetric EMA. Lower `ema_up` lets newly important slots recover
+# quickly; higher `ema_down` avoids dropping slots after a transient decrease.
+clean_semantic_router_ema_up: 0.99
+clean_semantic_router_ema_down: 0.99
+# Accumulate importance continuously but deploy a new route at most once per
+# this many environment timesteps. Zero preserves the legacy per-update route.
+clean_semantic_router_update_interval: 0
 # Every raw observation slot is routed independently. TOKEN/BIAS branch counts
 # are learned rather than fixed; higher values make TOKEN admission stricter.
 clean_semantic_router_threshold: 0.5

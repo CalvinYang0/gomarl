@@ -169,6 +169,44 @@ class CleanLearner:
         self.last_semantic_router_audit_t = t_env
         return True
 
+    def _audit_semantic_gradient_importance(
+        self, batch, actions, targets, td_mask, router, t_env
+    ):
+        if router is None or not router.semantic_router_needs_independent_audit():
+            return False
+        if t_env - self.last_semantic_router_audit_t < self.semantic_router_audit_interval:
+            return False
+
+        audit_gradient = None
+        audit_loss = None
+        try:
+            router.set_semantic_full_input_audit(True)
+            if router.semantic_probe_scale.grad is not None:
+                router.semantic_probe_scale.grad = None
+            audit_loss = self._counterfactual_td_loss(
+                batch, actions, targets, td_mask
+            )
+            audit_gradient = th.autograd.grad(
+                audit_loss,
+                router.semantic_probe_scale,
+                allow_unused=True,
+            )[0]
+        finally:
+            router.set_semantic_full_input_audit(False)
+            if router.semantic_probe_scale.grad is not None:
+                router.semantic_probe_scale.grad = None
+
+        if audit_gradient is None:
+            return False
+        router.update_semantic_router(t_env, audit_gradient.detach())
+        self._sync_semantic_router_to_target(router)
+        self.latest_semantic_counterfactual_stats = {
+            "semantic_audit_td_loss": audit_loss.detach(),
+            "semantic_audit_gradient_abs_mean": audit_gradient.detach().abs().mean(),
+        }
+        self.last_semantic_router_audit_t = t_env
+        return True
+
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         rewards = batch["reward"][:, :-1]
         actions = batch["actions"][:, :-1]
@@ -407,7 +445,10 @@ class CleanLearner:
             elif semantic_router.semantic_router_mode in {
                 "gradient_importance",
                 "gradient_consistency",
-            } and semantic_gradient is not None:
+            } and (
+                not semantic_router.semantic_router_needs_independent_audit()
+                and semantic_gradient is not None
+            ):
                 semantic_router.update_semantic_router(t_env, semantic_gradient)
             elif (
                 semantic_router.semantic_router_needs_parameter_graph()
@@ -432,6 +473,9 @@ class CleanLearner:
             self._sync_semantic_router_to_target(semantic_router)
 
         self._audit_semantic_counterfactual(
+            batch, actions, targets, td_mask, semantic_router, t_env
+        )
+        self._audit_semantic_gradient_importance(
             batch, actions, targets, td_mask, semantic_router, t_env
         )
 

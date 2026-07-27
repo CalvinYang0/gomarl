@@ -22,6 +22,8 @@ def check_smac(
     learnable_threshold=False,
     l0_drop=False,
     soft_gate=False,
+    independent_audit=False,
+    update_interval=0,
 ):
     capturer = PublicTransformerRelationCapturer(
         move_dim=4,
@@ -40,6 +42,10 @@ def check_smac(
         relation_encoder_style=style,
         l0_drop=l0_drop,
         mlp_soft_gate=soft_gate,
+        mlp_independent_audit=independent_audit,
+        semantic_router_update_interval=update_interval,
+        semantic_router_ema_up=0.5,
+        semantic_router_ema_down=0.99,
     )
     capturer.train()
     self_feat = th.randn(2, 4, 5)
@@ -56,7 +62,17 @@ def check_smac(
     if capturer.latest_aux_loss is not None:
         loss = loss + capturer.latest_aux_loss
     loss.backward()
-    if router_mode == "gradient_importance":
+    if router_mode == "gradient_importance" and not independent_audit:
+        assert capturer.semantic_probe_scale.grad is not None
+    if independent_audit:
+        assert capturer.semantic_probe_scale.grad is None
+        capturer.zero_grad(set_to_none=True)
+        capturer.set_semantic_full_input_audit(True)
+        audit_condition, *_ = capturer(
+            self_feat, ally_feat, enemy_feat, None
+        )
+        audit_condition.square().mean().backward()
+        capturer.set_semantic_full_input_audit(False)
         assert capturer.semantic_probe_scale.grad is not None
     if l0_drop:
         assert capturer.l0_log_alpha.grad is not None
@@ -68,6 +84,8 @@ def check_grf(
     learnable_threshold=False,
     l0_drop=False,
     soft_gate=False,
+    independent_audit=False,
+    update_interval=0,
 ):
     capturer = GRFPublicPrivateBiasTransformerCapturer(
         n_agents=3,
@@ -79,6 +97,10 @@ def check_grf(
         relation_encoder_style=style,
         l0_drop=l0_drop,
         mlp_soft_gate=soft_gate,
+        mlp_independent_audit=independent_audit,
+        semantic_router_update_interval=update_interval,
+        semantic_router_ema_up=0.5,
+        semantic_router_ema_down=0.99,
     )
     capturer.train()
     obs = th.randn(2, 3, capturer.expected_obs_dim)
@@ -90,7 +112,15 @@ def check_grf(
     if capturer.latest_aux_loss is not None:
         loss = loss + capturer.latest_aux_loss
     loss.backward()
-    if router_mode == "gradient_importance":
+    if router_mode == "gradient_importance" and not independent_audit:
+        assert capturer.semantic_probe_scale.grad is not None
+    if independent_audit:
+        assert capturer.semantic_probe_scale.grad is None
+        capturer.zero_grad(set_to_none=True)
+        capturer.set_semantic_full_input_audit(True)
+        audit_condition, _ = capturer(obs, None)
+        audit_condition.square().mean().backward()
+        capturer.set_semantic_full_input_audit(False)
         assert capturer.semantic_probe_scale.grad is not None
     if l0_drop:
         assert capturer.l0_log_alpha.grad is not None
@@ -109,6 +139,13 @@ def main():
             router_mode="gradient_importance",
             learnable_threshold=True,
             soft_gate=True,
+            update_interval=8000,
+        ),
+        dict(
+            style="mlp",
+            router_mode="gradient_importance",
+            independent_audit=True,
+            update_interval=8000,
         ),
         dict(style="mlp", l0_drop=True),
     )

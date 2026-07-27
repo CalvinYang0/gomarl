@@ -184,11 +184,15 @@ SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "rpg_simple_bias_gradient_importance_sparse_drop_router_hypercond": "gradient_importance",
     "rpg_gimp_lthr_drop_mlp_relation_hypercond": "gradient_importance",
     "rpg_gimp_lthr_soft_mlp_relation_hypercond": "gradient_importance",
+    "rpg_gimp_lowfreq_soft_mlp_relation_hypercond": "gradient_importance",
+    "rpg_gimp_lowfreq_audit_mlp_relation_hypercond": "gradient_importance",
 }
 MLP_RELATION_VARIANTS = {
     "rpg_mlp_relation_hypercond",
     "rpg_gimp_lthr_drop_mlp_relation_hypercond",
     "rpg_gimp_lthr_soft_mlp_relation_hypercond",
+    "rpg_gimp_lowfreq_soft_mlp_relation_hypercond",
+    "rpg_gimp_lowfreq_audit_mlp_relation_hypercond",
     "rpg_l0_drop_mlp_relation_hypercond",
 }
 MLP_GIMP_DROP_VARIANTS = {
@@ -196,6 +200,10 @@ MLP_GIMP_DROP_VARIANTS = {
 }
 MLP_GIMP_SOFT_VARIANTS = {
     "rpg_gimp_lthr_soft_mlp_relation_hypercond",
+    "rpg_gimp_lowfreq_soft_mlp_relation_hypercond",
+}
+MLP_GIMP_AUDIT_VARIANTS = {
+    "rpg_gimp_lowfreq_audit_mlp_relation_hypercond",
 }
 MLP_L0_DROP_VARIANTS = {
     "rpg_l0_drop_mlp_relation_hypercond",
@@ -326,6 +334,8 @@ GRF_MLP_RELATION_VARIANTS = {
     "grf_abs_mlp_relation_hypercond",
     "grf_abs_gimp_lthr_drop_mlp_relation_hypercond",
     "grf_abs_gimp_lthr_soft_mlp_relation_hypercond",
+    "grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond",
+    "grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond",
     "grf_abs_l0_drop_mlp_relation_hypercond",
 }
 GRF_MLP_GIMP_DROP_VARIANTS = {
@@ -333,6 +343,10 @@ GRF_MLP_GIMP_DROP_VARIANTS = {
 }
 GRF_MLP_GIMP_SOFT_VARIANTS = {
     "grf_abs_gimp_lthr_soft_mlp_relation_hypercond",
+    "grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond",
+}
+GRF_MLP_GIMP_AUDIT_VARIANTS = {
+    "grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond",
 }
 GRF_MLP_L0_DROP_VARIANTS = {
     "grf_abs_l0_drop_mlp_relation_hypercond",
@@ -358,6 +372,8 @@ GRF_SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "grf_abs_simple_bias_gimp_str_sparse_hypercond": "gradient_importance",
     "grf_abs_gimp_lthr_drop_mlp_relation_hypercond": "gradient_importance",
     "grf_abs_gimp_lthr_soft_mlp_relation_hypercond": "gradient_importance",
+    "grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond": "gradient_importance",
+    "grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond": "gradient_importance",
 }
 
 GRF_SEMANTIC_ROUTER_USE_MODE_BY_MODEL = {
@@ -536,6 +552,8 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_mlp_relation_hypercond": "baseline",
     "rpg_gimp_lthr_drop_mlp_relation_hypercond": "baseline",
     "rpg_gimp_lthr_soft_mlp_relation_hypercond": "baseline",
+    "rpg_gimp_lowfreq_soft_mlp_relation_hypercond": "baseline",
+    "rpg_gimp_lowfreq_audit_mlp_relation_hypercond": "baseline",
     "rpg_l0_drop_mlp_relation_hypercond": "baseline",
     "rpg_public_future_delta_token_transformer_hypercond": "future_delta_token",
     "rpg_public_future_delta_token_transformer_single_head_hypercond": "future_delta_token",
@@ -1164,6 +1182,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         semantic_router_inverse=False,
         semantic_router_learnable_threshold=False,
         semantic_router_ema=0.99,
+        semantic_router_ema_up=None,
+        semantic_router_ema_down=None,
+        semantic_router_update_interval=0,
         semantic_router_threshold=0.5,
         semantic_router_temperature=0.1,
         semantic_router_warmup_steps=250000,
@@ -1177,6 +1198,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         relation_encoder_style="transformer",
         l0_drop=False,
         mlp_soft_gate=False,
+        mlp_independent_audit=False,
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -1210,6 +1232,23 @@ class PublicTransformerRelationCapturer(nn.Module):
             semantic_router_learnable_threshold
         )
         self.semantic_router_ema = float(semantic_router_ema)
+        self.semantic_router_ema_up = float(
+            semantic_router_ema
+            if semantic_router_ema_up is None
+            else semantic_router_ema_up
+        )
+        self.semantic_router_ema_down = float(
+            semantic_router_ema
+            if semantic_router_ema_down is None
+            else semantic_router_ema_down
+        )
+        if not 0.0 <= self.semantic_router_ema_up < 1.0:
+            raise ValueError("semantic_router_ema_up must be in [0, 1)")
+        if not 0.0 <= self.semantic_router_ema_down < 1.0:
+            raise ValueError("semantic_router_ema_down must be in [0, 1)")
+        self.semantic_router_update_interval = max(
+            0, int(semantic_router_update_interval)
+        )
         self.semantic_router_threshold = float(semantic_router_threshold)
         if not 0.0 < self.semantic_router_threshold < 1.0:
             raise ValueError("semantic_router_threshold must be strictly between 0 and 1")
@@ -1247,6 +1286,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         if self.relation_encoder_style not in {"transformer", "mlp"}:
             raise ValueError("relation_encoder_style must be transformer or mlp")
         self.l0_drop = bool(l0_drop)
+        self.mlp_independent_audit = bool(mlp_independent_audit)
+        self._semantic_full_input_audit = False
         self.public_self_dim = 1 + unit_type_bits
         self.public_ally_dim = 1 + unit_type_bits
         self.public_enemy_dim = 1 + unit_type_bits
@@ -1307,6 +1348,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.register_buffer("semantic_bias_route", 1.0 - manual_route.clone())
         self.register_buffer("semantic_keep_route", th.ones_like(manual_route))
         self.register_buffer("semantic_token_probability", manual_route.clone())
+        self.register_buffer("semantic_deployed_probability", manual_route.clone())
         self.register_buffer("semantic_route_score", th.zeros(len(self.semantic_names)))
         self.register_buffer("semantic_route_score_initialized", th.tensor(False))
         self.register_buffer("semantic_route_frozen", th.tensor(fixed_route is not None))
@@ -1316,6 +1358,13 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.register_buffer("semantic_gradient_abs_mean", th.zeros(len(self.semantic_names)))
         self.register_buffer("semantic_route_last_switch_rate", th.tensor(0.0))
         self.register_buffer("semantic_route_version", th.tensor(0, dtype=th.long))
+        self.register_buffer(
+            "semantic_route_last_update_t",
+            th.tensor(-self.semantic_router_update_interval, dtype=th.long),
+        )
+        self.register_buffer(
+            "semantic_route_deployed", th.tensor(fixed_route is not None)
+        )
         self.semantic_probe_scale = (
             nn.Parameter(th.ones(len(self.semantic_names)), requires_grad=True)
             if semantic_router_mode in {
@@ -1496,6 +1545,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         return stretched.clamp(0.0, 1.0)
 
     def _mlp_relation_gate(self, reference):
+        if self._semantic_full_input_audit:
+            return reference.new_ones(len(self.semantic_names))
         if self.l0_drop:
             gate = self._l0_gate(reference)
             expected_keep = th.sigmoid(
@@ -1516,22 +1567,19 @@ class PublicTransformerRelationCapturer(nn.Module):
             )
             return gate
         if self.mlp_soft_gate:
-            route_ready = bool(self.semantic_learnable_threshold_active.item())
-            route_frozen = bool(self.semantic_route_frozen.item())
             if (
                 self.semantic_router_active
-                and bool(self.semantic_route_score_initialized.item())
-                and (route_ready or route_frozen)
+                and bool(self.semantic_route_deployed.item())
             ):
-                probability = self._semantic_route_probabilities(
-                    self.semantic_route_score.detach()
-                ).to(device=reference.device, dtype=reference.dtype)
+                probability = self.semantic_deployed_probability.to(
+                    device=reference.device, dtype=reference.dtype
+                )
                 threshold = self._current_semantic_route_threshold(reference)
-                if route_frozen:
+                if bool(self.semantic_route_frozen.item()):
                     threshold = threshold.detach()
                 temperature = max(self.semantic_router_temperature, 1e-6)
                 gate = th.sigmoid((probability - threshold) / temperature)
-                if route_frozen:
+                if bool(self.semantic_route_frozen.item()):
                     gate = gate.detach()
             else:
                 # Keep the full observation during score warmup.
@@ -1745,9 +1793,23 @@ class PublicTransformerRelationCapturer(nn.Module):
         return self.semantic_router_mode is not None
 
     def semantic_router_uses_probe(self):
-        return self.semantic_probe_scale is not None and not bool(
+        if self.semantic_probe_scale is None or bool(
             self.semantic_route_frozen.item()
+        ):
+            return False
+        if self.mlp_independent_audit:
+            return self._semantic_full_input_audit
+        return True
+
+    def semantic_router_needs_independent_audit(self):
+        return (
+            self.mlp_independent_audit
+            and self.semantic_router_mode == "gradient_importance"
+            and not bool(self.semantic_route_frozen.item())
         )
+
+    def set_semantic_full_input_audit(self, enabled):
+        self._semantic_full_input_audit = bool(enabled)
 
     def semantic_router_needs_parameter_graph(self):
         return self.semantic_router_mode == "parameter_sensitivity" and not bool(
@@ -1975,8 +2037,18 @@ class PublicTransformerRelationCapturer(nn.Module):
             self.semantic_route_score.copy_(scores)
             self.semantic_route_score_initialized.fill_(True)
         else:
-            self.semantic_route_score.mul_(self.semantic_router_ema).add_(
-                scores, alpha=1.0 - self.semantic_router_ema
+            previous_score = self.semantic_route_score.clone()
+            ema = th.where(
+                scores > previous_score,
+                previous_score.new_full(
+                    previous_score.shape, self.semantic_router_ema_up
+                ),
+                previous_score.new_full(
+                    previous_score.shape, self.semantic_router_ema_down
+                ),
+            )
+            self.semantic_route_score.copy_(
+                ema * previous_score + (1.0 - ema) * scores
             )
 
         if t_env < self.semantic_router_warmup_steps:
@@ -1991,6 +2063,13 @@ class PublicTransformerRelationCapturer(nn.Module):
             )
             return
         if bool(self.semantic_route_frozen.item()):
+            return
+        if (
+            bool(self.semantic_route_deployed.item())
+            and self.semantic_router_update_interval > 0
+            and int(t_env) - int(self.semantic_route_last_update_t.item())
+            < self.semantic_router_update_interval
+        ):
             return
 
         self.semantic_learnable_threshold_active.fill_(
@@ -2078,6 +2157,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         if bool(switch_rate.item() > 0):
             self.semantic_route_version.add_(1)
         self.semantic_token_probability.copy_(probability)
+        self.semantic_deployed_probability.copy_(probability)
+        self.semantic_route_last_update_t.fill_(int(t_env))
+        self.semantic_route_deployed.fill_(True)
         if t_env >= self.semantic_router_freeze_steps:
             if not bool(self.semantic_route_frozen.item()):
                 self.semantic_route_version.add_(1)
@@ -2176,6 +2258,20 @@ class PublicTransformerRelationCapturer(nn.Module):
                 self.semantic_token_route == self.semantic_manual_token_route
             ).float().mean().detach(),
             "semantic_route_version": self.semantic_route_version.float().detach(),
+            "semantic_route_last_update_t": self.semantic_route_last_update_t.float().detach(),
+            "semantic_route_deployed": self.semantic_route_deployed.float().detach(),
+            "semantic_route_update_interval": probability.new_tensor(
+                float(self.semantic_router_update_interval)
+            ),
+            "semantic_route_ema_up": probability.new_tensor(
+                self.semantic_router_ema_up
+            ),
+            "semantic_route_ema_down": probability.new_tensor(
+                self.semantic_router_ema_down
+            ),
+            "semantic_route_independent_audit": probability.new_tensor(
+                float(self.mlp_independent_audit)
+            ),
         }
         if self.semantic_router_drop_mode == "learnable_hierarchical":
             drop_threshold, token_threshold = (
@@ -2295,6 +2391,7 @@ class PublicTransformerRelationCapturer(nn.Module):
             "semantic_bias_route",
             "semantic_keep_route",
             "semantic_token_probability",
+            "semantic_deployed_probability",
             "semantic_route_score",
             "semantic_route_score_initialized",
             "semantic_route_frozen",
@@ -2304,6 +2401,8 @@ class PublicTransformerRelationCapturer(nn.Module):
             "semantic_gradient_abs_mean",
             "semantic_route_last_switch_rate",
             "semantic_route_version",
+            "semantic_route_last_update_t",
+            "semantic_route_deployed",
         ):
             getattr(self, name).copy_(getattr(source, name))
 
@@ -3217,6 +3316,9 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         semantic_router_mode=None,
         semantic_router_learnable_threshold=False,
         semantic_router_ema=0.99,
+        semantic_router_ema_up=None,
+        semantic_router_ema_down=None,
+        semantic_router_update_interval=0,
         semantic_router_threshold=0.5,
         semantic_router_temperature=0.1,
         semantic_router_warmup_steps=250000,
@@ -3230,6 +3332,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         relation_encoder_style="transformer",
         l0_drop=False,
         mlp_soft_gate=False,
+        mlp_independent_audit=False,
     ):
         nn.Module.__init__(self)
         self.n_agents = n_agents
@@ -3245,6 +3348,23 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             semantic_router_learnable_threshold
         )
         self.semantic_router_ema = float(semantic_router_ema)
+        self.semantic_router_ema_up = float(
+            semantic_router_ema
+            if semantic_router_ema_up is None
+            else semantic_router_ema_up
+        )
+        self.semantic_router_ema_down = float(
+            semantic_router_ema
+            if semantic_router_ema_down is None
+            else semantic_router_ema_down
+        )
+        if not 0.0 <= self.semantic_router_ema_up < 1.0:
+            raise ValueError("semantic_router_ema_up must be in [0, 1)")
+        if not 0.0 <= self.semantic_router_ema_down < 1.0:
+            raise ValueError("semantic_router_ema_down must be in [0, 1)")
+        self.semantic_router_update_interval = max(
+            0, int(semantic_router_update_interval)
+        )
         self.semantic_router_threshold = float(semantic_router_threshold)
         if not 0.0 < self.semantic_router_threshold < 1.0:
             raise ValueError("semantic_router_threshold must be strictly between 0 and 1")
@@ -3285,6 +3405,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             raise ValueError("relation_encoder_style must be transformer or mlp")
         self.l0_drop = bool(l0_drop)
         self.mlp_soft_gate = bool(mlp_soft_gate)
+        self.mlp_independent_audit = bool(mlp_independent_audit)
+        self._semantic_full_input_audit = False
 
         (
             self.semantic_names,
@@ -3307,6 +3429,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.register_buffer("semantic_bias_route", 1.0 - manual_route.clone())
         self.register_buffer("semantic_keep_route", th.ones_like(manual_route))
         self.register_buffer("semantic_token_probability", manual_route.clone())
+        self.register_buffer("semantic_deployed_probability", manual_route.clone())
         self.register_buffer("semantic_route_score", th.zeros(len(self.semantic_names)))
         self.register_buffer("semantic_route_score_initialized", th.tensor(False))
         self.register_buffer("semantic_route_frozen", th.tensor(fixed_route is not None))
@@ -3316,6 +3439,13 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.register_buffer("semantic_gradient_abs_mean", th.zeros(len(self.semantic_names)))
         self.register_buffer("semantic_route_last_switch_rate", th.tensor(0.0))
         self.register_buffer("semantic_route_version", th.tensor(0, dtype=th.long))
+        self.register_buffer(
+            "semantic_route_last_update_t",
+            th.tensor(-self.semantic_router_update_interval, dtype=th.long),
+        )
+        self.register_buffer(
+            "semantic_route_deployed", th.tensor(fixed_route is not None)
+        )
         self.semantic_probe_scale = (
             nn.Parameter(th.ones(len(self.semantic_names)), requires_grad=True)
             if semantic_router_mode in {"gradient_importance", "parameter_sensitivity"}
@@ -5896,6 +6026,15 @@ class CleanHyperAgent(nn.Module):
         self.public_transformer_layers = int(getattr(args, "clean_public_transformer_layers", 1))
         self.public_transformer_heads = int(getattr(args, "clean_public_transformer_heads", 4))
         self.semantic_router_ema = float(getattr(args, "clean_semantic_router_ema", 0.99))
+        self.semantic_router_ema_up = float(
+            getattr(args, "clean_semantic_router_ema_up", self.semantic_router_ema)
+        )
+        self.semantic_router_ema_down = float(
+            getattr(args, "clean_semantic_router_ema_down", self.semantic_router_ema)
+        )
+        self.semantic_router_update_interval = int(
+            getattr(args, "clean_semantic_router_update_interval", 0)
+        )
         self.semantic_router_threshold = float(
             getattr(args, "clean_semantic_router_threshold", 0.5)
         )
@@ -7170,6 +7309,9 @@ class CleanHyperAgent(nn.Module):
             semantic_router_learnable_threshold=self.model_type
             in GRF_SEMANTIC_ROUTER_LEARNABLE_THRESHOLD_VARIANTS,
             semantic_router_ema=self.semantic_router_ema,
+            semantic_router_ema_up=self.semantic_router_ema_up,
+            semantic_router_ema_down=self.semantic_router_ema_down,
+            semantic_router_update_interval=self.semantic_router_update_interval,
             semantic_router_threshold=self.semantic_router_threshold,
             semantic_router_temperature=self.semantic_router_temperature,
             semantic_router_warmup_steps=self.semantic_router_warmup_steps,
@@ -7196,6 +7338,8 @@ class CleanHyperAgent(nn.Module):
             ),
             l0_drop=self.model_type in GRF_MLP_L0_DROP_VARIANTS,
             mlp_soft_gate=self.model_type in GRF_MLP_GIMP_SOFT_VARIANTS,
+            mlp_independent_audit=self.model_type
+            in GRF_MLP_GIMP_AUDIT_VARIANTS,
         )
 
     def _init_grf_decision_maker_head(self):
@@ -7360,6 +7504,9 @@ class CleanHyperAgent(nn.Module):
                 semantic_router_learnable_threshold=self.model_type
                 in SEMANTIC_ROUTER_LEARNABLE_THRESHOLD_VARIANTS,
                 semantic_router_ema=self.semantic_router_ema,
+                semantic_router_ema_up=self.semantic_router_ema_up,
+                semantic_router_ema_down=self.semantic_router_ema_down,
+                semantic_router_update_interval=self.semantic_router_update_interval,
                 semantic_router_threshold=self.semantic_router_threshold,
                 semantic_router_temperature=self.semantic_router_temperature,
                 semantic_router_warmup_steps=self.semantic_router_warmup_steps,
@@ -7384,6 +7531,8 @@ class CleanHyperAgent(nn.Module):
                 ),
                 l0_drop=self.model_type in MLP_L0_DROP_VARIANTS,
                 mlp_soft_gate=self.model_type in MLP_GIMP_SOFT_VARIANTS,
+                mlp_independent_audit=self.model_type
+                in MLP_GIMP_AUDIT_VARIANTS,
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(
