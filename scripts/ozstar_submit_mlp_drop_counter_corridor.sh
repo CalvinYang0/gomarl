@@ -41,6 +41,8 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 SUBMIT_GAP_SECONDS="${SUBMIT_GAP_SECONDS:-1}"
 SUBMIT_GRF="${SUBMIT_GRF:-1}"
 SUBMIT_CORRIDOR="${SUBMIT_CORRIDOR:-1}"
+SUBMIT_L0="${SUBMIT_L0:-1}"
+GRF_SCENES="${GRF_SCENES:-counter}"
 
 cd "$REPO_DIR"
 mkdir -p ozstar_logs
@@ -65,6 +67,10 @@ if [[ "$SUBMIT_CORRIDOR" != "0" && "$SUBMIT_CORRIDOR" != "1" ]]; then
   echo "ERROR: SUBMIT_CORRIDOR must be 0 or 1" >&2
   exit 2
 fi
+if [[ "$SUBMIT_L0" != "0" && "$SUBMIT_L0" != "1" ]]; then
+  echo "ERROR: SUBMIT_L0 must be 0 or 1" >&2
+  exit 2
+fi
 
 "$PYTHON_BIN" scripts/smoke_test_mlp_drop_relation.py
 
@@ -85,7 +91,21 @@ submit_one() {
     map_name="corridor"
     scene_args=""
   else
-    env_config="academy_counterattack_easy"
+    case "$scene" in
+      pass)
+        env_config="academy_pass_and_shoot_with_keeper"
+        ;;
+      3v1)
+        env_config="academy_3_vs_1_with_keeper"
+        ;;
+      counter)
+        env_config="academy_counterattack_easy"
+        ;;
+      *)
+        echo "ERROR: unsupported GRF scene: $scene" >&2
+        return 2
+        ;;
+    esac
     map_name="$env_config"
     scene_args="env_worker_startup_stagger=$ENV_WORKER_STARTUP_STAGGER env_worker_reset_retries=$ENV_WORKER_RESET_RETRIES env_worker_reset_retry_delay=$ENV_WORKER_RESET_RETRY_DELAY env_worker_response_timeout=$ENV_WORKER_RESPONSE_TIMEOUT env_args.write_video=False"
   fi
@@ -109,19 +129,37 @@ submit_one() {
 }
 
 echo "== Lightweight MLP relation/drop ablation =="
-echo "resources: GRF counter=${CPUS_PER_TASK}c/${GRF_MEM}; corridor=${CPUS_PER_TASK}c/${CORRIDOR_MEM}"
+echo "resources: GRF=${CPUS_PER_TASK}c/${GRF_MEM}; corridor=${CPUS_PER_TASK}c/${CORRIDOR_MEM}"
 echo "training: ${TIME}, t_max=${T_MAX}, workers=${BATCH_SIZE_RUN}, learner_threads=${TORCH_NUM_THREADS}"
+echo "selection: GRF_SCENES='${GRF_SCENES}', submit_l0=${SUBMIT_L0}"
 
 submitted=0
 if [[ "$SUBMIT_GRF" == "1" ]]; then
-  submit_one counter grf_counter grf_abs_mlp_relation_hypercond full "$GRF_MEM"
-  submitted=$((submitted + 1))
-  sleep "$SUBMIT_GAP_SECONDS"
-  submit_one counter grf_counter grf_abs_gimp_lthr_drop_mlp_relation_hypercond gimp_drop "$GRF_MEM"
-  submitted=$((submitted + 1))
-  sleep "$SUBMIT_GAP_SECONDS"
-  submit_one counter grf_counter grf_abs_l0_drop_mlp_relation_hypercond l0_drop "$GRF_MEM"
-  submitted=$((submitted + 1))
+  for scene in $GRF_SCENES; do
+    case "$scene" in
+      pass) tag="grf_pass" ;;
+      3v1) tag="grf_3v1" ;;
+      counter) tag="grf_counter" ;;
+      *)
+        echo "ERROR: unsupported GRF scene in GRF_SCENES: $scene" >&2
+        exit 2
+        ;;
+    esac
+
+    if (( submitted > 0 )); then
+      sleep "$SUBMIT_GAP_SECONDS"
+    fi
+    submit_one "$scene" "$tag" grf_abs_mlp_relation_hypercond full "$GRF_MEM"
+    submitted=$((submitted + 1))
+    sleep "$SUBMIT_GAP_SECONDS"
+    submit_one "$scene" "$tag" grf_abs_gimp_lthr_drop_mlp_relation_hypercond gimp_drop "$GRF_MEM"
+    submitted=$((submitted + 1))
+    if [[ "$SUBMIT_L0" == "1" ]]; then
+      sleep "$SUBMIT_GAP_SECONDS"
+      submit_one "$scene" "$tag" grf_abs_l0_drop_mlp_relation_hypercond l0_drop "$GRF_MEM"
+      submitted=$((submitted + 1))
+    fi
+  done
 fi
 
 if [[ "$SUBMIT_CORRIDOR" == "1" ]]; then
@@ -133,9 +171,11 @@ if [[ "$SUBMIT_CORRIDOR" == "1" ]]; then
   sleep "$SUBMIT_GAP_SECONDS"
   submit_one corridor corridor rpg_gimp_lthr_drop_mlp_relation_hypercond gimp_drop "$CORRIDOR_MEM"
   submitted=$((submitted + 1))
-  sleep "$SUBMIT_GAP_SECONDS"
-  submit_one corridor corridor rpg_l0_drop_mlp_relation_hypercond l0_drop "$CORRIDOR_MEM"
-  submitted=$((submitted + 1))
+  if [[ "$SUBMIT_L0" == "1" ]]; then
+    sleep "$SUBMIT_GAP_SECONDS"
+    submit_one corridor corridor rpg_l0_drop_mlp_relation_hypercond l0_drop "$CORRIDOR_MEM"
+    submitted=$((submitted + 1))
+  fi
 fi
 
 echo "submitted total: $submitted"
