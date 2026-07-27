@@ -183,14 +183,19 @@ SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "rpg_simple_bias_gradient_importance_hierarchical_drop_router_hypercond": "gradient_importance",
     "rpg_simple_bias_gradient_importance_sparse_drop_router_hypercond": "gradient_importance",
     "rpg_gimp_lthr_drop_mlp_relation_hypercond": "gradient_importance",
+    "rpg_gimp_lthr_soft_mlp_relation_hypercond": "gradient_importance",
 }
 MLP_RELATION_VARIANTS = {
     "rpg_mlp_relation_hypercond",
     "rpg_gimp_lthr_drop_mlp_relation_hypercond",
+    "rpg_gimp_lthr_soft_mlp_relation_hypercond",
     "rpg_l0_drop_mlp_relation_hypercond",
 }
 MLP_GIMP_DROP_VARIANTS = {
     "rpg_gimp_lthr_drop_mlp_relation_hypercond",
+}
+MLP_GIMP_SOFT_VARIANTS = {
+    "rpg_gimp_lthr_soft_mlp_relation_hypercond",
 }
 MLP_L0_DROP_VARIANTS = {
     "rpg_l0_drop_mlp_relation_hypercond",
@@ -207,6 +212,7 @@ SEMANTIC_ROUTER_LEARNABLE_THRESHOLD_VARIANTS = {
     "rpg_simple_bias_gradient_importance_learnable_threshold_router_hypercond",
     "rpg_simple_bias_parameter_sensitivity_learnable_threshold_router_hypercond",
     *MLP_GIMP_DROP_VARIANTS,
+    *MLP_GIMP_SOFT_VARIANTS,
 }
 SEMANTIC_ROUTER_INVERSE_VARIANTS = {
     "rpg_simple_bias_gradient_importance_inverse_router_hypercond",
@@ -319,10 +325,14 @@ GRF_DECISION_MAKER_VARIANTS = {
 GRF_MLP_RELATION_VARIANTS = {
     "grf_abs_mlp_relation_hypercond",
     "grf_abs_gimp_lthr_drop_mlp_relation_hypercond",
+    "grf_abs_gimp_lthr_soft_mlp_relation_hypercond",
     "grf_abs_l0_drop_mlp_relation_hypercond",
 }
 GRF_MLP_GIMP_DROP_VARIANTS = {
     "grf_abs_gimp_lthr_drop_mlp_relation_hypercond",
+}
+GRF_MLP_GIMP_SOFT_VARIANTS = {
+    "grf_abs_gimp_lthr_soft_mlp_relation_hypercond",
 }
 GRF_MLP_L0_DROP_VARIANTS = {
     "grf_abs_l0_drop_mlp_relation_hypercond",
@@ -347,6 +357,7 @@ GRF_SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "grf_abs_simple_bias_gimp_lthr_hdrop_hypercond": "gradient_importance",
     "grf_abs_simple_bias_gimp_str_sparse_hypercond": "gradient_importance",
     "grf_abs_gimp_lthr_drop_mlp_relation_hypercond": "gradient_importance",
+    "grf_abs_gimp_lthr_soft_mlp_relation_hypercond": "gradient_importance",
 }
 
 GRF_SEMANTIC_ROUTER_USE_MODE_BY_MODEL = {
@@ -378,6 +389,7 @@ GRF_SEMANTIC_ROUTER_LEARNABLE_THRESHOLD_VARIANTS = {
     "grf_abs_simple_bias_gimp_lthr_hdrop_hypercond",
     "grf_abs_simple_bias_gimp_str_sparse_hypercond",
     *GRF_MLP_GIMP_DROP_VARIANTS,
+    *GRF_MLP_GIMP_SOFT_VARIANTS,
 }
 GRF_SEMANTIC_ROUTER_VARIANTS = set(GRF_SEMANTIC_ROUTER_MODE_BY_MODEL)
 GRF_PUBLIC_TRANSFORMER_VARIANTS = {
@@ -523,6 +535,7 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_transformer_single_head_hypercond": "baseline",
     "rpg_mlp_relation_hypercond": "baseline",
     "rpg_gimp_lthr_drop_mlp_relation_hypercond": "baseline",
+    "rpg_gimp_lthr_soft_mlp_relation_hypercond": "baseline",
     "rpg_l0_drop_mlp_relation_hypercond": "baseline",
     "rpg_public_future_delta_token_transformer_hypercond": "future_delta_token",
     "rpg_public_future_delta_token_transformer_single_head_hypercond": "future_delta_token",
@@ -1163,6 +1176,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         semantic_router_sparse_coef=0.001,
         relation_encoder_style="transformer",
         l0_drop=False,
+        mlp_soft_gate=False,
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -1187,6 +1201,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.self_public_side_id = 1 if merge_friendly_public_side else 0
         self.private_owner_side = bool(private_owner_side)
         self.private_bias_style = private_bias_style
+        self.mlp_soft_gate = bool(mlp_soft_gate)
         self.latest_encoded_self_token = None
         self.latest_encoded_enemy_tokens = None
         self.semantic_router_mode = semantic_router_mode
@@ -1497,6 +1512,36 @@ class PublicTransformerRelationCapturer(nn.Module):
                     "mlp_relation_gate_mean": gate.mean().detach(),
                     "mlp_relation_l0_expected": expected_keep.mean().detach(),
                     "mlp_relation_l0_loss": sparse_loss.detach(),
+                }
+            )
+            return gate
+        if self.mlp_soft_gate:
+            route_ready = bool(self.semantic_learnable_threshold_active.item())
+            route_frozen = bool(self.semantic_route_frozen.item())
+            if (
+                self.semantic_router_active
+                and bool(self.semantic_route_score_initialized.item())
+                and (route_ready or route_frozen)
+            ):
+                probability = self._semantic_route_probabilities(
+                    self.semantic_route_score.detach()
+                ).to(device=reference.device, dtype=reference.dtype)
+                threshold = self._current_semantic_route_threshold(reference)
+                if route_frozen:
+                    threshold = threshold.detach()
+                temperature = max(self.semantic_router_temperature, 1e-6)
+                gate = th.sigmoid((probability - threshold) / temperature)
+                if route_frozen:
+                    gate = gate.detach()
+            else:
+                # Keep the full observation during score warmup.
+                gate = reference.new_ones(len(self.semantic_names))
+            self.latest_aux_stats.update(
+                {
+                    "mlp_relation_keep_fraction": (gate > 0.5).float().mean().detach(),
+                    "mlp_relation_gate_mean": gate.mean().detach(),
+                    "mlp_relation_gate_min": gate.min().detach(),
+                    "mlp_relation_gate_max": gate.max().detach(),
                 }
             )
             return gate
@@ -3184,6 +3229,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         semantic_router_sparse_coef=0.001,
         relation_encoder_style="transformer",
         l0_drop=False,
+        mlp_soft_gate=False,
     ):
         nn.Module.__init__(self)
         self.n_agents = n_agents
@@ -3238,6 +3284,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         if self.relation_encoder_style not in {"transformer", "mlp"}:
             raise ValueError("relation_encoder_style must be transformer or mlp")
         self.l0_drop = bool(l0_drop)
+        self.mlp_soft_gate = bool(mlp_soft_gate)
 
         (
             self.semantic_names,
@@ -7148,6 +7195,7 @@ class CleanHyperAgent(nn.Module):
                 else "transformer"
             ),
             l0_drop=self.model_type in GRF_MLP_L0_DROP_VARIANTS,
+            mlp_soft_gate=self.model_type in GRF_MLP_GIMP_SOFT_VARIANTS,
         )
 
     def _init_grf_decision_maker_head(self):
@@ -7335,6 +7383,7 @@ class CleanHyperAgent(nn.Module):
                     else "transformer"
                 ),
                 l0_drop=self.model_type in MLP_L0_DROP_VARIANTS,
+                mlp_soft_gate=self.model_type in MLP_GIMP_SOFT_VARIANTS,
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(

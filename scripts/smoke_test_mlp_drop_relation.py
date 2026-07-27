@@ -16,7 +16,13 @@ from modules.agents.clean_hyper_agent import (  # noqa: E402
 )
 
 
-def check_smac(style, router_mode=None, learnable_threshold=False, l0_drop=False):
+def check_smac(
+    style,
+    router_mode=None,
+    learnable_threshold=False,
+    l0_drop=False,
+    soft_gate=False,
+):
     capturer = PublicTransformerRelationCapturer(
         move_dim=4,
         own_dim=1,
@@ -33,6 +39,7 @@ def check_smac(style, router_mode=None, learnable_threshold=False, l0_drop=False
         semantic_router_learnable_threshold=learnable_threshold,
         relation_encoder_style=style,
         l0_drop=l0_drop,
+        mlp_soft_gate=soft_gate,
     )
     capturer.train()
     self_feat = th.randn(2, 4, 5)
@@ -55,7 +62,13 @@ def check_smac(style, router_mode=None, learnable_threshold=False, l0_drop=False
         assert capturer.l0_log_alpha.grad is not None
 
 
-def check_grf(style, router_mode=None, learnable_threshold=False, l0_drop=False):
+def check_grf(
+    style,
+    router_mode=None,
+    learnable_threshold=False,
+    l0_drop=False,
+    soft_gate=False,
+):
     capturer = GRFPublicPrivateBiasTransformerCapturer(
         n_agents=3,
         relation_dim=16,
@@ -65,6 +78,7 @@ def check_grf(style, router_mode=None, learnable_threshold=False, l0_drop=False)
         semantic_router_learnable_threshold=learnable_threshold,
         relation_encoder_style=style,
         l0_drop=l0_drop,
+        mlp_soft_gate=soft_gate,
     )
     capturer.train()
     obs = th.randn(2, 3, capturer.expected_obs_dim)
@@ -89,6 +103,12 @@ def main():
             style="mlp",
             router_mode="gradient_importance",
             learnable_threshold=True,
+        ),
+        dict(
+            style="mlp",
+            router_mode="gradient_importance",
+            learnable_threshold=True,
+            soft_gate=True,
         ),
         dict(style="mlp", l0_drop=True),
     )

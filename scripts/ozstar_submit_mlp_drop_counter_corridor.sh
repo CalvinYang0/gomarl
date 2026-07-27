@@ -41,6 +41,9 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 SUBMIT_GAP_SECONDS="${SUBMIT_GAP_SECONDS:-1}"
 SUBMIT_GRF="${SUBMIT_GRF:-1}"
 SUBMIT_CORRIDOR="${SUBMIT_CORRIDOR:-1}"
+SUBMIT_FULL="${SUBMIT_FULL:-1}"
+SUBMIT_HARD_GIMP="${SUBMIT_HARD_GIMP:-1}"
+SUBMIT_SOFT_GIMP="${SUBMIT_SOFT_GIMP:-0}"
 SUBMIT_L0="${SUBMIT_L0:-1}"
 GRF_SCENES="${GRF_SCENES:-counter}"
 
@@ -67,10 +70,13 @@ if [[ "$SUBMIT_CORRIDOR" != "0" && "$SUBMIT_CORRIDOR" != "1" ]]; then
   echo "ERROR: SUBMIT_CORRIDOR must be 0 or 1" >&2
   exit 2
 fi
-if [[ "$SUBMIT_L0" != "0" && "$SUBMIT_L0" != "1" ]]; then
-  echo "ERROR: SUBMIT_L0 must be 0 or 1" >&2
-  exit 2
-fi
+for toggle_name in SUBMIT_FULL SUBMIT_HARD_GIMP SUBMIT_SOFT_GIMP SUBMIT_L0; do
+  toggle_value="${!toggle_name}"
+  if [[ "$toggle_value" != "0" && "$toggle_value" != "1" ]]; then
+    echo "ERROR: $toggle_name must be 0 or 1" >&2
+    exit 2
+  fi
+done
 
 "$PYTHON_BIN" scripts/smoke_test_mlp_drop_relation.py
 
@@ -131,7 +137,7 @@ submit_one() {
 echo "== Lightweight MLP relation/drop ablation =="
 echo "resources: GRF=${CPUS_PER_TASK}c/${GRF_MEM}; corridor=${CPUS_PER_TASK}c/${CORRIDOR_MEM}"
 echo "training: ${TIME}, t_max=${T_MAX}, workers=${BATCH_SIZE_RUN}, learner_threads=${TORCH_NUM_THREADS}"
-echo "selection: GRF_SCENES='${GRF_SCENES}', submit_l0=${SUBMIT_L0}"
+echo "selection: GRF_SCENES='${GRF_SCENES}', full=${SUBMIT_FULL}, hard_gimp=${SUBMIT_HARD_GIMP}, soft_gimp=${SUBMIT_SOFT_GIMP}, l0=${SUBMIT_L0}"
 
 submitted=0
 if [[ "$SUBMIT_GRF" == "1" ]]; then
@@ -146,16 +152,31 @@ if [[ "$SUBMIT_GRF" == "1" ]]; then
         ;;
     esac
 
-    if (( submitted > 0 )); then
-      sleep "$SUBMIT_GAP_SECONDS"
+    if [[ "$SUBMIT_FULL" == "1" ]]; then
+      if (( submitted > 0 )); then
+        sleep "$SUBMIT_GAP_SECONDS"
+      fi
+      submit_one "$scene" "$tag" grf_abs_mlp_relation_hypercond full "$GRF_MEM"
+      submitted=$((submitted + 1))
     fi
-    submit_one "$scene" "$tag" grf_abs_mlp_relation_hypercond full "$GRF_MEM"
-    submitted=$((submitted + 1))
-    sleep "$SUBMIT_GAP_SECONDS"
-    submit_one "$scene" "$tag" grf_abs_gimp_lthr_drop_mlp_relation_hypercond gimp_drop "$GRF_MEM"
-    submitted=$((submitted + 1))
+    if [[ "$SUBMIT_HARD_GIMP" == "1" ]]; then
+      if (( submitted > 0 )); then
+        sleep "$SUBMIT_GAP_SECONDS"
+      fi
+      submit_one "$scene" "$tag" grf_abs_gimp_lthr_drop_mlp_relation_hypercond gimp_drop "$GRF_MEM"
+      submitted=$((submitted + 1))
+    fi
+    if [[ "$SUBMIT_SOFT_GIMP" == "1" ]]; then
+      if (( submitted > 0 )); then
+        sleep "$SUBMIT_GAP_SECONDS"
+      fi
+      submit_one "$scene" "$tag" grf_abs_gimp_lthr_soft_mlp_relation_hypercond gimp_soft "$GRF_MEM"
+      submitted=$((submitted + 1))
+    fi
     if [[ "$SUBMIT_L0" == "1" ]]; then
-      sleep "$SUBMIT_GAP_SECONDS"
+      if (( submitted > 0 )); then
+        sleep "$SUBMIT_GAP_SECONDS"
+      fi
       submit_one "$scene" "$tag" grf_abs_l0_drop_mlp_relation_hypercond l0_drop "$GRF_MEM"
       submitted=$((submitted + 1))
     fi
@@ -166,13 +187,28 @@ if [[ "$SUBMIT_CORRIDOR" == "1" ]]; then
   if (( submitted > 0 )); then
     sleep "$SUBMIT_GAP_SECONDS"
   fi
-  submit_one corridor corridor rpg_mlp_relation_hypercond full "$CORRIDOR_MEM"
-  submitted=$((submitted + 1))
-  sleep "$SUBMIT_GAP_SECONDS"
-  submit_one corridor corridor rpg_gimp_lthr_drop_mlp_relation_hypercond gimp_drop "$CORRIDOR_MEM"
-  submitted=$((submitted + 1))
+  if [[ "$SUBMIT_FULL" == "1" ]]; then
+    submit_one corridor corridor rpg_mlp_relation_hypercond full "$CORRIDOR_MEM"
+    submitted=$((submitted + 1))
+  fi
+  if [[ "$SUBMIT_HARD_GIMP" == "1" ]]; then
+    if (( submitted > 0 )); then
+      sleep "$SUBMIT_GAP_SECONDS"
+    fi
+    submit_one corridor corridor rpg_gimp_lthr_drop_mlp_relation_hypercond gimp_drop "$CORRIDOR_MEM"
+    submitted=$((submitted + 1))
+  fi
+  if [[ "$SUBMIT_SOFT_GIMP" == "1" ]]; then
+    if (( submitted > 0 )); then
+      sleep "$SUBMIT_GAP_SECONDS"
+    fi
+    submit_one corridor corridor rpg_gimp_lthr_soft_mlp_relation_hypercond gimp_soft "$CORRIDOR_MEM"
+    submitted=$((submitted + 1))
+  fi
   if [[ "$SUBMIT_L0" == "1" ]]; then
-    sleep "$SUBMIT_GAP_SECONDS"
+    if (( submitted > 0 )); then
+      sleep "$SUBMIT_GAP_SECONDS"
+    fi
     submit_one corridor corridor rpg_l0_drop_mlp_relation_hypercond l0_drop "$CORRIDOR_MEM"
     submitted=$((submitted + 1))
   fi
