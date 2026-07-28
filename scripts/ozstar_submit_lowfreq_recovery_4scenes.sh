@@ -13,7 +13,7 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
 SEED="${SEED:-1}"
-TIME="${TIME:-2-00:00:00}"
+TIME="${TIME:-1-00:00:00}"
 T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 
