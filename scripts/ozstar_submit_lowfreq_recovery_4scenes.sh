@@ -98,7 +98,15 @@ submit_one() {
 
   local run_name="${tag}_mlp_lf8k_${variant}_10m_s${SEED}"
   local job_name="${tag}_lf8k_${variant}_s${SEED}"
-  local job_id
+  local job_id reusable
+
+  SUBMIT_CREATED=0
+  reusable=$(find_active_job "$job_name")
+  if [[ -n "$reusable" ]]; then
+    echo "reused active: job=$reusable scene=$scene variant=$variant name=$job_name"
+    return
+  fi
+
   job_id=$(sbatch --parsable \
     --nodes=1 \
     --ntasks=1 \
@@ -110,11 +118,12 @@ submit_one() {
     --error=ozstar_logs/%x_%j.err \
     --export=ALL,PYTHON_BIN="$PYTHON_BIN",CONFIG=clean_hyper,ENV_CONFIG="$env_config",MAP_NAME="$map_name",MODEL_TYPE="$model",SEED="$SEED",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",EXPECTED_BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",GROUP_NAME="$run_name",OMP_NUM_THREADS="$TORCH_NUM_THREADS",MKL_NUM_THREADS="$TORCH_NUM_THREADS",OPENBLAS_NUM_THREADS="$TORCH_NUM_THREADS",NUMEXPR_NUM_THREADS="$TORCH_NUM_THREADS",EXTRA_ARGS="$(common_args) $scene_args" \
     scripts/ozstar_train_offline.sbatch)
+  SUBMIT_CREATED=1
   printf 'submitted job=%s scene=%s variant=%s model=%s memory=%s\n' \
     "${job_id%%;*}" "$scene" "$variant" "$model" "$memory"
 }
 
-find_reusable_full() {
+find_active_job() {
   local exact_name="$1"
   squeue -u "$USER" -h -o "%i|%j|%T" |
     awk -F'|' -v expected="$exact_name" \
@@ -131,7 +140,7 @@ reuse_or_submit_full() {
   local reusable=""
 
   if [[ "$REUSE_RUNNING_FULL" == "1" ]]; then
-    reusable=$(find_reusable_full "$legacy_name")
+    reusable=$(find_active_job "$legacy_name")
   fi
   if [[ -n "$reusable" ]]; then
     echo "reused full: job=$reusable scene=$scene name=$legacy_name"
@@ -141,7 +150,7 @@ reuse_or_submit_full() {
     sleep "$SUBMIT_GAP_SECONDS"
   fi
   submit_one "$scene" "$tag" "$model" full "$memory"
-  submitted=$((submitted + 1))
+  submitted=$((submitted + SUBMIT_CREATED))
 }
 
 submit_scene() {
@@ -157,10 +166,10 @@ submit_scene() {
     sleep "$SUBMIT_GAP_SECONDS"
   fi
   submit_one "$scene" "$tag" "$soft_model" soft "$memory"
-  submitted=$((submitted + 1))
+  submitted=$((submitted + SUBMIT_CREATED))
   sleep "$SUBMIT_GAP_SECONDS"
   submit_one "$scene" "$tag" "$audit_model" audit "$memory"
-  submitted=$((submitted + 1))
+  submitted=$((submitted + SUBMIT_CREATED))
 }
 
 echo "== Low-frequency semantic recovery: four scenes =="
