@@ -193,6 +193,9 @@ SEMANTIC_ROUTER_MODE_BY_MODEL = {
         "gradient_importance"
     ),
     "rpg_shared_binary_td_audit_mlp_relation_hypercond": "binary_td_audit",
+    "rpg_shared_binary_td_audit_soft_mlp_relation_hypercond": (
+        "binary_td_audit"
+    ),
     "rpg_shared_binary_parameter_audit_mlp_relation_hypercond": "binary_parameter_audit",
 }
 MLP_RELATION_VARIANTS = {
@@ -203,6 +206,7 @@ MLP_RELATION_VARIANTS = {
     "rpg_gimp_lowfreq_audit_mlp_relation_hypercond",
     "rpg_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond",
     "rpg_shared_binary_td_audit_mlp_relation_hypercond",
+    "rpg_shared_binary_td_audit_soft_mlp_relation_hypercond",
     "rpg_shared_binary_parameter_audit_mlp_relation_hypercond",
     "rpg_l0_drop_mlp_relation_hypercond",
 }
@@ -219,8 +223,12 @@ MLP_GIMP_AUDIT_VARIANTS = {
 MLP_GIMP_STOCHASTIC_HARD_VARIANTS = {
     "rpg_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond",
 }
+MLP_BINARY_AUDIT_SOFT_VARIANTS = {
+    "rpg_shared_binary_td_audit_soft_mlp_relation_hypercond",
+}
 MLP_BINARY_AUDIT_MODE_BY_MODEL = {
     "rpg_shared_binary_td_audit_mlp_relation_hypercond": "td_loss",
+    "rpg_shared_binary_td_audit_soft_mlp_relation_hypercond": "td_loss",
     "rpg_shared_binary_parameter_audit_mlp_relation_hypercond": "generated_parameters",
 }
 MLP_L0_DROP_VARIANTS = {
@@ -356,6 +364,7 @@ GRF_MLP_RELATION_VARIANTS = {
     "grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond",
     "grf_abs_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond",
     "grf_abs_shared_binary_td_audit_mlp_relation_hypercond",
+    "grf_abs_shared_binary_td_audit_soft_mlp_relation_hypercond",
     "grf_abs_shared_binary_parameter_audit_mlp_relation_hypercond",
     "grf_abs_l0_drop_mlp_relation_hypercond",
 }
@@ -372,8 +381,12 @@ GRF_MLP_GIMP_AUDIT_VARIANTS = {
 GRF_MLP_GIMP_STOCHASTIC_HARD_VARIANTS = {
     "grf_abs_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond",
 }
+GRF_MLP_BINARY_AUDIT_SOFT_VARIANTS = {
+    "grf_abs_shared_binary_td_audit_soft_mlp_relation_hypercond",
+}
 GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL = {
     "grf_abs_shared_binary_td_audit_mlp_relation_hypercond": "td_loss",
+    "grf_abs_shared_binary_td_audit_soft_mlp_relation_hypercond": "td_loss",
     "grf_abs_shared_binary_parameter_audit_mlp_relation_hypercond": "generated_parameters",
 }
 GRF_MLP_L0_DROP_VARIANTS = {
@@ -406,6 +419,9 @@ GRF_SEMANTIC_ROUTER_MODE_BY_MODEL = {
         "gradient_importance"
     ),
     "grf_abs_shared_binary_td_audit_mlp_relation_hypercond": "binary_td_audit",
+    "grf_abs_shared_binary_td_audit_soft_mlp_relation_hypercond": (
+        "binary_td_audit"
+    ),
     "grf_abs_shared_binary_parameter_audit_mlp_relation_hypercond": "binary_parameter_audit",
 }
 
@@ -7788,7 +7804,11 @@ class CleanHyperAgent(nn.Module):
                 else "transformer"
             ),
             l0_drop=self.model_type in GRF_MLP_L0_DROP_VARIANTS,
-            mlp_soft_gate=self.model_type in GRF_MLP_GIMP_SOFT_VARIANTS,
+            mlp_soft_gate=self.model_type
+            in (
+                GRF_MLP_GIMP_SOFT_VARIANTS
+                | GRF_MLP_BINARY_AUDIT_SOFT_VARIANTS
+            ),
             mlp_stochastic_hard_gate=self.model_type
             in GRF_MLP_GIMP_STOCHASTIC_HARD_VARIANTS,
             mlp_stochastic_exploration_floor=(
@@ -7992,7 +8012,8 @@ class CleanHyperAgent(nn.Module):
                     else "transformer"
                 ),
                 l0_drop=self.model_type in MLP_L0_DROP_VARIANTS,
-                mlp_soft_gate=self.model_type in MLP_GIMP_SOFT_VARIANTS,
+                mlp_soft_gate=self.model_type
+                in (MLP_GIMP_SOFT_VARIANTS | MLP_BINARY_AUDIT_SOFT_VARIANTS),
                 mlp_stochastic_hard_gate=self.model_type
                 in MLP_GIMP_STOCHASTIC_HARD_VARIANTS,
                 mlp_stochastic_exploration_floor=(

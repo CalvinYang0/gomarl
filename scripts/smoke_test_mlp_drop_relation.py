@@ -16,6 +16,20 @@ from modules.agents.clean_hyper_agent import (  # noqa: E402
 )
 
 
+def check_continuous_soft_gate(capturer, reference):
+    scores = th.linspace(
+        0.5,
+        1.5,
+        steps=len(capturer.semantic_names),
+        device=capturer.semantic_route_score.device,
+    )
+    capturer.update_semantic_router(250000, scores)
+    gate = capturer._mlp_relation_gate(reference)
+    assert bool(capturer.semantic_route_deployed.item())
+    assert th.all((gate > 0.0) & (gate < 1.0))
+    assert gate.max() - gate.min() > 1e-3
+
+
 def check_smac(
     style,
     router_mode=None,
@@ -81,6 +95,8 @@ def check_smac(
         assert capturer.semantic_probe_scale.grad is not None
     if l0_drop:
         assert capturer.l0_log_alpha.grad is not None
+    if soft_gate:
+        check_continuous_soft_gate(capturer, self_feat)
     if share_by_side:
         name_to_group = {
             name: int(group)
@@ -152,6 +168,8 @@ def check_grf(
         assert capturer.semantic_probe_scale.grad is not None
     if l0_drop:
         assert capturer.l0_log_alpha.grad is not None
+    if soft_gate:
+        check_continuous_soft_gate(capturer, obs)
     if share_by_side:
         name_to_group = {
             name: int(group)
@@ -199,6 +217,14 @@ def main():
             router_mode="binary_td_audit",
             binary_audit_mode="td_loss",
             share_by_side=True,
+            update_interval=8000,
+        ),
+        dict(
+            style="mlp",
+            router_mode="binary_td_audit",
+            binary_audit_mode="td_loss",
+            share_by_side=True,
+            soft_gate=True,
             update_interval=8000,
         ),
         dict(
