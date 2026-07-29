@@ -74,6 +74,20 @@ class CleanLearner:
         self.semantic_observation_probe_timesteps = max(
             1, int(getattr(args, "clean_semantic_observation_probe_timesteps", 8))
         )
+        self.semantic_critical_tail_fraction = float(
+            getattr(args, "clean_semantic_critical_tail_fraction", 0.1)
+        )
+        if not 0.0 < self.semantic_critical_tail_fraction <= 1.0:
+            raise ValueError(
+                "clean_semantic_critical_tail_fraction must be in (0, 1]"
+            )
+        self.semantic_critical_tail_weight = float(
+            getattr(args, "clean_semantic_critical_tail_weight", 0.5)
+        )
+        if not 0.0 <= self.semantic_critical_tail_weight <= 1.0:
+            raise ValueError(
+                "clean_semantic_critical_tail_weight must be in [0, 1]"
+            )
         self.semantic_binary_audit_batch_size = max(
             1, int(getattr(args, "clean_semantic_binary_audit_batch_size", 8))
         )
@@ -428,6 +442,11 @@ class CleanLearner:
         )
         if binary_rehearsal_active:
             self._set_binary_rehearsal_route(True)
+        if (
+            semantic_router is not None
+            and semantic_router.semantic_router_needs_critical_importance()
+        ):
+            semantic_router.begin_semantic_critical_capture()
         generated_parameter_graphs = []
         parameter_probe_times = set()
         observation_probe_times = set()
@@ -595,12 +614,15 @@ class CleanLearner:
                 allow_unused=True,
             )[0]
 
+        semantic_critical_score = None
+        semantic_gradient_scale = 1.0
         self.optimiser.zero_grad()
         if semantic_router is not None and semantic_router.semantic_probe_scale is not None:
             semantic_router.semantic_probe_scale.grad = None
         if semantic_router is not None and semantic_router.semantic_route_probe is not None:
             semantic_router.semantic_route_probe.grad = None
         if self.use_amp:
+            semantic_gradient_scale = float(self.amp_scaler.get_scale())
             self.amp_scaler.scale(loss).backward()
             self.amp_scaler.unscale_(self.optimiser)
             semantic_gradient = (
@@ -649,6 +671,19 @@ class CleanLearner:
             grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
             self.optimiser.step()
 
+        if (
+            semantic_router is not None
+            and semantic_router.semantic_router_needs_critical_importance()
+        ):
+            semantic_critical_score = (
+                semantic_router.consume_semantic_critical_importance(
+                    td_mask,
+                    tail_fraction=self.semantic_critical_tail_fraction,
+                    tail_weight=self.semantic_critical_tail_weight,
+                    gradient_scale=semantic_gradient_scale,
+                )
+            )
+
         if binary_rehearsal_active:
             self.semantic_binary_rehearsal_remaining = max(
                 0, self.semantic_binary_rehearsal_remaining - 1
@@ -668,6 +703,14 @@ class CleanLearner:
                 and semantic_gradient is not None
             ):
                 semantic_router.update_semantic_router(t_env, semantic_gradient)
+            elif (
+                semantic_router.semantic_router_mode
+                == "gradient_importance_critical"
+                and semantic_critical_score is not None
+            ):
+                semantic_router.update_semantic_router(
+                    t_env, semantic_critical_score
+                )
             elif (
                 semantic_router.semantic_router_needs_parameter_graph()
                 and parameter_sensitivity_score is not None
@@ -690,15 +733,20 @@ class CleanLearner:
                 semantic_router.semantic_route_probe.grad = None
             self._sync_semantic_router_to_target(semantic_router)
 
-        self._audit_semantic_counterfactual(
-            batch, actions, targets, td_mask, semantic_router, t_env
-        )
-        self._audit_semantic_gradient_importance(
-            batch, actions, targets, td_mask, semantic_router, t_env
-        )
-        self._audit_semantic_binary(
-            batch, actions, targets, td_mask, semantic_router, t_env
-        )
+        if (
+            semantic_router is None
+            or semantic_router.semantic_router_mode
+            != "gradient_importance_critical"
+        ):
+            self._audit_semantic_counterfactual(
+                batch, actions, targets, td_mask, semantic_router, t_env
+            )
+            self._audit_semantic_gradient_importance(
+                batch, actions, targets, td_mask, semantic_router, t_env
+            )
+            self._audit_semantic_binary(
+                batch, actions, targets, td_mask, semantic_router, t_env
+            )
         if binary_rehearsal_active:
             self._set_binary_rehearsal_route(False)
 

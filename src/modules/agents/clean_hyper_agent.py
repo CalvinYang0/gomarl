@@ -169,6 +169,9 @@ SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "rpg_simple_bias_observer_consistency_router_hypercond": "observer_consistency",
     "rpg_simple_bias_temporal_stability_router_hypercond": "temporal_stability",
     "rpg_simple_bias_gradient_importance_router_hypercond": "gradient_importance",
+    "rpg_simple_bias_gradient_importance_critical_router_hypercond": (
+        "gradient_importance_critical"
+    ),
     "rpg_simple_bias_gradient_importance_learnable_threshold_router_hypercond": "gradient_importance",
     "rpg_simple_bias_gradient_importance_inverse_router_hypercond": "gradient_importance",
     "rpg_simple_bias_gradient_importance_shared_field_router_hypercond": "gradient_importance",
@@ -186,6 +189,9 @@ SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "rpg_gimp_lthr_soft_mlp_relation_hypercond": "gradient_importance",
     "rpg_gimp_lowfreq_soft_mlp_relation_hypercond": "gradient_importance",
     "rpg_gimp_lowfreq_audit_mlp_relation_hypercond": "gradient_importance",
+    "rpg_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond": (
+        "gradient_importance"
+    ),
     "rpg_shared_binary_td_audit_mlp_relation_hypercond": "binary_td_audit",
     "rpg_shared_binary_parameter_audit_mlp_relation_hypercond": "binary_parameter_audit",
 }
@@ -195,6 +201,7 @@ MLP_RELATION_VARIANTS = {
     "rpg_gimp_lthr_soft_mlp_relation_hypercond",
     "rpg_gimp_lowfreq_soft_mlp_relation_hypercond",
     "rpg_gimp_lowfreq_audit_mlp_relation_hypercond",
+    "rpg_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond",
     "rpg_shared_binary_td_audit_mlp_relation_hypercond",
     "rpg_shared_binary_parameter_audit_mlp_relation_hypercond",
     "rpg_l0_drop_mlp_relation_hypercond",
@@ -208,6 +215,9 @@ MLP_GIMP_SOFT_VARIANTS = {
 }
 MLP_GIMP_AUDIT_VARIANTS = {
     "rpg_gimp_lowfreq_audit_mlp_relation_hypercond",
+}
+MLP_GIMP_STOCHASTIC_HARD_VARIANTS = {
+    "rpg_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond",
 }
 MLP_BINARY_AUDIT_MODE_BY_MODEL = {
     "rpg_shared_binary_td_audit_mlp_relation_hypercond": "td_loss",
@@ -344,6 +354,7 @@ GRF_MLP_RELATION_VARIANTS = {
     "grf_abs_gimp_lthr_soft_mlp_relation_hypercond",
     "grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond",
     "grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond",
+    "grf_abs_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond",
     "grf_abs_shared_binary_td_audit_mlp_relation_hypercond",
     "grf_abs_shared_binary_parameter_audit_mlp_relation_hypercond",
     "grf_abs_l0_drop_mlp_relation_hypercond",
@@ -357,6 +368,9 @@ GRF_MLP_GIMP_SOFT_VARIANTS = {
 }
 GRF_MLP_GIMP_AUDIT_VARIANTS = {
     "grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond",
+}
+GRF_MLP_GIMP_STOCHASTIC_HARD_VARIANTS = {
+    "grf_abs_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond",
 }
 GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL = {
     "grf_abs_shared_binary_td_audit_mlp_relation_hypercond": "td_loss",
@@ -388,6 +402,9 @@ GRF_SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "grf_abs_gimp_lthr_soft_mlp_relation_hypercond": "gradient_importance",
     "grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond": "gradient_importance",
     "grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond": "gradient_importance",
+    "grf_abs_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond": (
+        "gradient_importance"
+    ),
     "grf_abs_shared_binary_td_audit_mlp_relation_hypercond": "binary_td_audit",
     "grf_abs_shared_binary_parameter_audit_mlp_relation_hypercond": "binary_parameter_audit",
 }
@@ -1242,6 +1259,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         relation_encoder_style="transformer",
         l0_drop=False,
         mlp_soft_gate=False,
+        mlp_stochastic_hard_gate=False,
+        mlp_stochastic_exploration_floor=0.05,
         mlp_independent_audit=False,
         mlp_binary_audit_mode=None,
     ):
@@ -1269,6 +1288,14 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.private_owner_side = bool(private_owner_side)
         self.private_bias_style = private_bias_style
         self.mlp_soft_gate = bool(mlp_soft_gate)
+        self.mlp_stochastic_hard_gate = bool(mlp_stochastic_hard_gate)
+        self.mlp_stochastic_exploration_floor = float(
+            mlp_stochastic_exploration_floor
+        )
+        if not 0.0 <= self.mlp_stochastic_exploration_floor < 1.0:
+            raise ValueError(
+                "mlp_stochastic_exploration_floor must be in [0, 1)"
+            )
         self.latest_encoded_self_token = None
         self.latest_encoded_enemy_tokens = None
         self.semantic_router_mode = semantic_router_mode
@@ -1344,6 +1371,10 @@ class PublicTransformerRelationCapturer(nn.Module):
             )
         self._semantic_full_input_audit = False
         self._semantic_audit_dropped_group = None
+        self._semantic_test_mode = False
+        self._semantic_critical_capture_enabled = False
+        self._semantic_critical_probes = []
+        self._semantic_critical_stats = {}
         self.public_self_dim = 1 + unit_type_bits
         self.public_ally_dim = 1 + unit_type_bits
         self.public_enemy_dim = 1 + unit_type_bits
@@ -1633,6 +1664,45 @@ class PublicTransformerRelationCapturer(nn.Module):
                 }
             )
             return gate
+        if self.mlp_stochastic_hard_gate:
+            if (
+                self.semantic_router_active
+                and bool(self.semantic_route_deployed.item())
+            ):
+                probability = self.semantic_deployed_probability.to(
+                    device=reference.device, dtype=reference.dtype
+                )
+                if self._semantic_test_mode:
+                    threshold = self._current_semantic_route_threshold(
+                        probability
+                    ).detach()
+                    gate = (probability > threshold).to(reference.dtype)
+                else:
+                    gate = self.semantic_token_route.to(
+                        device=reference.device, dtype=reference.dtype
+                    )
+            else:
+                probability = reference.new_ones(len(self.semantic_names))
+                gate = probability
+            self.latest_aux_stats.update(
+                {
+                    "mlp_relation_keep_fraction": gate.mean().detach(),
+                    "mlp_relation_gate_mean": gate.mean().detach(),
+                    "mlp_relation_stochastic_probability_mean": (
+                        probability.mean().detach()
+                    ),
+                    "mlp_relation_stochastic_probability_min": (
+                        probability.min().detach()
+                    ),
+                    "mlp_relation_stochastic_probability_max": (
+                        probability.max().detach()
+                    ),
+                    "mlp_relation_stochastic_eval_mode": gate.new_tensor(
+                        float(self._semantic_test_mode)
+                    ),
+                }
+            )
+            return gate
         if self.mlp_soft_gate:
             if (
                 self.semantic_router_active
@@ -1688,9 +1758,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         )
         gate = self._mlp_relation_gate(flat_obs)
         probe_scale = self._semantic_scales(flat_obs)
-        relation_input = flat_obs * gate.view(1, 1, -1) * probe_scale.view(
-            1, 1, -1
-        )
+        if probe_scale.dim() == 1:
+            probe_scale = probe_scale.view(1, 1, -1)
+        relation_input = flat_obs * gate.view(1, 1, -1) * probe_scale
         relation_embed = self.mlp_relation_encoder(relation_input)
         if prev_relation_hidden is None:
             prev_relation_hidden = relation_embed.new_zeros(
@@ -1836,18 +1906,21 @@ class PublicTransformerRelationCapturer(nn.Module):
         )
 
     def _semantic_slot_views(self, values):
+        prefix = (1, 1) if values.dim() == 1 else values.shape[:-1]
         offset = 0
         self_count = self.move_dim + self.own_dim
-        self_values = values[offset : offset + self_count].view(1, 1, self_count)
+        self_values = values[..., offset : offset + self_count].reshape(
+            *prefix, self_count
+        )
         offset += self_count
         ally_count = self.n_allies * self.ally_feat_dim
-        ally_values = values[offset : offset + ally_count].view(
-            1, 1, self.n_allies, self.ally_feat_dim
+        ally_values = values[..., offset : offset + ally_count].reshape(
+            *prefix, self.n_allies, self.ally_feat_dim
         )
         offset += ally_count
         enemy_count = self.n_enemies * self.enemy_feat_dim
-        enemy_values = values[offset : offset + enemy_count].view(
-            1, 1, self.n_enemies, self.enemy_feat_dim
+        enemy_values = values[..., offset : offset + enemy_count].reshape(
+            *prefix, self.n_enemies, self.enemy_feat_dim
         )
         return self_values, ally_values, enemy_values
 
@@ -1860,6 +1933,11 @@ class PublicTransformerRelationCapturer(nn.Module):
         return self.semantic_router_mode is not None
 
     def semantic_router_uses_probe(self):
+        if self.semantic_router_mode == "gradient_importance_critical":
+            return (
+                self._semantic_critical_capture_enabled
+                and not bool(self.semantic_route_frozen.item())
+            )
         if self.semantic_probe_scale is None or bool(
             self.semantic_route_frozen.item()
         ):
@@ -1867,6 +1945,108 @@ class PublicTransformerRelationCapturer(nn.Module):
         if self.mlp_independent_audit:
             return self._semantic_full_input_audit
         return True
+
+    def semantic_router_needs_critical_importance(self):
+        return (
+            self.semantic_router_mode == "gradient_importance_critical"
+            and not bool(self.semantic_route_frozen.item())
+        )
+
+    def begin_semantic_critical_capture(self):
+        self._semantic_critical_probes = []
+        self._semantic_critical_capture_enabled = (
+            self.semantic_router_needs_critical_importance()
+        )
+
+    def cancel_semantic_critical_capture(self):
+        self._semantic_critical_capture_enabled = False
+        self._semantic_critical_probes = []
+
+    def consume_semantic_critical_importance(
+        self,
+        transition_mask,
+        tail_fraction,
+        tail_weight,
+        gradient_scale=1.0,
+    ):
+        probes = self._semantic_critical_probes
+        self._semantic_critical_capture_enabled = False
+        self._semantic_critical_probes = []
+        if not probes:
+            return None
+
+        transition_mask = transition_mask.detach().float()
+        if transition_mask.dim() == 2:
+            transition_mask = transition_mask.unsqueeze(-1)
+        time_count = min(len(probes), transition_mask.size(1))
+        probe_grads = []
+        for probe in probes[:time_count]:
+            if probe.grad is None:
+                probe_grads.append(th.zeros_like(probe))
+            else:
+                probe_grads.append(
+                    probe.grad.detach().float() / max(float(gradient_scale), 1.0)
+                )
+        if not probe_grads:
+            return None
+
+        # For x * scale, dL/d(scale) is the input-gradient attribution x*dL/dx.
+        attribution = th.stack(probe_grads, dim=1).abs()
+        valid = transition_mask[:, :time_count]
+        if valid.size(-1) == 1:
+            valid = valid.expand(-1, -1, attribution.size(2))
+        elif valid.size(-1) != attribution.size(2):
+            raise ValueError(
+                "Critical semantic mask has {} agents for {} attribution agents".format(
+                    valid.size(-1), attribution.size(2)
+                )
+            )
+        valid = valid.unsqueeze(-1)
+        mean_score = (attribution * valid).sum(dim=(0, 1, 2)) / valid.sum(
+            dim=(0, 1, 2)
+        ).clamp(min=1.0)
+
+        state_agent_count = valid.squeeze(-1).sum(dim=2)
+        state_score = (attribution * valid).sum(dim=2) / state_agent_count.unsqueeze(
+            -1
+        ).clamp(min=1.0)
+        episode_tail_scores = []
+        for episode_index in range(state_score.size(0)):
+            episode_valid = state_agent_count[episode_index] > 0
+            episode_scores = state_score[episode_index, episode_valid]
+            if episode_scores.numel() == 0:
+                continue
+            tail_count = max(
+                1,
+                int(math.ceil(episode_scores.size(0) * float(tail_fraction))),
+            )
+            episode_tail_scores.append(
+                episode_scores.topk(tail_count, dim=0, sorted=False).values.mean(dim=0)
+            )
+        tail_score = (
+            th.stack(episode_tail_scores).mean(dim=0)
+            if episode_tail_scores
+            else mean_score
+        )
+        combined_score = (
+            (1.0 - float(tail_weight)) * mean_score
+            + float(tail_weight) * tail_score
+        )
+        self._semantic_critical_stats = {
+            "semantic_critical_mean_score": mean_score.mean(),
+            "semantic_critical_tail_score": tail_score.mean(),
+            "semantic_critical_tail_to_mean": (
+                tail_score.mean() / mean_score.mean().clamp(min=1e-8)
+            ),
+            "semantic_critical_tail_fraction": mean_score.new_tensor(
+                float(tail_fraction)
+            ),
+            "semantic_critical_tail_weight": mean_score.new_tensor(
+                float(tail_weight)
+            ),
+            "semantic_critical_valid_states": (state_agent_count > 0).sum().float(),
+        }
+        return combined_score
 
     def semantic_router_needs_independent_audit(self):
         return (
@@ -1879,6 +2059,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         self._semantic_full_input_audit = bool(enabled)
         if not self._semantic_full_input_audit:
             self._semantic_audit_dropped_group = None
+
+    def set_semantic_test_mode(self, test_mode):
+        self._semantic_test_mode = bool(test_mode)
 
     def semantic_router_needs_binary_audit(self):
         return (
@@ -2059,6 +2242,11 @@ class PublicTransformerRelationCapturer(nn.Module):
     def _semantic_scales(self, reference):
         if not self.semantic_router_uses_probe():
             return reference.new_ones(len(self.semantic_names))
+        if self.semantic_router_mode == "gradient_importance_critical":
+            probe = th.ones_like(reference, requires_grad=True)
+            probe.retain_grad()
+            self._semantic_critical_probes.append(probe)
+            return probe
         return self.semantic_probe_scale.to(device=reference.device, dtype=reference.dtype)
 
     def _accumulate_semantic_online_score(self, score):
@@ -2089,6 +2277,7 @@ class PublicTransformerRelationCapturer(nn.Module):
             return scores.clamp(min=0.0, max=1.0)
         if self.semantic_router_mode in {
             "gradient_importance",
+            "gradient_importance_critical",
             "parameter_sensitivity",
             "binary_td_audit",
             "binary_parameter_audit",
@@ -2102,6 +2291,15 @@ class PublicTransformerRelationCapturer(nn.Module):
         # lower TD loss. Normalize magnitude but preserve the zero boundary.
         reference = scores.abs().mean().clamp(min=1e-8)
         return th.sigmoid(scores / (reference * temperature))
+
+    def _semantic_stochastic_hard_probabilities(self, scores):
+        """Map relative importance to one keep probability with exploration."""
+        temperature = max(self.semantic_router_temperature, 1e-6)
+        reference = scores.mean().clamp(min=1e-8)
+        relative_score = scores / reference
+        probability = th.sigmoid((relative_score - 1.0) / temperature)
+        floor = self.mlp_stochastic_exploration_floor
+        return floor + (1.0 - floor) * probability
 
     def _apply_semantic_route_scores(self, scores, t_env):
         scores = scores.detach().to(self.semantic_route_score)
@@ -2124,6 +2322,16 @@ class PublicTransformerRelationCapturer(nn.Module):
         previous_token_route = self.semantic_token_route.clone()
         previous_bias_route = self.semantic_bias_route.clone()
         previous_keep_route = self.semantic_keep_route.clone()
+        if (
+            self.mlp_stochastic_hard_gate
+            and bool(self.semantic_route_score_initialized.item())
+            and bool(self.semantic_route_deployed.item())
+        ):
+            # A dropped slot has zero input gradient by construction. Keep its
+            # previous estimate instead of treating that zero as evidence that
+            # the slot is unimportant; a later sample can re-evaluate it.
+            sampled_keep = self.semantic_token_route >= 0.5
+            scores = th.where(sampled_keep, scores, self.semantic_route_score)
         if not bool(self.semantic_route_score_initialized.item()):
             self.semantic_route_score.copy_(scores)
             self.semantic_route_score_initialized.fill_(True)
@@ -2149,6 +2357,9 @@ class PublicTransformerRelationCapturer(nn.Module):
             self.semantic_bias_route.copy_(1.0 - self.semantic_manual_token_route)
             self.semantic_keep_route.fill_(1.0)
             self.semantic_token_probability.copy_(self.semantic_manual_token_route)
+            self.semantic_deployed_probability.copy_(
+                self.semantic_manual_token_route
+            )
             self.semantic_route_last_switch_rate.copy_(
                 (self.semantic_token_route != previous_token_route).float().mean()
             )
@@ -2167,7 +2378,14 @@ class PublicTransformerRelationCapturer(nn.Module):
             self.semantic_router_learnable_threshold
         )
 
-        probability = self._semantic_route_probabilities(self.semantic_route_score)
+        if self.mlp_stochastic_hard_gate:
+            probability = self._semantic_stochastic_hard_probabilities(
+                self.semantic_route_score
+            )
+        else:
+            probability = self._semantic_route_probabilities(
+                self.semantic_route_score
+            )
         threshold = self._current_semantic_route_threshold(probability).detach()
         normal_route = (probability > threshold).to(
             dtype=self.semantic_token_route.dtype
@@ -2179,7 +2397,26 @@ class PublicTransformerRelationCapturer(nn.Module):
         else:
             route = normal_route
 
-        if self.semantic_router_drop_mode == "threshold":
+        if self.mlp_stochastic_hard_gate:
+            sampled_route = th.bernoulli(probability).to(
+                dtype=self.semantic_token_route.dtype
+            )
+            if not bool(sampled_route.any().item()):
+                sampled_route[probability.argmax()] = 1.0
+            token_route = sampled_route
+            bias_route = th.zeros_like(sampled_route)
+            keep_route = sampled_route
+        elif (
+            self.semantic_router_mode == "gradient_importance_critical"
+            and self.semantic_router_drop_mode == "none"
+        ):
+            # Critical-state attribution uses a genuinely soft TOKEN/BIAS
+            # assignment. No field is dropped and no threshold is applied in
+            # the forward pass.
+            token_route = 1.0 - probability if self.semantic_router_inverse else probability
+            bias_route = 1.0 - token_route
+            keep_route = th.ones_like(token_route)
+        elif self.semantic_router_drop_mode == "threshold":
             keep_route = (
                 probability > self.semantic_router_keep_threshold
             ).to(dtype=self.semantic_token_route.dtype)
@@ -2244,17 +2481,27 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.semantic_keep_route.copy_(keep_route)
         self.semantic_token_route.copy_(token_route)
         self.semantic_bias_route.copy_(bias_route)
-        route_change = (
-            (token_route != previous_token_route)
-            | (bias_route != previous_bias_route)
-            | (keep_route != previous_keep_route)
-        )
-        switch_rate = route_change.float().mean()
+        if self.semantic_router_mode == "gradient_importance_critical":
+            # For continuous gates, report the mean deployed-weight movement
+            # instead of marking every nonzero floating-point change as a
+            # complete route switch.
+            switch_rate = (token_route - previous_token_route).abs().mean()
+        else:
+            route_change = (
+                (token_route != previous_token_route)
+                | (bias_route != previous_bias_route)
+                | (keep_route != previous_keep_route)
+            )
+            switch_rate = route_change.float().mean()
         self.semantic_route_last_switch_rate.copy_(switch_rate)
-        if bool(switch_rate.item() > 0):
+        if bool(switch_rate.item() > 1e-6):
             self.semantic_route_version.add_(1)
-        self.semantic_token_probability.copy_(probability)
-        self.semantic_deployed_probability.copy_(probability)
+        if self.semantic_router_mode == "gradient_importance_critical":
+            self.semantic_token_probability.copy_(token_route)
+            self.semantic_deployed_probability.copy_(token_route)
+        else:
+            self.semantic_token_probability.copy_(probability)
+            self.semantic_deployed_probability.copy_(probability)
         self.semantic_route_last_update_t.fill_(int(t_env))
         self.semantic_route_deployed.fill_(True)
         if t_env >= self.semantic_router_freeze_steps:
@@ -2275,7 +2522,10 @@ class PublicTransformerRelationCapturer(nn.Module):
             return
         else:
             raw_score = external_score.detach().to(self.semantic_route_score)
-            if self.semantic_router_mode == "gradient_importance":
+            if self.semantic_router_mode in {
+                "gradient_importance",
+                "gradient_importance_critical",
+            }:
                 score = raw_score.abs()
             elif self.semantic_router_mode == "gradient_consistency":
                 self.semantic_gradient_mean.mul_(self.semantic_router_ema).add_(
@@ -2368,7 +2618,8 @@ class PublicTransformerRelationCapturer(nn.Module):
             "semantic_route_threshold_margin": threshold_margin.detach(),
             "semantic_route_probability_entropy": entropy.detach(),
             "semantic_route_manual_agreement": (
-                self.semantic_token_route == self.semantic_manual_token_route
+                (self.semantic_token_route >= 0.5)
+                == (self.semantic_manual_token_route >= 0.5)
             ).float().mean().detach(),
             "semantic_route_version": self.semantic_route_version.float().detach(),
             "semantic_route_last_update_t": self.semantic_route_last_update_t.float().detach(),
@@ -2385,7 +2636,28 @@ class PublicTransformerRelationCapturer(nn.Module):
             "semantic_route_independent_audit": probability.new_tensor(
                 float(self.mlp_independent_audit)
             ),
+            "semantic_route_stochastic_hard": probability.new_tensor(
+                float(self.mlp_stochastic_hard_gate)
+            ),
+            "semantic_route_stochastic_exploration_floor": probability.new_tensor(
+                self.mlp_stochastic_exploration_floor
+            ),
+            "semantic_route_expected_keep_fraction": (
+                self.semantic_deployed_probability.mean().detach()
+            ),
+            "semantic_route_soft_assignment": probability.new_tensor(
+                float(
+                    self.semantic_router_mode == "gradient_importance_critical"
+                    and self.semantic_router_drop_mode == "none"
+                )
+            ),
         }
+        stats.update(
+            {
+                name: value.detach().to(probability)
+                for name, value in self._semantic_critical_stats.items()
+            }
+        )
         if self.semantic_router_drop_mode == "learnable_hierarchical":
             drop_threshold, token_threshold = (
                 self._current_semantic_hierarchical_thresholds(probability)
@@ -2795,7 +3067,10 @@ class PublicTransformerRelationCapturer(nn.Module):
                 self_feat, ally_feat, enemy_feat, ally_mask, enemy_mask
             )
         token_route, bias_route = self._current_semantic_routes(self_feat)
-        scales = self._semantic_scales(self_feat)
+        flat_obs = self._flatten_semantic_slots(
+            self_feat, ally_feat, enemy_feat
+        )
+        scales = self._semantic_scales(flat_obs)
         apply_probe_scales = self.semantic_router_uses_probe() and th.is_grad_enabled()
         self_route, ally_route, enemy_route = self._semantic_slot_views(token_route)
         self_bias_route, ally_bias_route, enemy_bias_route = self._semantic_slot_views(
@@ -3446,6 +3721,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         relation_encoder_style="transformer",
         l0_drop=False,
         mlp_soft_gate=False,
+        mlp_stochastic_hard_gate=False,
+        mlp_stochastic_exploration_floor=0.05,
         mlp_independent_audit=False,
         mlp_binary_audit_mode=None,
     ):
@@ -3521,6 +3798,14 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             raise ValueError("relation_encoder_style must be transformer or mlp")
         self.l0_drop = bool(l0_drop)
         self.mlp_soft_gate = bool(mlp_soft_gate)
+        self.mlp_stochastic_hard_gate = bool(mlp_stochastic_hard_gate)
+        self.mlp_stochastic_exploration_floor = float(
+            mlp_stochastic_exploration_floor
+        )
+        if not 0.0 <= self.mlp_stochastic_exploration_floor < 1.0:
+            raise ValueError(
+                "mlp_stochastic_exploration_floor must be in [0, 1)"
+            )
         self.mlp_independent_audit = bool(mlp_independent_audit)
         self.mlp_binary_audit_mode = mlp_binary_audit_mode
         if self.mlp_binary_audit_mode not in {
@@ -3533,6 +3818,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             )
         self._semantic_full_input_audit = False
         self._semantic_audit_dropped_group = None
+        self._semantic_test_mode = False
 
         (
             self.semantic_names,
@@ -6166,12 +6452,36 @@ class CleanHyperAgent(nn.Module):
         self.semantic_router_update_interval = int(
             getattr(args, "clean_semantic_router_update_interval", 0)
         )
+        if (
+            SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
+            == "gradient_importance_critical"
+        ):
+            # Critical-state attribution needs responsive score recovery but a
+            # slower route deployment cadence than the legacy per-update router.
+            self.semantic_router_ema_up = float(
+                getattr(args, "clean_semantic_critical_ema_up", 0.5)
+            )
+            self.semantic_router_ema_down = float(
+                getattr(args, "clean_semantic_critical_ema_down", 0.99)
+            )
+            self.semantic_router_update_interval = int(
+                getattr(args, "clean_semantic_critical_update_interval", 8000)
+            )
         self.semantic_router_threshold = float(
             getattr(args, "clean_semantic_router_threshold", 0.5)
         )
         self.semantic_router_temperature = float(
             getattr(args, "clean_semantic_router_temperature", 0.1)
         )
+        if (
+            SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
+            == "gradient_importance_critical"
+        ):
+            # A separate, smoother mapping prevents the critical-state score
+            # ratio from degenerating into an almost binary gate.
+            self.semantic_router_temperature = float(
+                getattr(args, "clean_semantic_critical_temperature", 0.5)
+            )
         self.semantic_router_warmup_steps = int(
             getattr(args, "clean_semantic_router_warmup_steps", 250000)
         )
@@ -6186,6 +6496,13 @@ class CleanHyperAgent(nn.Module):
         )
         self.semantic_router_sparse_coef = float(
             getattr(args, "clean_semantic_router_sparse_coef", 0.001)
+        )
+        self.semantic_stochastic_exploration_floor = float(
+            getattr(
+                args,
+                "clean_semantic_stochastic_exploration_floor",
+                0.05,
+            )
         )
         self.semantic_router_fixed_mask = getattr(
             args, "clean_semantic_router_fixed_mask", ""
@@ -7472,6 +7789,11 @@ class CleanHyperAgent(nn.Module):
             ),
             l0_drop=self.model_type in GRF_MLP_L0_DROP_VARIANTS,
             mlp_soft_gate=self.model_type in GRF_MLP_GIMP_SOFT_VARIANTS,
+            mlp_stochastic_hard_gate=self.model_type
+            in GRF_MLP_GIMP_STOCHASTIC_HARD_VARIANTS,
+            mlp_stochastic_exploration_floor=(
+                self.semantic_stochastic_exploration_floor
+            ),
             mlp_independent_audit=self.model_type
             in GRF_MLP_GIMP_AUDIT_VARIANTS,
             mlp_binary_audit_mode=GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL.get(
@@ -7671,6 +7993,11 @@ class CleanHyperAgent(nn.Module):
                 ),
                 l0_drop=self.model_type in MLP_L0_DROP_VARIANTS,
                 mlp_soft_gate=self.model_type in MLP_GIMP_SOFT_VARIANTS,
+                mlp_stochastic_hard_gate=self.model_type
+                in MLP_GIMP_STOCHASTIC_HARD_VARIANTS,
+                mlp_stochastic_exploration_floor=(
+                    self.semantic_stochastic_exploration_floor
+                ),
                 mlp_independent_audit=self.model_type
                 in MLP_GIMP_AUDIT_VARIANTS,
                 mlp_binary_audit_mode=MLP_BINARY_AUDIT_MODE_BY_MODEL.get(
@@ -9338,6 +9665,12 @@ class CleanHyperAgent(nn.Module):
         self.latest_teacher_q = None
         self.latest_generated_interaction_head = None
         self.latest_generated_interaction_head_graph = None
+
+        relation_capturer = getattr(self, "rpg_relation_capturer", None)
+        if relation_capturer is not None and hasattr(
+            relation_capturer, "set_semantic_test_mode"
+        ):
+            relation_capturer.set_semantic_test_mode(test_mode)
 
         if hidden_state is None:
             hidden_state = self.init_hidden().unsqueeze(0).expand(batch_size, n_agents, -1)

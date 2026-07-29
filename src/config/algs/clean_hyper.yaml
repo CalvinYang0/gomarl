@@ -233,6 +233,12 @@ hypernet_layers: 2
 #                                                  scored by temporal stability.
 # - rpg_simple_bias_gradient_importance_router_hypercond: same controlled split,
 #                                                  scored by absolute TD gradient.
+# - rpg_simple_bias_gradient_importance_critical_router_hypercond: preserves the
+#                                                  same architecture, scores
+#                                                  each raw slot with mean plus
+#                                                  episode top-tail attribution,
+#                                                  and softly mixes TOKEN/BIAS
+#                                                  without an audit rollout.
 # - rpg_simple_bias_gradient_importance_learnable_threshold_router_hypercond:
 #                                                  same score and architecture,
 #                                                  but TD loss learns the scalar
@@ -743,10 +749,24 @@ clean_semantic_router_ema_down: 0.99
 # Accumulate importance continuously but deploy a new route at most once per
 # this many environment timesteps. Zero preserves the legacy per-update route.
 clean_semantic_router_update_interval: 0
+# Critical-state GIMP uses per-state input-gradient attribution. These settings
+# combine the regular-state mean with the most influential 10% of states, allow
+# important fields to recover quickly, and deploy routes at a lower frequency.
+clean_semantic_critical_tail_fraction: 0.1
+clean_semantic_critical_tail_weight: 0.5
+clean_semantic_critical_ema_up: 0.5
+clean_semantic_critical_ema_down: 0.99
+clean_semantic_critical_update_interval: 8000
+# Critical-state routing is soft: p enters TOKEN and 1-p enters BIAS. This
+# temperature controls the continuous importance-to-weight mapping.
+clean_semantic_critical_temperature: 0.5
 # Every raw observation slot is routed independently. TOKEN/BIAS branch counts
 # are learned rather than fixed; higher values make TOKEN admission stricter.
 clean_semantic_router_threshold: 0.5
 clean_semantic_router_temperature: 0.1
+# Stochastic hard MLP routing keeps a nonzero chance of restoring low-score
+# slots during training; evaluation uses a deterministic probability threshold.
+clean_semantic_stochastic_exploration_floor: 0.05
 # Discovery begins with every raw observation slot on the TOKEN branch. After
 # warmup, the selected criterion updates the route as before.
 clean_semantic_router_warmup_steps: 250000
