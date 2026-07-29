@@ -186,6 +186,8 @@ SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "rpg_gimp_lthr_soft_mlp_relation_hypercond": "gradient_importance",
     "rpg_gimp_lowfreq_soft_mlp_relation_hypercond": "gradient_importance",
     "rpg_gimp_lowfreq_audit_mlp_relation_hypercond": "gradient_importance",
+    "rpg_shared_binary_td_audit_mlp_relation_hypercond": "binary_td_audit",
+    "rpg_shared_binary_parameter_audit_mlp_relation_hypercond": "binary_parameter_audit",
 }
 MLP_RELATION_VARIANTS = {
     "rpg_mlp_relation_hypercond",
@@ -193,6 +195,8 @@ MLP_RELATION_VARIANTS = {
     "rpg_gimp_lthr_soft_mlp_relation_hypercond",
     "rpg_gimp_lowfreq_soft_mlp_relation_hypercond",
     "rpg_gimp_lowfreq_audit_mlp_relation_hypercond",
+    "rpg_shared_binary_td_audit_mlp_relation_hypercond",
+    "rpg_shared_binary_parameter_audit_mlp_relation_hypercond",
     "rpg_l0_drop_mlp_relation_hypercond",
 }
 MLP_GIMP_DROP_VARIANTS = {
@@ -204,6 +208,10 @@ MLP_GIMP_SOFT_VARIANTS = {
 }
 MLP_GIMP_AUDIT_VARIANTS = {
     "rpg_gimp_lowfreq_audit_mlp_relation_hypercond",
+}
+MLP_BINARY_AUDIT_MODE_BY_MODEL = {
+    "rpg_shared_binary_td_audit_mlp_relation_hypercond": "td_loss",
+    "rpg_shared_binary_parameter_audit_mlp_relation_hypercond": "generated_parameters",
 }
 MLP_L0_DROP_VARIANTS = {
     "rpg_l0_drop_mlp_relation_hypercond",
@@ -336,6 +344,8 @@ GRF_MLP_RELATION_VARIANTS = {
     "grf_abs_gimp_lthr_soft_mlp_relation_hypercond",
     "grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond",
     "grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond",
+    "grf_abs_shared_binary_td_audit_mlp_relation_hypercond",
+    "grf_abs_shared_binary_parameter_audit_mlp_relation_hypercond",
     "grf_abs_l0_drop_mlp_relation_hypercond",
 }
 GRF_MLP_GIMP_DROP_VARIANTS = {
@@ -347,6 +357,10 @@ GRF_MLP_GIMP_SOFT_VARIANTS = {
 }
 GRF_MLP_GIMP_AUDIT_VARIANTS = {
     "grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond",
+}
+GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL = {
+    "grf_abs_shared_binary_td_audit_mlp_relation_hypercond": "td_loss",
+    "grf_abs_shared_binary_parameter_audit_mlp_relation_hypercond": "generated_parameters",
 }
 GRF_MLP_L0_DROP_VARIANTS = {
     "grf_abs_l0_drop_mlp_relation_hypercond",
@@ -374,6 +388,8 @@ GRF_SEMANTIC_ROUTER_MODE_BY_MODEL = {
     "grf_abs_gimp_lthr_soft_mlp_relation_hypercond": "gradient_importance",
     "grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond": "gradient_importance",
     "grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond": "gradient_importance",
+    "grf_abs_shared_binary_td_audit_mlp_relation_hypercond": "binary_td_audit",
+    "grf_abs_shared_binary_parameter_audit_mlp_relation_hypercond": "binary_parameter_audit",
 }
 
 GRF_SEMANTIC_ROUTER_USE_MODE_BY_MODEL = {
@@ -461,6 +477,33 @@ def _semantic_field_ids(fields):
             field_to_id[field] = len(field_to_id)
         ids.append(field_to_id[field])
     return th.tensor(ids, dtype=th.long), len(field_to_id)
+
+
+def _semantic_side_attribute_ids(names):
+    """Share one route for the same raw attribute within one entity side."""
+
+    def split_name(name):
+        for side in ("ally", "enemy", "opponent"):
+            prefix = f"{side}_"
+            if name.startswith(prefix):
+                remainder = name[len(prefix) :]
+                _, separator, attribute = remainder.partition("_")
+                if separator and attribute:
+                    return side, attribute
+        if name.startswith("ball_"):
+            return "ball", name[len("ball_") :]
+        if name.startswith("self_"):
+            return "self", name[len("self_") :]
+        return "self", name
+
+    key_to_id = {}
+    ids = []
+    for name in names:
+        key = split_name(name)
+        if key not in key_to_id:
+            key_to_id[key] = len(key_to_id)
+        ids.append(key_to_id[key])
+    return th.tensor(ids, dtype=th.long), len(key_to_id)
 
 
 def _semantic_entity_routes_match(routes):
@@ -1190,6 +1233,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         semantic_router_warmup_steps=250000,
         semantic_router_freeze_steps=5000000,
         semantic_router_share_fields=False,
+        semantic_router_share_by_side=False,
         semantic_router_fixed_mask="",
         semantic_router_drop_mode="none",
         semantic_router_keep_threshold=0.35,
@@ -1199,6 +1243,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         l0_drop=False,
         mlp_soft_gate=False,
         mlp_independent_audit=False,
+        mlp_binary_audit_mode=None,
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -1256,6 +1301,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.semantic_router_warmup_steps = int(semantic_router_warmup_steps)
         self.semantic_router_freeze_steps = int(semantic_router_freeze_steps)
         self.semantic_router_share_fields = bool(semantic_router_share_fields)
+        self.semantic_router_share_by_side = bool(semantic_router_share_by_side)
         self.semantic_router_drop_mode = str(semantic_router_drop_mode)
         if self.semantic_router_drop_mode not in {
             "none",
@@ -1287,7 +1333,17 @@ class PublicTransformerRelationCapturer(nn.Module):
             raise ValueError("relation_encoder_style must be transformer or mlp")
         self.l0_drop = bool(l0_drop)
         self.mlp_independent_audit = bool(mlp_independent_audit)
+        self.mlp_binary_audit_mode = mlp_binary_audit_mode
+        if self.mlp_binary_audit_mode not in {
+            None,
+            "td_loss",
+            "generated_parameters",
+        }:
+            raise ValueError(
+                "mlp_binary_audit_mode must be td_loss, generated_parameters, or None"
+            )
         self._semantic_full_input_audit = False
+        self._semantic_audit_dropped_group = None
         self.public_self_dim = 1 + unit_type_bits
         self.public_ally_dim = 1 + unit_type_bits
         self.public_enemy_dim = 1 + unit_type_bits
@@ -1340,7 +1396,12 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.semantic_router_external_fixed_mask = fixed_route is not None
         if fixed_route is not None:
             manual_route = fixed_route
-        field_ids, field_count = _semantic_field_ids(self.semantic_fields)
+        if self.semantic_router_share_by_side:
+            field_ids, field_count = _semantic_side_attribute_ids(
+                self.semantic_names
+            )
+        else:
+            field_ids, field_count = _semantic_field_ids(self.semantic_fields)
         self.register_buffer("semantic_field_ids", field_ids)
         self.semantic_field_count = field_count
         self.register_buffer("semantic_manual_token_route", manual_route)
@@ -1546,7 +1607,13 @@ class PublicTransformerRelationCapturer(nn.Module):
 
     def _mlp_relation_gate(self, reference):
         if self._semantic_full_input_audit:
-            return reference.new_ones(len(self.semantic_names))
+            gate = reference.new_ones(len(self.semantic_names))
+            if self._semantic_audit_dropped_group is not None:
+                field_ids = self.semantic_field_ids.to(reference.device)
+                gate = gate.masked_fill(
+                    field_ids == self._semantic_audit_dropped_group, 0.0
+                )
+            return gate
         if self.l0_drop:
             gate = self._l0_gate(reference)
             expected_keep = th.sigmoid(
@@ -1810,10 +1877,32 @@ class PublicTransformerRelationCapturer(nn.Module):
 
     def set_semantic_full_input_audit(self, enabled):
         self._semantic_full_input_audit = bool(enabled)
+        if not self._semantic_full_input_audit:
+            self._semantic_audit_dropped_group = None
+
+    def semantic_router_needs_binary_audit(self):
+        return (
+            self.mlp_binary_audit_mode is not None
+            and not bool(self.semantic_route_frozen.item())
+        )
+
+    def set_semantic_binary_audit_group(self, group_index):
+        if group_index is None:
+            self._semantic_audit_dropped_group = None
+            return
+        group_index = int(group_index)
+        if not 0 <= group_index < self.semantic_field_count:
+            raise ValueError(
+                "Semantic audit group {} is outside [0, {})".format(
+                    group_index, self.semantic_field_count
+                )
+            )
+        self._semantic_audit_dropped_group = group_index
 
     def semantic_router_needs_parameter_graph(self):
-        return self.semantic_router_mode == "parameter_sensitivity" and not bool(
-            self.semantic_route_frozen.item()
+        return (
+            self.semantic_router_mode == "parameter_sensitivity"
+            and not bool(self.semantic_route_frozen.item())
         )
 
     def semantic_router_needs_observation_score(self):
@@ -2001,6 +2090,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         if self.semantic_router_mode in {
             "gradient_importance",
             "parameter_sensitivity",
+            "binary_td_audit",
+            "binary_parameter_audit",
         }:
             # Their absolute scales drift during learning. Compare every slot
             # with the current mean sensitivity without fixing how many pass.
@@ -2139,6 +2230,12 @@ class PublicTransformerRelationCapturer(nn.Module):
             )
             token_route = keep_route
             bias_route = th.zeros_like(keep_route)
+        elif self.mlp_binary_audit_mode is not None:
+            # MLP binary audits use one branch only: TOKEN means KEEP and the
+            # complementary coordinates are removed from the relation input.
+            keep_route = route
+            token_route = route
+            bias_route = th.zeros_like(route)
         else:
             keep_route = th.ones_like(route)
             token_route = route
@@ -2192,6 +2289,12 @@ class PublicTransformerRelationCapturer(nn.Module):
                 # Groups that most affect generated decision parameters receive
                 # the richer token path; the remaining groups use simple bias.
                 score = raw_score.abs()
+            elif self.semantic_router_mode == "binary_parameter_audit":
+                score = raw_score.abs()
+            elif self.semantic_router_mode == "binary_td_audit":
+                # A positive finite difference means dropping this group
+                # increases TD loss and therefore the group should be kept.
+                score = raw_score.clamp(min=0.0)
             else:
                 # Counterfactual score is L_bias - L_token, so positive values
                 # directly favor the token branch.
@@ -2238,6 +2341,16 @@ class PublicTransformerRelationCapturer(nn.Module):
             ),
             "semantic_route_shared_fields": probability.new_tensor(
                 float(self.semantic_router_share_fields)
+            ),
+            "semantic_route_shared_by_side": probability.new_tensor(
+                float(self.semantic_router_share_by_side)
+            ),
+            "semantic_route_binary_audit": probability.new_tensor(
+                {
+                    None: 0.0,
+                    "td_loss": 1.0,
+                    "generated_parameters": 2.0,
+                }[self.mlp_binary_audit_mode]
             ),
             "semantic_route_loaded_fixed_mask": probability.new_tensor(
                 float(self.semantic_router_external_fixed_mask)
@@ -3324,6 +3437,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         semantic_router_warmup_steps=250000,
         semantic_router_freeze_steps=5000000,
         semantic_router_share_fields=False,
+        semantic_router_share_by_side=False,
         semantic_router_fixed_mask="",
         semantic_router_use_mode="simple_bias",
         semantic_router_drop_mode="none",
@@ -3333,6 +3447,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         l0_drop=False,
         mlp_soft_gate=False,
         mlp_independent_audit=False,
+        mlp_binary_audit_mode=None,
     ):
         nn.Module.__init__(self)
         self.n_agents = n_agents
@@ -3372,6 +3487,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.semantic_router_warmup_steps = int(semantic_router_warmup_steps)
         self.semantic_router_freeze_steps = int(semantic_router_freeze_steps)
         self.semantic_router_share_fields = bool(semantic_router_share_fields)
+        self.semantic_router_share_by_side = bool(semantic_router_share_by_side)
         self.semantic_router_use_mode = str(semantic_router_use_mode)
         if self.semantic_router_use_mode not in {
             "simple_bias",
@@ -3406,7 +3522,17 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.l0_drop = bool(l0_drop)
         self.mlp_soft_gate = bool(mlp_soft_gate)
         self.mlp_independent_audit = bool(mlp_independent_audit)
+        self.mlp_binary_audit_mode = mlp_binary_audit_mode
+        if self.mlp_binary_audit_mode not in {
+            None,
+            "td_loss",
+            "generated_parameters",
+        }:
+            raise ValueError(
+                "mlp_binary_audit_mode must be td_loss, generated_parameters, or None"
+            )
         self._semantic_full_input_audit = False
+        self._semantic_audit_dropped_group = None
 
         (
             self.semantic_names,
@@ -3421,7 +3547,12 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.semantic_router_external_fixed_mask = fixed_route is not None
         if fixed_route is not None:
             manual_route = fixed_route
-        field_ids, field_count = _semantic_field_ids(self.semantic_fields)
+        if self.semantic_router_share_by_side:
+            field_ids, field_count = _semantic_side_attribute_ids(
+                self.semantic_names
+            )
+        else:
+            field_ids, field_count = _semantic_field_ids(self.semantic_fields)
         self.register_buffer("semantic_field_ids", field_ids)
         self.semantic_field_count = field_count
         self.register_buffer("semantic_manual_token_route", manual_route)
@@ -7317,7 +7448,10 @@ class CleanHyperAgent(nn.Module):
             semantic_router_warmup_steps=self.semantic_router_warmup_steps,
             semantic_router_freeze_steps=self.semantic_router_freeze_steps,
             semantic_router_share_fields=self.model_type
-            in GRF_SEMANTIC_ROUTER_SHARED_FIELD_VARIANTS,
+            in GRF_SEMANTIC_ROUTER_SHARED_FIELD_VARIANTS
+            or self.model_type in GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL,
+            semantic_router_share_by_side=self.model_type
+            in GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL,
             semantic_router_fixed_mask=(
                 self.semantic_router_fixed_mask
                 if self.model_type in GRF_SEMANTIC_ROUTER_FIXED_MASK_VARIANTS
@@ -7340,6 +7474,9 @@ class CleanHyperAgent(nn.Module):
             mlp_soft_gate=self.model_type in GRF_MLP_GIMP_SOFT_VARIANTS,
             mlp_independent_audit=self.model_type
             in GRF_MLP_GIMP_AUDIT_VARIANTS,
+            mlp_binary_audit_mode=GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL.get(
+                self.model_type
+            ),
         )
 
     def _init_grf_decision_maker_head(self):
@@ -7512,7 +7649,10 @@ class CleanHyperAgent(nn.Module):
                 semantic_router_warmup_steps=self.semantic_router_warmup_steps,
                 semantic_router_freeze_steps=self.semantic_router_freeze_steps,
                 semantic_router_share_fields=self.model_type
-                in SEMANTIC_ROUTER_SHARED_FIELD_VARIANTS,
+                in SEMANTIC_ROUTER_SHARED_FIELD_VARIANTS
+                or self.model_type in MLP_BINARY_AUDIT_MODE_BY_MODEL,
+                semantic_router_share_by_side=self.model_type
+                in MLP_BINARY_AUDIT_MODE_BY_MODEL,
                 semantic_router_drop_mode=SEMANTIC_ROUTER_DROP_MODE_BY_MODEL.get(
                     self.model_type, "none"
                 ),
@@ -7533,6 +7673,9 @@ class CleanHyperAgent(nn.Module):
                 mlp_soft_gate=self.model_type in MLP_GIMP_SOFT_VARIANTS,
                 mlp_independent_audit=self.model_type
                 in MLP_GIMP_AUDIT_VARIANTS,
+                mlp_binary_audit_mode=MLP_BINARY_AUDIT_MODE_BY_MODEL.get(
+                    self.model_type
+                ),
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(
@@ -8177,7 +8320,7 @@ class CleanHyperAgent(nn.Module):
         if (
             self.capture_semantic_parameter_graph
             and getattr(semantic_router, "semantic_router_mode", None)
-            == "parameter_sensitivity"
+            in {"parameter_sensitivity", "binary_parameter_audit"}
         ):
             generated_head = th.cat(
                 [
@@ -8224,6 +8367,31 @@ class CleanHyperAgent(nn.Module):
         b2 = self.grf_decision_hyper[f"{branch}_b2"](flat_condition).view(
             batch_size * n_agents, 1, output_dim
         )
+        semantic_router = getattr(self, "rpg_relation_capturer", None)
+        if (
+            self.capture_semantic_parameter_graph
+            and getattr(semantic_router, "semantic_router_mode", None)
+            in {"parameter_sensitivity", "binary_parameter_audit"}
+        ):
+            generated_branch = th.cat(
+                [
+                    w1.reshape(batch_size * n_agents, -1),
+                    b1.reshape(batch_size * n_agents, -1),
+                    w2.reshape(batch_size * n_agents, -1),
+                    b2.reshape(batch_size * n_agents, -1),
+                ],
+                dim=-1,
+            ).view(batch_size, n_agents, -1)
+            if self.latest_generated_interaction_head_graph is None:
+                self.latest_generated_interaction_head_graph = generated_branch
+            else:
+                self.latest_generated_interaction_head_graph = th.cat(
+                    [
+                        self.latest_generated_interaction_head_graph,
+                        generated_branch,
+                    ],
+                    dim=-1,
+                )
 
         mid = F.elu(th.bmm(flat_input, w1) + b1)
         q = th.bmm(mid, w2) + b2
@@ -8541,7 +8709,7 @@ class CleanHyperAgent(nn.Module):
         interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(batch_size * n_agents, 1, 1)
         capture_parameter_graph = (
             SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
-            == "parameter_sensitivity"
+            in {"parameter_sensitivity", "binary_parameter_audit"}
             and self.capture_semantic_parameter_graph
         )
         generated_head = None
@@ -8907,7 +9075,7 @@ class CleanHyperAgent(nn.Module):
             )
             if (
                 SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
-                == "parameter_sensitivity"
+                in {"parameter_sensitivity", "binary_parameter_audit"}
                 and self.capture_semantic_parameter_graph
             ):
                 generated_ego_head = th.cat(
@@ -9140,7 +9308,7 @@ class CleanHyperAgent(nn.Module):
         q_attack = q_attack.masked_fill(~enemy_mask.bool(), 0.0)
         if (
             SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
-            == "parameter_sensitivity"
+            in {"parameter_sensitivity", "binary_parameter_audit"}
             and self.capture_semantic_parameter_graph
             and generated_ego_head is not None
             and self.latest_generated_interaction_head_graph is not None

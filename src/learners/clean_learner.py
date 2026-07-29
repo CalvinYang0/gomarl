@@ -74,6 +74,14 @@ class CleanLearner:
         self.semantic_observation_probe_timesteps = max(
             1, int(getattr(args, "clean_semantic_observation_probe_timesteps", 8))
         )
+        self.semantic_binary_audit_batch_size = max(
+            1, int(getattr(args, "clean_semantic_binary_audit_batch_size", 8))
+        )
+        self.semantic_binary_rehearsal_updates = max(
+            1, int(getattr(args, "clean_semantic_binary_rehearsal_updates", 4))
+        )
+        self.semantic_binary_rehearsal_remaining = 0
+        self.semantic_binary_audit_pending = False
         self.last_semantic_router_audit_t = -self.semantic_router_audit_interval
         self.latest_semantic_counterfactual_stats = {}
         self.last_semantic_route_version_logged = -1
@@ -207,6 +215,206 @@ class CleanLearner:
         self.last_semantic_router_audit_t = t_env
         return True
 
+    def _binary_audit_due(self, router, t_env):
+        return (
+            router is not None
+            and router.semantic_router_needs_binary_audit()
+            and t_env - self.last_semantic_router_audit_t
+            >= self.semantic_router_audit_interval
+        )
+
+    def _start_semantic_binary_rehearsal(self, router, t_env):
+        if not self.semantic_binary_audit_pending and self._binary_audit_due(
+            router, t_env
+        ):
+            self.semantic_binary_audit_pending = True
+            self.semantic_binary_rehearsal_remaining = (
+                self.semantic_binary_rehearsal_updates
+            )
+        return self.semantic_binary_audit_pending
+
+    def _set_binary_rehearsal_route(self, enabled):
+        for mac in (self.mac, self.target_mac):
+            router = self._semantic_router(mac)
+            if router is not None and router.semantic_router_needs_binary_audit():
+                router.set_semantic_full_input_audit(enabled)
+
+    def _binary_audit_batch(self, batch):
+        audit_batch_size = min(
+            batch.batch_size, self.semantic_binary_audit_batch_size
+        )
+        return batch[:audit_batch_size]
+
+    def _generated_parameter_snapshots(self, batch):
+        probe_times = self._uniform_probe_times(
+            batch.max_seq_length, self.semantic_parameter_probe_timesteps
+        )
+        snapshots = []
+        self.mac.init_hidden(batch.batch_size)
+        try:
+            with th.no_grad():
+                for timestep in range(batch.max_seq_length):
+                    self.mac.agent.capture_semantic_parameter_graph = (
+                        timestep in probe_times
+                    )
+                    self.mac.forward(batch, t=timestep)
+                    if timestep not in probe_times:
+                        continue
+                    generated = getattr(
+                        self.mac,
+                        "latest_generated_interaction_head_graph",
+                        None,
+                    )
+                    if generated is not None:
+                        snapshots.append(generated.detach().float().reshape(-1))
+        finally:
+            self.mac.agent.capture_semantic_parameter_graph = False
+        return snapshots
+
+    @staticmethod
+    def _parameter_intervention_score(baseline, alternative):
+        if len(baseline) != len(alternative) or not baseline:
+            return None
+        squared_difference = baseline[0].new_zeros(())
+        squared_baseline = baseline[0].new_zeros(())
+        element_count = 0
+        for baseline_tensor, alternative_tensor in zip(baseline, alternative):
+            if baseline_tensor.shape != alternative_tensor.shape:
+                return None
+            squared_difference = squared_difference + (
+                alternative_tensor - baseline_tensor
+            ).pow(2).sum()
+            squared_baseline = squared_baseline + baseline_tensor.pow(2).sum()
+            element_count += baseline_tensor.numel()
+        denominator = (squared_baseline / max(element_count, 1)).sqrt().clamp(
+            min=1e-8
+        )
+        return (
+            squared_difference / max(element_count, 1)
+        ).sqrt() / denominator
+
+    @staticmethod
+    def _semantic_group_rms(batch, router):
+        semantic_dim = len(router.semantic_names)
+        observations = batch["obs"][:, :-1, :, :semantic_dim].detach().float()
+        field_ids = router.semantic_field_ids.to(observations.device)
+        rms_values = []
+        for group_index in range(router.semantic_field_count):
+            group_values = observations[..., field_ids == group_index]
+            if group_values.numel() == 0:
+                rms_values.append(observations.new_zeros(()))
+            else:
+                rms_values.append(group_values.pow(2).mean().sqrt())
+        return th.stack(rms_values)
+
+    def _audit_semantic_binary(
+        self, batch, actions, targets, td_mask, router, t_env
+    ):
+        if router is None or not router.semantic_router_needs_binary_audit():
+            return False
+        if not self.semantic_binary_audit_pending:
+            return False
+        if self.semantic_binary_rehearsal_remaining > 0:
+            return False
+
+        audit_batch = self._binary_audit_batch(batch)
+        audit_size = audit_batch.batch_size
+        audit_actions = actions[:audit_size]
+        audit_targets = targets[:audit_size]
+        audit_td_mask = td_mask[:audit_size]
+        group_scores = []
+        baseline_value = None
+        try:
+            router.set_semantic_full_input_audit(True)
+            router.set_semantic_binary_audit_group(None)
+            if router.mlp_binary_audit_mode == "td_loss":
+                with th.no_grad():
+                    baseline_value = self._counterfactual_td_loss(
+                        audit_batch,
+                        audit_actions,
+                        audit_targets,
+                        audit_td_mask,
+                    )
+            else:
+                baseline_parameters = self._generated_parameter_snapshots(
+                    audit_batch
+                )
+                if not baseline_parameters:
+                    return False
+                baseline_value = th.stack(
+                    [parameter.pow(2).mean() for parameter in baseline_parameters]
+                ).mean().sqrt()
+
+            for group_index in range(router.semantic_field_count):
+                router.set_semantic_binary_audit_group(group_index)
+                if router.mlp_binary_audit_mode == "td_loss":
+                    with th.no_grad():
+                        alternative_loss = self._counterfactual_td_loss(
+                            audit_batch,
+                            audit_actions,
+                            audit_targets,
+                            audit_td_mask,
+                        )
+                    score = (alternative_loss - baseline_value) / baseline_value.abs().clamp(
+                        min=1e-8
+                    )
+                else:
+                    alternative_parameters = self._generated_parameter_snapshots(
+                        audit_batch
+                    )
+                    score = self._parameter_intervention_score(
+                        baseline_parameters, alternative_parameters
+                    )
+                    if score is None:
+                        return False
+                group_scores.append(score.detach())
+        finally:
+            router.set_semantic_full_input_audit(False)
+
+        group_scores = th.stack(group_scores)
+        field_ids = router.semantic_field_ids.to(group_scores.device)
+        slot_scores = group_scores.index_select(0, field_ids)
+        group_rms = self._semantic_group_rms(audit_batch, router).to(
+            group_scores.device
+        )
+        normalized_scores = group_scores / group_rms.clamp(min=1e-6)
+        centered_scores = group_scores - group_scores.mean()
+        centered_rms = group_rms - group_rms.mean()
+        rms_correlation = (
+            centered_scores.mul(centered_rms).sum()
+            / (
+                centered_scores.pow(2).sum().sqrt()
+                * centered_rms.pow(2).sum().sqrt()
+            ).clamp(min=1e-8)
+        )
+
+        route_update_skipped = (
+            router.mlp_binary_audit_mode == "td_loss"
+            and group_scores.max().item() <= 1e-8
+        )
+        if not route_update_skipped:
+            router.update_semantic_router(t_env, slot_scores)
+            self._sync_semantic_router_to_target(router)
+        self.latest_semantic_counterfactual_stats = {
+            "semantic_binary_audit_baseline": baseline_value.detach(),
+            "semantic_binary_audit_score_mean": group_scores.mean(),
+            "semantic_binary_audit_score_max": group_scores.max(),
+            "semantic_binary_audit_input_rms_mean": group_rms.mean(),
+            "semantic_binary_audit_rms_normalized_score_mean": (
+                normalized_scores.mean()
+            ),
+            "semantic_binary_audit_score_rms_correlation": rms_correlation,
+            "semantic_binary_audit_rehearsal_updates": group_scores.new_tensor(
+                float(self.semantic_binary_rehearsal_updates)
+            ),
+            "semantic_binary_audit_route_update_skipped": (
+                group_scores.new_tensor(float(route_update_skipped))
+            ),
+        }
+        self.last_semantic_router_audit_t = t_env
+        self.semantic_binary_audit_pending = False
+        return True
+
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         rewards = batch["reward"][:, :-1]
         actions = batch["actions"][:, :-1]
@@ -215,6 +423,11 @@ class CleanLearner:
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
         avail_actions = batch["avail_actions"]
         semantic_router = self._semantic_router(self.mac)
+        binary_rehearsal_active = self._start_semantic_binary_rehearsal(
+            semantic_router, t_env
+        )
+        if binary_rehearsal_active:
+            self._set_binary_rehearsal_route(True)
         generated_parameter_graphs = []
         parameter_probe_times = set()
         observation_probe_times = set()
@@ -436,6 +649,11 @@ class CleanLearner:
             grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
             self.optimiser.step()
 
+        if binary_rehearsal_active:
+            self.semantic_binary_rehearsal_remaining = max(
+                0, self.semantic_binary_rehearsal_remaining - 1
+            )
+
         if semantic_router is not None:
             if semantic_router.semantic_router_mode in {
                 "observer_consistency",
@@ -478,6 +696,11 @@ class CleanLearner:
         self._audit_semantic_gradient_importance(
             batch, actions, targets, td_mask, semantic_router, t_env
         )
+        self._audit_semantic_binary(
+            batch, actions, targets, td_mask, semantic_router, t_env
+        )
+        if binary_rehearsal_active:
+            self._set_binary_rehearsal_route(False)
 
         if (episode_num - self.last_target_update_episode) / self.args.target_update_interval >= 1.0:
             self._update_targets()
