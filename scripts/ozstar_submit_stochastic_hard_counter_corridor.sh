@@ -3,10 +3,11 @@ set -euo pipefail
 
 # Controlled exploratory hard-gate experiment:
 #   gradient importance -> keep probability -> sampled 0/1 observation mask.
-# Only the gate changes; both scenes retain the proven MLP/hypernetwork setting.
+# Only the gate changes; all scenes retain the proven MLP/hypernetwork setting.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
+RUN_SMOKE_TEST="${RUN_SMOKE_TEST:-True}"
 SEED="${SEED:-1}"
 TIME="${TIME:-1-00:00:00}"
 T_MAX="${T_MAX:-10050000}"
@@ -58,7 +59,9 @@ if (( TORCH_NUM_THREADS != CPUS_PER_TASK )); then
   exit 2
 fi
 
-"$PYTHON_BIN" scripts/smoke_test_stochastic_hard_gate.py
+if [[ "$RUN_SMOKE_TEST" == "True" ]]; then
+  "$PYTHON_BIN" scripts/smoke_test_stochastic_hard_gate.py
+fi
 
 common_args() {
   printf '%s' "$EXTRA_ARGS torch_num_threads=$TORCH_NUM_THREADS torch_num_interop_threads=$TORCH_NUM_INTEROP_THREADS learner_updates_per_collect=$LEARNER_UPDATES_PER_COLLECT clean_semantic_router_ema=$ROUTER_EMA clean_semantic_router_ema_up=$ROUTER_EMA_UP clean_semantic_router_ema_down=$ROUTER_EMA_DOWN clean_semantic_router_update_interval=$ROUTER_UPDATE_INTERVAL clean_semantic_router_threshold=$ROUTER_THRESHOLD clean_semantic_router_temperature=$ROUTER_TEMPERATURE clean_semantic_router_warmup_steps=$ROUTER_WARMUP_STEPS clean_semantic_router_freeze_steps=$ROUTER_FREEZE_STEPS clean_semantic_stochastic_exploration_floor=$EXPLORATION_FLOOR clean_relation_teacher_td_coef=0.0 clean_relation_distill_coef=0.0 clean_smooth_head_loss_coef=0.0 clean_action_pred_loss_coef=0.0 clean_public_delta_loss_coef=0.0 save_battle_trace=False"
@@ -76,6 +79,14 @@ submit_one() {
   local model memory env_config map_name scene_args tag
 
   case "$scene" in
+    pass)
+      tag="grf_pass"
+      env_config="academy_pass_and_shoot_with_keeper"
+      map_name="$env_config"
+      model="grf_abs_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond"
+      memory="$GRF_MEM"
+      scene_args="env_worker_startup_stagger=$ENV_WORKER_STARTUP_STAGGER env_worker_reset_retries=$ENV_WORKER_RESET_RETRIES env_worker_reset_retry_delay=$ENV_WORKER_RESET_RETRY_DELAY env_worker_response_timeout=$ENV_WORKER_RESPONSE_TIMEOUT env_args.write_video=False"
+      ;;
     counter)
       tag="grf_counter"
       env_config="academy_counterattack_easy"
@@ -122,10 +133,12 @@ submit_one() {
     "${job_id%%;*}" "$scene" "$model" "$CPUS_PER_TASK" "$memory"
 }
 
-echo "== Stochastic hard MLP gate: Counter + Corridor =="
+echo "== Stochastic hard MLP gate: Counter + Pass + Corridor =="
 echo "route: update=${ROUTER_UPDATE_INTERVAL}, ema_up=${ROUTER_EMA_UP}, ema_down=${ROUTER_EMA_DOWN}, exploration_floor=${EXPLORATION_FLOOR}"
-echo "resources: Counter=${CPUS_PER_TASK}c/${GRF_MEM}; Corridor=${CPUS_PER_TASK}c/${CORRIDOR_MEM}"
+echo "resources: GRF=${CPUS_PER_TASK}c/${GRF_MEM}; Corridor=${CPUS_PER_TASK}c/${CORRIDOR_MEM}"
 
 submit_one counter
+sleep "$SUBMIT_GAP_SECONDS"
+submit_one pass
 sleep "$SUBMIT_GAP_SECONDS"
 submit_one corridor
