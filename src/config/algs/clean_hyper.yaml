@@ -783,6 +783,8 @@ clean_semantic_router_sparse_coef: 0.001
 # example "0011...", and builds compact branch encoders from selected fields.
 clean_semantic_router_fixed_mask: ""
 clean_semantic_router_audit_interval: 250000
+clean_semantic_binary_audit_batch_size: 8
+clean_semantic_binary_rehearsal_updates: 4
 clean_semantic_parameter_probe_timesteps: 4
 clean_semantic_observation_probe_timesteps: 8
 clean_relation_distill_coef: 0.05

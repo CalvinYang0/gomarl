@@ -97,6 +97,9 @@ def check_smac(
         assert capturer.l0_log_alpha.grad is not None
     if soft_gate:
         check_continuous_soft_gate(capturer, self_feat)
+    stats = capturer.semantic_router_stats()
+    if router_mode is not None:
+        assert "semantic_route_token_fraction" in stats
     if share_by_side:
         name_to_group = {
             name: int(group)
@@ -170,6 +173,9 @@ def check_grf(
         assert capturer.l0_log_alpha.grad is not None
     if soft_gate:
         check_continuous_soft_gate(capturer, obs)
+    stats = capturer.semantic_router_stats()
+    if router_mode is not None:
+        assert "semantic_route_token_fraction" in stats
     if share_by_side:
         name_to_group = {
             name: int(group)
@@ -192,6 +198,13 @@ def check_grf(
 
 
 def main():
+    config_text = (ROOT / "src/config/algs/clean_hyper.yaml").read_text()
+    for key in (
+        "clean_semantic_binary_audit_batch_size",
+        "clean_semantic_binary_rehearsal_updates",
+    ):
+        assert f"{key}:" in config_text
+
     variants = (
         dict(style="mlp"),
         dict(

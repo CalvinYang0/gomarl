@@ -14,7 +14,8 @@ T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
-GRF_MEM="${GRF_MEM:-12G}"
+GRF_PASS_MEM="${GRF_PASS_MEM:-12G}"
+GRF_COUNTER_MEM="${GRF_COUNTER_MEM:-16G}"
 CORRIDOR_MEM="${CORRIDOR_MEM:-40G}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
@@ -84,7 +85,7 @@ submit_one() {
       env_config="academy_pass_and_shoot_with_keeper"
       map_name="$env_config"
       model="grf_abs_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond"
-      memory="$GRF_MEM"
+      memory="$GRF_PASS_MEM"
       scene_args="env_worker_startup_stagger=$ENV_WORKER_STARTUP_STAGGER env_worker_reset_retries=$ENV_WORKER_RESET_RETRIES env_worker_reset_retry_delay=$ENV_WORKER_RESET_RETRY_DELAY env_worker_response_timeout=$ENV_WORKER_RESPONSE_TIMEOUT env_args.write_video=False"
       ;;
     counter)
@@ -92,7 +93,7 @@ submit_one() {
       env_config="academy_counterattack_easy"
       map_name="$env_config"
       model="grf_abs_gimp_lowfreq_stochastic_hard_mlp_relation_hypercond"
-      memory="$GRF_MEM"
+      memory="$GRF_COUNTER_MEM"
       scene_args="env_worker_startup_stagger=$ENV_WORKER_STARTUP_STAGGER env_worker_reset_retries=$ENV_WORKER_RESET_RETRIES env_worker_reset_retry_delay=$ENV_WORKER_RESET_RETRY_DELAY env_worker_response_timeout=$ENV_WORKER_RESPONSE_TIMEOUT env_args.write_video=False"
       ;;
     corridor)
@@ -135,7 +136,7 @@ submit_one() {
 
 echo "== Stochastic hard MLP gate: Counter + Pass + Corridor =="
 echo "route: update=${ROUTER_UPDATE_INTERVAL}, ema_up=${ROUTER_EMA_UP}, ema_down=${ROUTER_EMA_DOWN}, exploration_floor=${EXPLORATION_FLOOR}"
-echo "resources: GRF=${CPUS_PER_TASK}c/${GRF_MEM}; Corridor=${CPUS_PER_TASK}c/${CORRIDOR_MEM}"
+echo "resources: GRF Pass=${CPUS_PER_TASK}c/${GRF_PASS_MEM}; GRF Counter=${CPUS_PER_TASK}c/${GRF_COUNTER_MEM}; Corridor=${CPUS_PER_TASK}c/${CORRIDOR_MEM}"
 
 submit_one counter
 sleep "$SUBMIT_GAP_SECONDS"

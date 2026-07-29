@@ -2671,7 +2671,9 @@ class PublicTransformerRelationCapturer(nn.Module):
         stats.update(
             {
                 name: value.detach().to(probability)
-                for name, value in self._semantic_critical_stats.items()
+                for name, value in getattr(
+                    self, "_semantic_critical_stats", {}
+                ).items()
             }
         )
         if self.semantic_router_drop_mode == "learnable_hierarchical":
@@ -3835,6 +3837,9 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self._semantic_full_input_audit = False
         self._semantic_audit_dropped_group = None
         self._semantic_test_mode = False
+        self._semantic_critical_capture_enabled = False
+        self._semantic_critical_probes = []
+        self._semantic_critical_stats = {}
 
         (
             self.semantic_names,

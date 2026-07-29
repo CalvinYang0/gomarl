@@ -93,6 +93,8 @@ def _check_smac():
     assert hidden.shape == (2, 4, 16)
     condition.square().mean().backward()
     assert capturer.semantic_probe_scale.grad is not None
+    stats = capturer.semantic_router_stats()
+    assert stats["semantic_route_stochastic_hard"].item() == 1.0
 
 
 def _check_grf():
@@ -123,6 +125,8 @@ def _check_grf():
     assert hidden.shape == (2, 3, 16)
     condition.square().mean().backward()
     assert capturer.semantic_probe_scale.grad is not None
+    stats = capturer.semantic_router_stats()
+    assert stats["semantic_route_stochastic_hard"].item() == 1.0
 
 
 def main():
