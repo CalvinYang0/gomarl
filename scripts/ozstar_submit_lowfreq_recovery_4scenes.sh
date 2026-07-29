@@ -18,8 +18,9 @@ T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
-GRF_MEM="${GRF_MEM:-10G}"
+GRF_MEM="${GRF_MEM:-16G}"
 CORRIDOR_MEM="${CORRIDOR_MEM:-40G}"
+SCENES="${SCENES:-pass 3v1 counter corridor}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 BUFFER_SIZE="${BUFFER_SIZE:-5000}"
@@ -176,30 +177,43 @@ echo "== Low-frequency semantic recovery: four scenes =="
 echo "route: deploy every ${ROUTER_UPDATE_INTERVAL} t_env; audit every ${ROUTER_AUDIT_INTERVAL} t_env"
 echo "EMA: fast-up=${ROUTER_EMA_UP}; slow-down=${ROUTER_EMA_DOWN}; no in-run freeze"
 echo "resources: GRF=${CPUS_PER_TASK}c/${GRF_MEM}; corridor=${CPUS_PER_TASK}c/${CORRIDOR_MEM}"
+echo "selected scenes: $SCENES"
 
-submit_scene pass grf_pass \
-  grf_abs_mlp_relation_hypercond \
-  grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond \
-  grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond \
-  "$GRF_MEM"
-
-submit_scene 3v1 grf_3v1 \
-  grf_abs_mlp_relation_hypercond \
-  grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond \
-  grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond \
-  "$GRF_MEM"
-
-submit_scene counter grf_counter \
-  grf_abs_mlp_relation_hypercond \
-  grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond \
-  grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond \
-  "$GRF_MEM"
-
-submit_scene corridor corridor \
-  rpg_mlp_relation_hypercond \
-  rpg_gimp_lowfreq_soft_mlp_relation_hypercond \
-  rpg_gimp_lowfreq_audit_mlp_relation_hypercond \
-  "$CORRIDOR_MEM"
+for scene in $SCENES; do
+  case "$scene" in
+    pass)
+      submit_scene pass grf_pass \
+        grf_abs_mlp_relation_hypercond \
+        grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond \
+        grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond \
+        "$GRF_MEM"
+      ;;
+    3v1)
+      submit_scene 3v1 grf_3v1 \
+        grf_abs_mlp_relation_hypercond \
+        grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond \
+        grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond \
+        "$GRF_MEM"
+      ;;
+    counter)
+      submit_scene counter grf_counter \
+        grf_abs_mlp_relation_hypercond \
+        grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond \
+        grf_abs_gimp_lowfreq_audit_mlp_relation_hypercond \
+        "$GRF_MEM"
+      ;;
+    corridor)
+      submit_scene corridor corridor \
+        rpg_mlp_relation_hypercond \
+        rpg_gimp_lowfreq_soft_mlp_relation_hypercond \
+        rpg_gimp_lowfreq_audit_mlp_relation_hypercond \
+        "$CORRIDOR_MEM"
+      ;;
+    *)
+      echo "ERROR: unsupported SCENES entry: $scene" >&2
+      exit 2
+      ;;
+  esac
+done
 
 echo "newly submitted: $submitted"
-echo "Expected active total is 12 when both existing Counter/Corridor Full jobs were reused."
