@@ -13,6 +13,7 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
 SEED="${SEED:-1}"
+RUN_SUFFIX="${RUN_SUFFIX:-}"
 TIME="${TIME:-1-00:00:00}"
 T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
@@ -98,8 +99,8 @@ submit_one() {
     scene_args="env_worker_startup_stagger=$ENV_WORKER_STARTUP_STAGGER env_worker_reset_retries=$ENV_WORKER_RESET_RETRIES env_worker_reset_retry_delay=$ENV_WORKER_RESET_RETRY_DELAY env_worker_response_timeout=$ENV_WORKER_RESPONSE_TIMEOUT env_args.write_video=False"
   fi
 
-  local run_name="${tag}_mlp_lf8k_${variant}_10m_s${SEED}"
-  local job_name="${tag}_lf8k_${variant}_s${SEED}"
+  local run_name="${tag}_mlp_lf8k_${variant}_10m_s${SEED}${RUN_SUFFIX}"
+  local job_name="${tag}_lf8k_${variant}_s${SEED}${RUN_SUFFIX}"
   local job_id reusable
 
   SUBMIT_CREATED=0
