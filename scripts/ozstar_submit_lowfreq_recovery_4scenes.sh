@@ -21,6 +21,7 @@ CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
 GRF_MEM="${GRF_MEM:-16G}"
 CORRIDOR_MEM="${CORRIDOR_MEM:-40G}"
 SCENES="${SCENES:-pass 3v1 counter corridor}"
+VARIANTS="${VARIANTS:-full soft audit}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 BUFFER_SIZE="${BUFFER_SIZE:-5000}"
@@ -131,6 +132,27 @@ find_active_job() {
       '$2 == expected && ($3 == "RUNNING" || $3 == "PENDING") {print $1; exit}'
 }
 
+want_variant() {
+  local expected="$1"
+  local variant
+  for variant in $VARIANTS; do
+    if [[ "$variant" == "$expected" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+for variant in $VARIANTS; do
+  case "$variant" in
+    full|soft|audit) ;;
+    *)
+      echo "ERROR: unsupported VARIANTS entry: $variant" >&2
+      exit 2
+      ;;
+  esac
+done
+
 submitted=0
 reuse_or_submit_full() {
   local scene="$1"
@@ -162,15 +184,23 @@ submit_scene() {
   local audit_model="$5"
   local memory="$6"
 
-  reuse_or_submit_full "$scene" "$tag" "$full_model" "$memory"
-  if (( submitted > 0 )); then
-    sleep "$SUBMIT_GAP_SECONDS"
+  if want_variant full; then
+    reuse_or_submit_full "$scene" "$tag" "$full_model" "$memory"
   fi
-  submit_one "$scene" "$tag" "$soft_model" soft "$memory"
-  submitted=$((submitted + SUBMIT_CREATED))
-  sleep "$SUBMIT_GAP_SECONDS"
-  submit_one "$scene" "$tag" "$audit_model" audit "$memory"
-  submitted=$((submitted + SUBMIT_CREATED))
+  if want_variant soft; then
+    if (( submitted > 0 )); then
+      sleep "$SUBMIT_GAP_SECONDS"
+    fi
+    submit_one "$scene" "$tag" "$soft_model" soft "$memory"
+    submitted=$((submitted + SUBMIT_CREATED))
+  fi
+  if want_variant audit; then
+    if (( submitted > 0 )); then
+      sleep "$SUBMIT_GAP_SECONDS"
+    fi
+    submit_one "$scene" "$tag" "$audit_model" audit "$memory"
+    submitted=$((submitted + SUBMIT_CREATED))
+  fi
 }
 
 echo "== Low-frequency semantic recovery: four scenes =="
@@ -178,6 +208,7 @@ echo "route: deploy every ${ROUTER_UPDATE_INTERVAL} t_env; audit every ${ROUTER_
 echo "EMA: fast-up=${ROUTER_EMA_UP}; slow-down=${ROUTER_EMA_DOWN}; no in-run freeze"
 echo "resources: GRF=${CPUS_PER_TASK}c/${GRF_MEM}; corridor=${CPUS_PER_TASK}c/${CORRIDOR_MEM}"
 echo "selected scenes: $SCENES"
+echo "selected variants: $VARIANTS"
 
 for scene in $SCENES; do
   case "$scene" in
