@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # Full dual-branch baseline plus two causal DROP variants on GRF Counter and
-# SMAC Corridor. Defaults to three seeds (18 jobs).
+# SMAC Corridor. Defaults to one seed (6 jobs total).
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
-SEEDS="${SEEDS:-1 2 3}"
+SEEDS="${SEEDS:-1}"
 TIME="${TIME:-1-00:00:00}"
 T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
