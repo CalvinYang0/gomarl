@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """Tensor checks for full, TD-benefit, and hyper-output dual branches."""
 
+import sys
+from pathlib import Path
+
 import torch as th
 
-from modules.agents.clean_hyper_agent import (
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from modules.agents.clean_hyper_agent import (  # noqa: E402
     GRFPublicPrivateBiasTransformerCapturer,
     PublicTransformerRelationCapturer,
 )
