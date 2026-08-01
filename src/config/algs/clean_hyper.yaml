@@ -531,6 +531,15 @@ hypernet_layers: 2
 #                                                enemy token with an encoded
 #                                                enemy-feature delta
 #                                                obs_t - obs_{t-1}.
+# - rpg_dual_branch_relation_hypercond: full-observation Linear and entity
+#                                      self-attention branches, concatenated
+#                                      and linearly fused into the condition.
+# - rpg_dual_branch_td_benefit_drop_hypercond: same dual baseline; a signed
+#                                      keep-vs-drop TD counterfactual removes
+#                                      one harmful branch/semantic group at a time.
+# - rpg_dual_branch_parameter_invariant_drop_hypercond: same dual baseline;
+#                                      removes a branch/semantic group only when
+#                                      generated hypernetwork parameters barely change.
 # - rpg_semantic_selfattn_relation_hypercond: relation-generator ablation.
 #                                             It factorizes obs into feature
 #                                             semantic fields such as health,
@@ -787,6 +796,15 @@ clean_semantic_binary_audit_batch_size: 8
 clean_semantic_binary_rehearsal_updates: 4
 clean_semantic_parameter_probe_timesteps: 4
 clean_semantic_observation_probe_timesteps: 8
+# Dual Linear + self-attention branch pruning uses signed, absolute
+# counterfactual criteria rather than relative importance rankings. At each
+# audit it changes at most one shared semantic group, then re-audits under the
+# new mask to avoid deleting the same redundant signal from both branches.
+clean_branch_drop_task_margin: 0.01
+clean_branch_drop_parameter_threshold: 0.01
+clean_branch_drop_ema: 0.9
+clean_branch_drop_warmup_steps: 250000
+clean_branch_drop_freeze_steps: 5000000
 clean_relation_distill_coef: 0.05
 clean_relation_teacher_td_coef: 0.2
 clean_smooth_head_loss_coef: 0.01

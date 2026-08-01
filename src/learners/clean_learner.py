@@ -99,6 +99,7 @@ class CleanLearner:
         self.last_semantic_router_audit_t = -self.semantic_router_audit_interval
         self.latest_semantic_counterfactual_stats = {}
         self.last_semantic_route_version_logged = -1
+        self.last_branch_drop_version_logged = -1
 
     def _amp_context(self):
         return th.cuda.amp.autocast(enabled=True) if self.use_amp else nullcontext()
@@ -109,6 +110,18 @@ class CleanLearner:
         if capturer is None or not bool(getattr(capturer, "semantic_router_active", False)):
             return None
         return capturer
+
+    @staticmethod
+    def _branch_drop_capturer(mac):
+        capturer = getattr(getattr(mac, "agent", None), "rpg_relation_capturer", None)
+        if capturer is None or not bool(getattr(capturer, "branch_drop_active", False)):
+            return None
+        return capturer
+
+    def _sync_branch_drop_to_target(self, capturer):
+        target = self._branch_drop_capturer(self.target_mac)
+        if capturer is not None and target is not None:
+            target.copy_branch_drop_from(capturer)
 
     @staticmethod
     def _uniform_probe_times(sequence_length, probe_count):
@@ -429,6 +442,106 @@ class CleanLearner:
         self.semantic_binary_audit_pending = False
         return True
 
+    def _audit_branch_drop(
+        self, batch, actions, targets, td_mask, capturer, t_env
+    ):
+        if capturer is None or not capturer.branch_drop_needs_audit(t_env):
+            return False
+        if (
+            t_env - self.last_semantic_router_audit_t
+            < self.semantic_router_audit_interval
+        ):
+            return False
+
+        audit_batch = self._binary_audit_batch(batch)
+        audit_size = audit_batch.batch_size
+        audit_actions = actions[:audit_size]
+        audit_targets = targets[:audit_size]
+        audit_td_mask = td_mask[:audit_size]
+        current_keep = capturer.branch_group_keep_state().detach() >= 0.5
+        group_scores = audit_td_mask.new_zeros(
+            2, capturer.semantic_field_count
+        )
+        stats = {}
+        try:
+            capturer.set_branch_drop_audit()
+            if capturer.branch_drop_mode == "td_benefit":
+                with th.no_grad():
+                    baseline = self._counterfactual_td_loss(
+                        audit_batch,
+                        audit_actions,
+                        audit_targets,
+                        audit_td_mask,
+                    )
+            else:
+                baseline_parameters = self._generated_parameter_snapshots(
+                    audit_batch
+                )
+                if not baseline_parameters:
+                    return False
+
+            for branch_index, branch_name in enumerate(("linear", "attention")):
+                for group_index in range(capturer.semantic_field_count):
+                    baseline_is_keep = bool(
+                        current_keep[branch_index, group_index].item()
+                    )
+                    capturer.set_branch_drop_audit(
+                        branch_index,
+                        group_index,
+                        keep=not baseline_is_keep,
+                    )
+                    if capturer.branch_drop_mode == "td_benefit":
+                        with th.no_grad():
+                            alternative = self._counterfactual_td_loss(
+                                audit_batch,
+                                audit_actions,
+                                audit_targets,
+                                audit_td_mask,
+                            )
+                        if baseline_is_keep:
+                            keep_loss, drop_loss = baseline, alternative
+                        else:
+                            keep_loss, drop_loss = alternative, baseline
+                        # Positive means KEEP lowers TD loss; negative means
+                        # the branch-slot is harmful and DROP is beneficial.
+                        score = (drop_loss - keep_loss) / keep_loss.abs().clamp(
+                            min=1e-8
+                        )
+                    else:
+                        alternative_parameters = self._generated_parameter_snapshots(
+                            audit_batch
+                        )
+                        score = self._parameter_intervention_score(
+                            baseline_parameters, alternative_parameters
+                        )
+                        if score is None:
+                            return False
+                    group_scores[branch_index, group_index] = score.detach()
+                    stats[
+                        "branch_drop_{}_group_{}_score".format(
+                            branch_name, group_index
+                        )
+                    ] = score.detach()
+                    capturer.set_branch_drop_audit()
+        finally:
+            capturer.set_branch_drop_audit()
+
+        changed = capturer.update_branch_drop(t_env, group_scores)
+        self._sync_branch_drop_to_target(capturer)
+        stats.update(
+            {
+                "branch_drop_audit_score_mean": group_scores.mean(),
+                "branch_drop_audit_score_min": group_scores.min(),
+                "branch_drop_audit_score_max": group_scores.max(),
+                "branch_drop_audit_changed": group_scores.new_tensor(
+                    float(changed)
+                ),
+            }
+        )
+        self.latest_semantic_counterfactual_stats = stats
+        self.last_semantic_router_audit_t = t_env
+        return True
+
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         rewards = batch["reward"][:, :-1]
         actions = batch["actions"][:, :-1]
@@ -437,6 +550,7 @@ class CleanLearner:
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
         avail_actions = batch["avail_actions"]
         semantic_router = self._semantic_router(self.mac)
+        branch_drop_capturer = self._branch_drop_capturer(self.mac)
         binary_rehearsal_active = self._start_semantic_binary_rehearsal(
             semantic_router, t_env
         )
@@ -747,6 +861,14 @@ class CleanLearner:
             self._audit_semantic_binary(
                 batch, actions, targets, td_mask, semantic_router, t_env
             )
+        self._audit_branch_drop(
+            batch,
+            actions,
+            targets,
+            td_mask,
+            branch_drop_capturer,
+            t_env,
+        )
         if binary_rehearsal_active:
             self._set_binary_rehearsal_route(False)
 
@@ -774,6 +896,24 @@ class CleanLearner:
                     self.last_semantic_route_version_logged = route_version
                 for stat_name, stat_value in self.latest_semantic_counterfactual_stats.items():
                     self.logger.log_stat(stat_name, float(stat_value.item()), t_env)
+            if branch_drop_capturer is not None:
+                for stat_name, stat_value in branch_drop_capturer.branch_drop_stats().items():
+                    self.logger.log_stat(stat_name, float(stat_value.item()), t_env)
+                branch_version = int(
+                    branch_drop_capturer.branch_drop_version.item()
+                )
+                if branch_version != self.last_branch_drop_version_logged:
+                    self.logger.console_logger.info(
+                        "Dual branch DROP | t_env={} | {}".format(
+                            t_env, branch_drop_capturer.branch_drop_summary()
+                        )
+                    )
+                    self.last_branch_drop_version_logged = branch_version
+                if semantic_router is None:
+                    for stat_name, stat_value in self.latest_semantic_counterfactual_stats.items():
+                        self.logger.log_stat(
+                            stat_name, float(stat_value.item()), t_env
+                        )
             if teacher_mac_out is not None:
                 self.logger.log_stat("loss_teacher_td", teacher_td_loss.item(), t_env)
             if self.latest_relation_gate_mean is not None:

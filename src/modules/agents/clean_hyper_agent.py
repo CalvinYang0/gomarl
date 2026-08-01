@@ -234,6 +234,15 @@ MLP_BINARY_AUDIT_MODE_BY_MODEL = {
 MLP_L0_DROP_VARIANTS = {
     "rpg_l0_drop_mlp_relation_hypercond",
 }
+RPG_DUAL_BRANCH_VARIANTS = {
+    "rpg_dual_branch_relation_hypercond",
+    "rpg_dual_branch_td_benefit_drop_hypercond",
+    "rpg_dual_branch_parameter_invariant_drop_hypercond",
+}
+RPG_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
+    "rpg_dual_branch_td_benefit_drop_hypercond": "td_benefit",
+    "rpg_dual_branch_parameter_invariant_drop_hypercond": "generated_parameters",
+}
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",
 }
@@ -314,6 +323,7 @@ PUBLIC_TRANSFORMER_BIAS_VARIANTS = {
 } | PUBLIC_TRANSFORMER_SIMPLE_BIAS_FAMILY
 PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
     {"rpg_public_transformer_hypercond"}
+    | RPG_DUAL_BRANCH_VARIANTS
     | MLP_RELATION_VARIANTS
     | PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS
     | PUBLIC_TRANSFORMER_PAST_DELTA_VARIANTS
@@ -392,6 +402,15 @@ GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL = {
 GRF_MLP_L0_DROP_VARIANTS = {
     "grf_abs_l0_drop_mlp_relation_hypercond",
 }
+GRF_DUAL_BRANCH_VARIANTS = {
+    "grf_abs_dual_branch_relation_hypercond",
+    "grf_abs_dual_branch_td_benefit_drop_hypercond",
+    "grf_abs_dual_branch_parameter_invariant_drop_hypercond",
+}
+GRF_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
+    "grf_abs_dual_branch_td_benefit_drop_hypercond": "td_benefit",
+    "grf_abs_dual_branch_parameter_invariant_drop_hypercond": "generated_parameters",
+}
 GRF_DECISION_MAKER_VARIANTS |= GRF_MLP_RELATION_VARIANTS
 GRF_TWO_LAYER_HEAD_VARIANTS = {
     "grf_public_private_bias_transformer_two_layer_head_hypercond",
@@ -464,6 +483,7 @@ GRF_PUBLIC_TRANSFORMER_VARIANTS = {
     *GRF_LINEAR_HEAD_VARIANTS,
     *GRF_DECISION_MAKER_VARIANTS,
     *GRF_SEMANTIC_ROUTER_VARIANTS,
+    *GRF_DUAL_BRANCH_VARIANTS,
 }
 
 
@@ -626,6 +646,7 @@ PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_transformer_hypercond": "baseline",
     "rpg_public_transformer_single_head_hypercond": "baseline",
     "rpg_mlp_relation_hypercond": "baseline",
+    **{name: "full_obs" for name in RPG_DUAL_BRANCH_VARIANTS},
     "rpg_gimp_lthr_drop_mlp_relation_hypercond": "baseline",
     "rpg_gimp_lthr_soft_mlp_relation_hypercond": "baseline",
     "rpg_gimp_lowfreq_soft_mlp_relation_hypercond": "baseline",
@@ -1279,6 +1300,12 @@ class PublicTransformerRelationCapturer(nn.Module):
         mlp_stochastic_exploration_floor=0.05,
         mlp_independent_audit=False,
         mlp_binary_audit_mode=None,
+        branch_drop_mode=None,
+        branch_drop_task_margin=0.01,
+        branch_drop_parameter_threshold=0.01,
+        branch_drop_ema=0.9,
+        branch_drop_warmup_steps=250000,
+        branch_drop_freeze_steps=5000000,
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -1372,8 +1399,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         if self.semantic_router_sparse_coef < 0.0:
             raise ValueError("semantic_router_sparse_coef must be non-negative")
         self.relation_encoder_style = str(relation_encoder_style)
-        if self.relation_encoder_style not in {"transformer", "mlp"}:
-            raise ValueError("relation_encoder_style must be transformer or mlp")
+        if self.relation_encoder_style not in {"transformer", "mlp", "dual"}:
+            raise ValueError("relation_encoder_style must be transformer, mlp, or dual")
         self.l0_drop = bool(l0_drop)
         self.mlp_independent_audit = bool(mlp_independent_audit)
         self.mlp_binary_audit_mode = mlp_binary_audit_mode
@@ -1385,6 +1412,21 @@ class PublicTransformerRelationCapturer(nn.Module):
             raise ValueError(
                 "mlp_binary_audit_mode must be td_loss, generated_parameters, or None"
             )
+        self.branch_drop_mode = branch_drop_mode
+        if self.branch_drop_mode not in {None, "td_benefit", "generated_parameters"}:
+            raise ValueError(
+                "branch_drop_mode must be td_benefit, generated_parameters, or None"
+            )
+        self.branch_drop_task_margin = float(branch_drop_task_margin)
+        self.branch_drop_parameter_threshold = float(
+            branch_drop_parameter_threshold
+        )
+        self.branch_drop_ema = float(branch_drop_ema)
+        self.branch_drop_warmup_steps = int(branch_drop_warmup_steps)
+        self.branch_drop_freeze_steps = int(branch_drop_freeze_steps)
+        self._branch_audit_branch = None
+        self._branch_audit_group = None
+        self._branch_audit_keep = None
         self._semantic_full_input_audit = False
         self._semantic_audit_dropped_group = None
         self._semantic_test_mode = False
@@ -1451,6 +1493,19 @@ class PublicTransformerRelationCapturer(nn.Module):
             field_ids, field_count = _semantic_field_ids(self.semantic_fields)
         self.register_buffer("semantic_field_ids", field_ids)
         self.semantic_field_count = field_count
+        self.register_buffer(
+            "branch_keep_mask", th.ones(2, len(self.semantic_names))
+        )
+        self.register_buffer(
+            "branch_drop_score", th.zeros(2, self.semantic_field_count)
+        )
+        self.register_buffer(
+            "branch_drop_score_initialized",
+            th.zeros(2, self.semantic_field_count, dtype=th.bool),
+        )
+        self.register_buffer("branch_drop_frozen", th.tensor(False))
+        self.register_buffer("branch_drop_version", th.tensor(0, dtype=th.long))
+        self.register_buffer("branch_drop_last_update_t", th.tensor(-1, dtype=th.long))
         self.register_buffer("semantic_manual_token_route", manual_route)
         self.register_buffer("semantic_token_route", manual_route.clone())
         self.register_buffer("semantic_bias_route", 1.0 - manual_route.clone())
@@ -1621,6 +1676,8 @@ class PublicTransformerRelationCapturer(nn.Module):
             nn.Linear(relation_dim, relation_dim),
         )
         self.mlp_temporal_gru = nn.GRUCell(relation_dim, relation_dim)
+        self.dual_linear_encoder = nn.Linear(flat_obs_dim, relation_dim)
+        self.dual_condition_fuser = nn.Linear(2 * relation_dim, relation_dim)
         self.l0_log_alpha = (
             nn.Parameter(th.full((flat_obs_dim,), 2.0)) if self.l0_drop else None
         )
@@ -1800,6 +1857,69 @@ class PublicTransformerRelationCapturer(nn.Module):
             enemy_mask,
         )
 
+    def _forward_dual_relation(self, self_feat, ally_feat, enemy_feat):
+        batch_size, n_agents, _ = self_feat.shape
+        flat_obs = self._flatten_semantic_slots(self_feat, ally_feat, enemy_feat)
+        branch_gates = self._branch_keep_gates(flat_obs)
+
+        linear_input = flat_obs * branch_gates[0].view(1, 1, -1)
+        linear_embed = self.dual_linear_encoder(linear_input)
+
+        attention_input = flat_obs * branch_gates[1].view(1, 1, -1)
+        attention_self, attention_ally, attention_enemy = self._semantic_slot_views(
+            attention_input
+        )
+        # Separate encoders and the fixed observation layout already identify
+        # self, ally, and enemy roles; no redundant role embedding is added.
+        self_token = self.self_full_obs_encoder(attention_self)
+        ally_tokens = self.ally_full_obs_encoder(attention_ally)
+        enemy_public_tokens = self.enemy_full_obs_encoder(attention_enemy)
+
+        tokens = th.cat(
+            [self_token.unsqueeze(2), ally_tokens, enemy_public_tokens],
+            dim=2,
+        )
+        flat_tokens = tokens.reshape(
+            batch_size * n_agents, tokens.size(2), self.relation_dim
+        )
+        # Entity slots are part of the observation itself. The baseline lets
+        # attention learn from zero/unseen slots instead of imposing a
+        # visibility-derived semantic mask.
+        full_mask = th.ones(
+            batch_size * n_agents,
+            tokens.size(2),
+            dtype=th.bool,
+            device=tokens.device,
+        )
+        for layer in self.transformer_layers:
+            flat_tokens = layer(flat_tokens, full_mask)
+        encoded = flat_tokens.view(
+            batch_size, n_agents, tokens.size(2), self.relation_dim
+        )
+        attention_embed = encoded[:, :, 0]
+        relation_hidden = self.dual_condition_fuser(
+            th.cat([linear_embed, attention_embed], dim=-1)
+        )
+        condition = (
+            relation_hidden
+            if self.output_dim == self.relation_dim
+            else self.output_encoder(relation_hidden)
+        )
+
+        ally_mask = ally_feat.abs().sum(dim=-1) > 0
+        enemy_mask = enemy_feat.abs().sum(dim=-1) > 0
+        enemy_tokens = self.enemy_encoder(enemy_feat) * enemy_mask.unsqueeze(-1).float()
+        self.latest_encoded_self_token = attention_embed
+        self.latest_encoded_enemy_tokens = enemy_tokens
+        return (
+            condition,
+            relation_hidden,
+            self._masked_uniform_attention(ally_mask),
+            self._masked_uniform_attention(enemy_mask),
+            enemy_tokens,
+            enemy_mask,
+        )
+
     def _build_semantic_slot_layout(self):
         """Describe every raw SMAC observation scalar as an independent route slot."""
         names = []
@@ -1943,6 +2063,169 @@ class PublicTransformerRelationCapturer(nn.Module):
     @staticmethod
     def _centered_encode(encoder, values):
         return encoder(values) - encoder(th.zeros_like(values))
+
+    @property
+    def branch_drop_active(self):
+        return self.branch_drop_mode is not None
+
+    def branch_drop_needs_audit(self, t_env):
+        return (
+            self.branch_drop_active
+            and not bool(self.branch_drop_frozen.item())
+            and int(t_env) >= self.branch_drop_warmup_steps
+        )
+
+    def set_branch_drop_audit(self, branch_index=None, group_index=None, keep=None):
+        if branch_index is None:
+            self._branch_audit_branch = None
+            self._branch_audit_group = None
+            self._branch_audit_keep = None
+            return
+        branch_index = int(branch_index)
+        group_index = int(group_index)
+        if branch_index not in (0, 1):
+            raise ValueError("Branch audit index must be 0 (linear) or 1 (attention)")
+        if not 0 <= group_index < self.semantic_field_count:
+            raise ValueError(
+                "Branch audit group {} is outside [0, {})".format(
+                    group_index, self.semantic_field_count
+                )
+            )
+        self._branch_audit_branch = branch_index
+        self._branch_audit_group = group_index
+        self._branch_audit_keep = float(bool(keep))
+
+    def _branch_keep_gates(self, reference):
+        gates = self.branch_keep_mask.to(device=reference.device, dtype=reference.dtype).clone()
+        if self._branch_audit_branch is not None:
+            field_ids = self.semantic_field_ids.to(reference.device)
+            gates[self._branch_audit_branch] = gates[
+                self._branch_audit_branch
+            ].masked_fill(
+                field_ids == self._branch_audit_group,
+                self._branch_audit_keep,
+            )
+        return gates
+
+    def branch_group_keep_state(self):
+        states = []
+        for group_index in range(self.semantic_field_count):
+            group_mask = self.semantic_field_ids == group_index
+            states.append(self.branch_keep_mask[:, group_mask].mean(dim=1))
+        return th.stack(states, dim=1)
+
+    def update_branch_drop(self, t_env, group_scores):
+        if not self.branch_drop_needs_audit(t_env):
+            return False
+        scores = group_scores.detach().to(self.branch_drop_score)
+        if scores.shape != self.branch_drop_score.shape:
+            raise ValueError(
+                "Branch DROP scores have shape {}; expected {}".format(
+                    tuple(scores.shape), tuple(self.branch_drop_score.shape)
+                )
+            )
+        initialized = self.branch_drop_score_initialized
+        self.branch_drop_score.copy_(
+            th.where(
+                initialized,
+                self.branch_drop_ema * self.branch_drop_score
+                + (1.0 - self.branch_drop_ema) * scores,
+                scores,
+            )
+        )
+        initialized.fill_(True)
+
+        group_keep = self.branch_group_keep_state() >= 0.5
+        change = None
+        if self.branch_drop_mode == "td_benefit":
+            restore = (~group_keep) & (
+                self.branch_drop_score > self.branch_drop_task_margin
+            )
+            if bool(restore.any().item()):
+                candidate = self.branch_drop_score.masked_fill(~restore, float("-inf"))
+                flat_index = int(candidate.argmax().item())
+                change = (flat_index // self.semantic_field_count, flat_index % self.semantic_field_count, 1.0)
+            else:
+                drop = group_keep & (
+                    self.branch_drop_score < -self.branch_drop_task_margin
+                )
+                if bool(drop.any().item()):
+                    candidate = self.branch_drop_score.masked_fill(~drop, float("inf"))
+                    flat_index = int(candidate.argmin().item())
+                    change = (flat_index // self.semantic_field_count, flat_index % self.semantic_field_count, 0.0)
+        else:
+            restore = (~group_keep) & (
+                self.branch_drop_score
+                > 1.5 * self.branch_drop_parameter_threshold
+            )
+            if bool(restore.any().item()):
+                candidate = self.branch_drop_score.masked_fill(~restore, float("-inf"))
+                flat_index = int(candidate.argmax().item())
+                change = (flat_index // self.semantic_field_count, flat_index % self.semantic_field_count, 1.0)
+            else:
+                drop = group_keep & (
+                    self.branch_drop_score < self.branch_drop_parameter_threshold
+                )
+                if bool(drop.any().item()):
+                    candidate = self.branch_drop_score.masked_fill(~drop, float("inf"))
+                    flat_index = int(candidate.argmin().item())
+                    change = (flat_index // self.semantic_field_count, flat_index % self.semantic_field_count, 0.0)
+
+        changed = False
+        if change is not None:
+            branch_index, group_index, keep_value = change
+            group_mask = self.semantic_field_ids == group_index
+            previous = self.branch_keep_mask[branch_index, group_mask].clone()
+            self.branch_keep_mask[branch_index, group_mask] = keep_value
+            changed = bool((previous != keep_value).any().item())
+            if changed:
+                self.branch_drop_version.add_(1)
+                # Every score is conditional on the current pair of branch
+                # masks. After one change, discard their EMA initialization so
+                # the next audit cannot cascade from stale redundancy scores.
+                self.branch_drop_score_initialized.fill_(False)
+        self.branch_drop_last_update_t.fill_(int(t_env))
+        if int(t_env) >= self.branch_drop_freeze_steps:
+            self.branch_drop_frozen.fill_(True)
+        return changed
+
+    def copy_branch_drop_from(self, source):
+        self.branch_keep_mask.copy_(source.branch_keep_mask)
+        self.branch_drop_score.copy_(source.branch_drop_score)
+        self.branch_drop_score_initialized.copy_(source.branch_drop_score_initialized)
+        self.branch_drop_frozen.copy_(source.branch_drop_frozen)
+        self.branch_drop_version.copy_(source.branch_drop_version)
+        self.branch_drop_last_update_t.copy_(source.branch_drop_last_update_t)
+
+    def branch_drop_stats(self):
+        linear = self.branch_keep_mask[0]
+        attention = self.branch_keep_mask[1]
+        return {
+            "branch_drop_linear_keep_fraction": linear.mean().detach(),
+            "branch_drop_attention_keep_fraction": attention.mean().detach(),
+            "branch_drop_both_keep_fraction": (linear * attention).mean().detach(),
+            "branch_drop_both_drop_fraction": ((1.0 - linear) * (1.0 - attention)).mean().detach(),
+            "branch_drop_score_mean": self.branch_drop_score.mean().detach(),
+            "branch_drop_score_min": self.branch_drop_score.min().detach(),
+            "branch_drop_score_max": self.branch_drop_score.max().detach(),
+            "branch_drop_version": self.branch_drop_version.float().detach(),
+            "branch_drop_frozen": self.branch_drop_frozen.float().detach(),
+        }
+
+    def branch_drop_summary(self):
+        def dropped(branch_index):
+            return [
+                name
+                for name, keep in zip(
+                    self.semantic_names, self.branch_keep_mask[branch_index].tolist()
+                )
+                if keep < 0.5
+            ]
+        return "LINEAR_DROP=[{}] | ATTN_DROP=[{}] | frozen={}".format(
+            ",".join(dropped(0)),
+            ",".join(dropped(1)),
+            int(self.branch_drop_frozen.item()),
+        )
 
     @property
     def semantic_router_active(self):
@@ -3516,6 +3799,10 @@ class PublicTransformerRelationCapturer(nn.Module):
             prev_ally_feat,
             prev_enemy_feat,
         )
+        if self.relation_encoder_style == "dual":
+            return self._forward_dual_relation(
+                self_feat, ally_feat, enemy_feat
+            )
         if self.relation_encoder_style == "mlp":
             return self._forward_mlp_relation(
                 self_feat, ally_feat, enemy_feat, prev_relation_hidden
@@ -3743,6 +4030,12 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         mlp_stochastic_exploration_floor=0.05,
         mlp_independent_audit=False,
         mlp_binary_audit_mode=None,
+        branch_drop_mode=None,
+        branch_drop_task_margin=0.01,
+        branch_drop_parameter_threshold=0.01,
+        branch_drop_ema=0.9,
+        branch_drop_warmup_steps=250000,
+        branch_drop_freeze_steps=5000000,
     ):
         nn.Module.__init__(self)
         self.n_agents = n_agents
@@ -3812,8 +4105,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         if self.semantic_router_sparse_coef < 0.0:
             raise ValueError("semantic_router_sparse_coef must be non-negative")
         self.relation_encoder_style = str(relation_encoder_style)
-        if self.relation_encoder_style not in {"transformer", "mlp"}:
-            raise ValueError("relation_encoder_style must be transformer or mlp")
+        if self.relation_encoder_style not in {"transformer", "mlp", "dual"}:
+            raise ValueError("relation_encoder_style must be transformer, mlp, or dual")
         self.l0_drop = bool(l0_drop)
         self.mlp_soft_gate = bool(mlp_soft_gate)
         self.mlp_stochastic_hard_gate = bool(mlp_stochastic_hard_gate)
@@ -3834,6 +4127,21 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             raise ValueError(
                 "mlp_binary_audit_mode must be td_loss, generated_parameters, or None"
             )
+        self.branch_drop_mode = branch_drop_mode
+        if self.branch_drop_mode not in {None, "td_benefit", "generated_parameters"}:
+            raise ValueError(
+                "branch_drop_mode must be td_benefit, generated_parameters, or None"
+            )
+        self.branch_drop_task_margin = float(branch_drop_task_margin)
+        self.branch_drop_parameter_threshold = float(
+            branch_drop_parameter_threshold
+        )
+        self.branch_drop_ema = float(branch_drop_ema)
+        self.branch_drop_warmup_steps = int(branch_drop_warmup_steps)
+        self.branch_drop_freeze_steps = int(branch_drop_freeze_steps)
+        self._branch_audit_branch = None
+        self._branch_audit_group = None
+        self._branch_audit_keep = None
         self._semantic_full_input_audit = False
         self._semantic_audit_dropped_group = None
         self._semantic_test_mode = False
@@ -3862,6 +4170,19 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             field_ids, field_count = _semantic_field_ids(self.semantic_fields)
         self.register_buffer("semantic_field_ids", field_ids)
         self.semantic_field_count = field_count
+        self.register_buffer(
+            "branch_keep_mask", th.ones(2, len(self.semantic_names))
+        )
+        self.register_buffer(
+            "branch_drop_score", th.zeros(2, self.semantic_field_count)
+        )
+        self.register_buffer(
+            "branch_drop_score_initialized",
+            th.zeros(2, self.semantic_field_count, dtype=th.bool),
+        )
+        self.register_buffer("branch_drop_frozen", th.tensor(False))
+        self.register_buffer("branch_drop_version", th.tensor(0, dtype=th.long))
+        self.register_buffer("branch_drop_last_update_t", th.tensor(-1, dtype=th.long))
         self.register_buffer("semantic_manual_token_route", manual_route)
         self.register_buffer("semantic_token_route", manual_route.clone())
         self.register_buffer("semantic_bias_route", 1.0 - manual_route.clone())
@@ -3998,6 +4319,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             nn.Linear(relation_dim, relation_dim),
         )
         self.mlp_temporal_gru = nn.GRUCell(relation_dim, relation_dim)
+        self.dual_linear_encoder = nn.Linear(self.expected_obs_dim, relation_dim)
+        self.dual_condition_fuser = nn.Linear(2 * relation_dim, relation_dim)
         self.l0_log_alpha = (
             nn.Parameter(th.full((self.expected_obs_dim,), 2.0))
             if self.l0_drop
@@ -4055,6 +4378,95 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self._cache_unrouted_grf_entity_tokens(obs)
         self.latest_context_token = relation_embed
         return self.output_encoder(next_relation_hidden), next_relation_hidden
+
+    def _forward_dual_relation(self, obs):
+        batch_size, n_agents, _ = obs.shape
+        flat_obs = obs[..., : self.expected_obs_dim]
+        branch_gates = self._branch_keep_gates(flat_obs)
+
+        linear_input = flat_obs * branch_gates[0].view(1, 1, -1)
+        linear_embed = self.dual_linear_encoder(linear_input)
+
+        attention_input = flat_obs * branch_gates[1].view(1, 1, -1)
+        (
+            self_pos,
+            ally_pos,
+            self_dir,
+            ally_dir,
+            opponent_pos,
+            opponent_dir,
+            ball,
+        ) = self._split_obs(attention_input)
+        (
+            public_self_pos,
+            public_ally_pos,
+            public_self_dir,
+            public_ally_dir,
+            public_opponent_pos,
+            public_opponent_dir,
+            public_ball,
+        ) = self._build_public_features(
+            self_pos,
+            ally_pos,
+            self_dir,
+            ally_dir,
+            opponent_pos,
+            opponent_dir,
+            ball,
+        )
+        self_token = self.self_encoder(
+            th.cat([public_self_pos, public_self_dir], dim=-1)
+        )
+        ally_token = self.ally_encoder(
+            th.cat([public_ally_pos, public_ally_dir], dim=-1)
+        )
+        opponent_token = self.opponent_encoder(
+            th.cat([public_opponent_pos, public_opponent_dir], dim=-1)
+        )
+        ball_token = self.ball_encoder(public_ball).unsqueeze(2)
+        entity_tokens = th.cat(
+            [
+                self_token.unsqueeze(2),
+                ally_token,
+                opponent_token,
+                ball_token,
+            ],
+            dim=2,
+        )
+        tokens = entity_tokens
+        flat_tokens = tokens.reshape(
+            batch_size * n_agents, tokens.size(2), self.relation_dim
+        )
+        full_mask = th.ones(
+            batch_size * n_agents,
+            tokens.size(2),
+            dtype=th.bool,
+            device=obs.device,
+        )
+        for layer in self.transformer_layers:
+            flat_tokens = layer(flat_tokens, full_mask)
+        encoded = flat_tokens.view(
+            batch_size, n_agents, tokens.size(2), self.relation_dim
+        )
+        encoded_entities = encoded
+        attention_embed = encoded_entities[:, :, 0]
+        next_relation_hidden = self.dual_condition_fuser(
+            th.cat([linear_embed, attention_embed], dim=-1)
+        )
+        ally_start = 1
+        opponent_start = ally_start + (self.n_agents - 1)
+        ball_index = opponent_start + self.n_opponents
+        self.latest_self_token = encoded_entities[:, :, 0]
+        self.latest_ally_tokens = encoded_entities[:, :, ally_start:opponent_start]
+        self.latest_opponent_tokens = encoded_entities[:, :, opponent_start:ball_index]
+        self.latest_ball_token = encoded_entities[:, :, ball_index]
+        self.latest_context_token = attention_embed
+        condition = (
+            next_relation_hidden
+            if self.output_dim == self.relation_dim
+            else self.output_encoder(next_relation_hidden)
+        )
+        return condition, next_relation_hidden
 
     def _build_semantic_slot_layout(self):
         names = []
@@ -4475,6 +4887,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.latest_aux_loss = None
         self.latest_aux_stats = {}
         batch_size, n_agents, _ = obs.shape
+        if self.relation_encoder_style == "dual":
+            return self._forward_dual_relation(obs)
         if self.relation_encoder_style == "mlp":
             return self._forward_mlp_relation(obs, prev_relation_hidden)
         if self.semantic_router_active:
@@ -6525,6 +6939,29 @@ class CleanHyperAgent(nn.Module):
                 0.05,
             )
         )
+        self.branch_drop_task_margin = float(
+            getattr(args, "clean_branch_drop_task_margin", 0.01)
+        )
+        self.branch_drop_parameter_threshold = float(
+            getattr(args, "clean_branch_drop_parameter_threshold", 0.01)
+        )
+        self.branch_drop_ema = float(
+            getattr(args, "clean_branch_drop_ema", 0.9)
+        )
+        self.branch_drop_warmup_steps = int(
+            getattr(
+                args,
+                "clean_branch_drop_warmup_steps",
+                self.semantic_router_warmup_steps,
+            )
+        )
+        self.branch_drop_freeze_steps = int(
+            getattr(
+                args,
+                "clean_branch_drop_freeze_steps",
+                self.semantic_router_freeze_steps,
+            )
+        )
         self.semantic_router_fixed_mask = getattr(
             args, "clean_semantic_router_fixed_mask", ""
         )
@@ -7771,6 +8208,7 @@ class CleanHyperAgent(nn.Module):
                 "grf_abs_public_private_bias_transformer_decision_maker_hypercond",
                 *GRF_SEMANTIC_ROUTER_VARIANTS,
                 *GRF_MLP_RELATION_VARIANTS,
+                *GRF_DUAL_BRANCH_VARIANTS,
             },
             semantic_router_mode=GRF_SEMANTIC_ROUTER_MODE_BY_MODEL.get(
                 self.model_type
@@ -7789,7 +8227,7 @@ class CleanHyperAgent(nn.Module):
             in GRF_SEMANTIC_ROUTER_SHARED_FIELD_VARIANTS
             or self.model_type in GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL,
             semantic_router_share_by_side=self.model_type
-            in GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL,
+            in (set(GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL) | GRF_DUAL_BRANCH_VARIANTS),
             semantic_router_fixed_mask=(
                 self.semantic_router_fixed_mask
                 if self.model_type in GRF_SEMANTIC_ROUTER_FIXED_MASK_VARIANTS
@@ -7804,7 +8242,9 @@ class CleanHyperAgent(nn.Module):
             semantic_router_keep_threshold=self.semantic_router_keep_threshold,
             semantic_router_sparse_coef=self.semantic_router_sparse_coef,
             relation_encoder_style=(
-                "mlp"
+                "dual"
+                if self.model_type in GRF_DUAL_BRANCH_VARIANTS
+                else "mlp"
                 if self.model_type in GRF_MLP_RELATION_VARIANTS
                 else "transformer"
             ),
@@ -7824,6 +8264,14 @@ class CleanHyperAgent(nn.Module):
             mlp_binary_audit_mode=GRF_MLP_BINARY_AUDIT_MODE_BY_MODEL.get(
                 self.model_type
             ),
+            branch_drop_mode=GRF_DUAL_BRANCH_DROP_MODE_BY_MODEL.get(
+                self.model_type
+            ),
+            branch_drop_task_margin=self.branch_drop_task_margin,
+            branch_drop_parameter_threshold=self.branch_drop_parameter_threshold,
+            branch_drop_ema=self.branch_drop_ema,
+            branch_drop_warmup_steps=self.branch_drop_warmup_steps,
+            branch_drop_freeze_steps=self.branch_drop_freeze_steps,
         )
 
     def _init_grf_decision_maker_head(self):
@@ -7999,7 +8447,7 @@ class CleanHyperAgent(nn.Module):
                 in SEMANTIC_ROUTER_SHARED_FIELD_VARIANTS
                 or self.model_type in MLP_BINARY_AUDIT_MODE_BY_MODEL,
                 semantic_router_share_by_side=self.model_type
-                in MLP_BINARY_AUDIT_MODE_BY_MODEL,
+                in (set(MLP_BINARY_AUDIT_MODE_BY_MODEL) | RPG_DUAL_BRANCH_VARIANTS),
                 semantic_router_drop_mode=SEMANTIC_ROUTER_DROP_MODE_BY_MODEL.get(
                     self.model_type, "none"
                 ),
@@ -8012,7 +8460,9 @@ class CleanHyperAgent(nn.Module):
                     else ""
                 ),
                 relation_encoder_style=(
-                    "mlp"
+                    "dual"
+                    if self.model_type in RPG_DUAL_BRANCH_VARIANTS
+                    else "mlp"
                     if self.model_type in MLP_RELATION_VARIANTS
                     else "transformer"
                 ),
@@ -8029,6 +8479,14 @@ class CleanHyperAgent(nn.Module):
                 mlp_binary_audit_mode=MLP_BINARY_AUDIT_MODE_BY_MODEL.get(
                     self.model_type
                 ),
+                branch_drop_mode=RPG_DUAL_BRANCH_DROP_MODE_BY_MODEL.get(
+                    self.model_type
+                ),
+                branch_drop_task_margin=self.branch_drop_task_margin,
+                branch_drop_parameter_threshold=self.branch_drop_parameter_threshold,
+                branch_drop_ema=self.branch_drop_ema,
+                branch_drop_warmup_steps=self.branch_drop_warmup_steps,
+                branch_drop_freeze_steps=self.branch_drop_freeze_steps,
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(
@@ -8672,8 +9130,12 @@ class CleanHyperAgent(nn.Module):
         semantic_router = getattr(self, "rpg_relation_capturer", None)
         if (
             self.capture_semantic_parameter_graph
-            and getattr(semantic_router, "semantic_router_mode", None)
-            in {"parameter_sensitivity", "binary_parameter_audit"}
+            and (
+                getattr(semantic_router, "semantic_router_mode", None)
+                in {"parameter_sensitivity", "binary_parameter_audit"}
+                or getattr(semantic_router, "branch_drop_mode", None)
+                == "generated_parameters"
+            )
         ):
             generated_head = th.cat(
                 [
@@ -8723,8 +9185,12 @@ class CleanHyperAgent(nn.Module):
         semantic_router = getattr(self, "rpg_relation_capturer", None)
         if (
             self.capture_semantic_parameter_graph
-            and getattr(semantic_router, "semantic_router_mode", None)
-            in {"parameter_sensitivity", "binary_parameter_audit"}
+            and (
+                getattr(semantic_router, "semantic_router_mode", None)
+                in {"parameter_sensitivity", "binary_parameter_audit"}
+                or getattr(semantic_router, "branch_drop_mode", None)
+                == "generated_parameters"
+            )
         ):
             generated_branch = th.cat(
                 [
@@ -9061,8 +9527,12 @@ class CleanHyperAgent(nn.Module):
         )
         interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(batch_size * n_agents, 1, 1)
         capture_parameter_graph = (
-            SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
-            in {"parameter_sensitivity", "binary_parameter_audit"}
+            (
+                SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
+                in {"parameter_sensitivity", "binary_parameter_audit"}
+                or self.model_type
+                == "rpg_dual_branch_parameter_invariant_drop_hypercond"
+            )
             and self.capture_semantic_parameter_graph
         )
         generated_head = None
@@ -9427,8 +9897,12 @@ class CleanHyperAgent(nn.Module):
                 batch_size * n_agents, 1, self.rpg_n_ego_actions
             )
             if (
-                SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
-                in {"parameter_sensitivity", "binary_parameter_audit"}
+                (
+                    SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
+                    in {"parameter_sensitivity", "binary_parameter_audit"}
+                    or self.model_type
+                    == "rpg_dual_branch_parameter_invariant_drop_hypercond"
+                )
                 and self.capture_semantic_parameter_graph
             ):
                 generated_ego_head = th.cat(
@@ -9660,8 +10134,12 @@ class CleanHyperAgent(nn.Module):
             q_attack = self.rpg_interaction_scorer(interaction_input).squeeze(-1)
         q_attack = q_attack.masked_fill(~enemy_mask.bool(), 0.0)
         if (
-            SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
-            in {"parameter_sensitivity", "binary_parameter_audit"}
+            (
+                SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
+                in {"parameter_sensitivity", "binary_parameter_audit"}
+                or self.model_type
+                == "rpg_dual_branch_parameter_invariant_drop_hypercond"
+            )
             and self.capture_semantic_parameter_graph
             and generated_ego_head is not None
             and self.latest_generated_interaction_head_graph is not None
