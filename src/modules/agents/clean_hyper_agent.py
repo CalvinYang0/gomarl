@@ -238,10 +238,16 @@ RPG_DUAL_BRANCH_VARIANTS = {
     "rpg_dual_branch_relation_hypercond",
     "rpg_dual_branch_td_benefit_drop_hypercond",
     "rpg_dual_branch_parameter_invariant_drop_hypercond",
+    "rpg_dual_branch_cstg_gate_hypercond",
+    "rpg_dual_branch_bayesg_gate_hypercond",
 }
 RPG_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
     "rpg_dual_branch_td_benefit_drop_hypercond": "td_benefit",
     "rpg_dual_branch_parameter_invariant_drop_hypercond": "generated_parameters",
+}
+RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
+    "rpg_dual_branch_cstg_gate_hypercond": "cstg",
+    "rpg_dual_branch_bayesg_gate_hypercond": "bayesg",
 }
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",
@@ -406,10 +412,16 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_relation_hypercond",
     "grf_abs_dual_branch_td_benefit_drop_hypercond",
     "grf_abs_dual_branch_parameter_invariant_drop_hypercond",
+    "grf_abs_dual_branch_cstg_gate_hypercond",
+    "grf_abs_dual_branch_bayesg_gate_hypercond",
 }
 GRF_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
     "grf_abs_dual_branch_td_benefit_drop_hypercond": "td_benefit",
     "grf_abs_dual_branch_parameter_invariant_drop_hypercond": "generated_parameters",
+}
+GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
+    "grf_abs_dual_branch_cstg_gate_hypercond": "cstg",
+    "grf_abs_dual_branch_bayesg_gate_hypercond": "bayesg",
 }
 GRF_DECISION_MAKER_VARIANTS |= GRF_MLP_RELATION_VARIANTS
 GRF_TWO_LAYER_HEAD_VARIANTS = {
@@ -725,6 +737,73 @@ def _neg_inf_like(tensor):
     if tensor.is_floating_point():
         return th.finfo(tensor.dtype).min
     return -9999999
+
+
+class ObservationConditionedBranchGate(nn.Module):
+    """Generate independent Linear/Attention slot gates from the current obs."""
+
+    def __init__(
+        self,
+        obs_dim,
+        hidden_dim,
+        mode,
+        cstg_sigma=0.5,
+        bayesg_temperature=0.5,
+        bayesg_eval_threshold=0.08,
+    ):
+        super().__init__()
+        if mode not in {"cstg", "bayesg"}:
+            raise ValueError("dynamic branch gate mode must be cstg or bayesg")
+        if cstg_sigma < 0.0:
+            raise ValueError("cstg_sigma must be non-negative")
+        if bayesg_temperature <= 0.0:
+            raise ValueError("bayesg_temperature must be positive")
+        if not 0.0 <= bayesg_eval_threshold <= 1.0:
+            raise ValueError("bayesg_eval_threshold must be in [0, 1]")
+
+        self.obs_dim = int(obs_dim)
+        self.mode = mode
+        self.cstg_sigma = float(cstg_sigma)
+        self.bayesg_temperature = float(bayesg_temperature)
+        self.bayesg_eval_threshold = float(bayesg_eval_threshold)
+        hidden_dim = int(hidden_dim)
+        if hidden_dim > 0:
+            self.gate_network = nn.Sequential(
+                nn.Linear(self.obs_dim, hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(hidden_dim, 2 * self.obs_dim),
+            )
+        else:
+            self.gate_network = nn.Linear(self.obs_dim, 2 * self.obs_dim)
+
+    def forward(self, obs, sample=True):
+        logits = self.gate_network(obs).view(
+            *obs.shape[:-1], 2, self.obs_dim
+        )
+        probability = th.sigmoid(logits)
+
+        if self.mode == "cstg":
+            if sample and self.cstg_sigma > 0.0:
+                # Conditional-STG: the context-dependent sigmoid mean is
+                # perturbed by per-sample Gaussian noise, then hard-clipped.
+                gate = probability + self.cstg_sigma * th.randn_like(probability)
+                gate = gate.clamp(0.0, 1.0)
+            else:
+                gate = probability
+        elif sample:
+            # BayesG's GraphMaskGenerator uses a Gumbel-sigmoid relaxation in
+            # training and a hard probability threshold for evaluation.
+            uniform = th.rand_like(logits).clamp_(1e-8, 1.0 - 1e-8)
+            gumbel = -th.log(-th.log(uniform))
+            gate = th.sigmoid(
+                (logits + gumbel) / self.bayesg_temperature
+            )
+        else:
+            gate = (probability > self.bayesg_eval_threshold).to(obs.dtype)
+
+        # Put the two branches first so the dual encoder can index them while
+        # preserving arbitrary leading batch/timestep/agent dimensions.
+        return gate.movedim(-2, 0), probability.movedim(-2, 0)
 
 
 class MLPHyperParameterGenerator(nn.Module):
@@ -1306,6 +1385,11 @@ class PublicTransformerRelationCapturer(nn.Module):
         branch_drop_ema=0.9,
         branch_drop_warmup_steps=250000,
         branch_drop_freeze_steps=5000000,
+        dynamic_branch_gate_mode=None,
+        dynamic_branch_gate_hidden_dim=64,
+        cstg_gate_sigma=0.5,
+        bayesg_gate_temperature=0.5,
+        bayesg_gate_eval_threshold=0.08,
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -1424,6 +1508,19 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.branch_drop_ema = float(branch_drop_ema)
         self.branch_drop_warmup_steps = int(branch_drop_warmup_steps)
         self.branch_drop_freeze_steps = int(branch_drop_freeze_steps)
+        self.dynamic_branch_gate_mode = dynamic_branch_gate_mode
+        if self.dynamic_branch_gate_mode not in {None, "cstg", "bayesg"}:
+            raise ValueError(
+                "dynamic_branch_gate_mode must be cstg, bayesg, or None"
+            )
+        if self.dynamic_branch_gate_mode is not None and self.branch_drop_mode is not None:
+            raise ValueError(
+                "dynamic observation gates and offline branch drop cannot be enabled together"
+            )
+        self.dynamic_branch_gate_hidden_dim = int(dynamic_branch_gate_hidden_dim)
+        self.cstg_gate_sigma = float(cstg_gate_sigma)
+        self.bayesg_gate_temperature = float(bayesg_gate_temperature)
+        self.bayesg_gate_eval_threshold = float(bayesg_gate_eval_threshold)
         self._branch_audit_branch = None
         self._branch_audit_group = None
         self._branch_audit_keep = None
@@ -1678,6 +1775,18 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.mlp_temporal_gru = nn.GRUCell(relation_dim, relation_dim)
         self.dual_linear_encoder = nn.Linear(flat_obs_dim, relation_dim)
         self.dual_condition_fuser = nn.Linear(2 * relation_dim, relation_dim)
+        self.dynamic_branch_gate = (
+            ObservationConditionedBranchGate(
+                obs_dim=flat_obs_dim,
+                hidden_dim=self.dynamic_branch_gate_hidden_dim,
+                mode=self.dynamic_branch_gate_mode,
+                cstg_sigma=self.cstg_gate_sigma,
+                bayesg_temperature=self.bayesg_gate_temperature,
+                bayesg_eval_threshold=self.bayesg_gate_eval_threshold,
+            )
+            if self.dynamic_branch_gate_mode is not None
+            else None
+        )
         self.l0_log_alpha = (
             nn.Parameter(th.full((flat_obs_dim,), 2.0)) if self.l0_drop else None
         )
@@ -1862,10 +1971,10 @@ class PublicTransformerRelationCapturer(nn.Module):
         flat_obs = self._flatten_semantic_slots(self_feat, ally_feat, enemy_feat)
         branch_gates = self._branch_keep_gates(flat_obs)
 
-        linear_input = flat_obs * branch_gates[0].view(1, 1, -1)
+        linear_input = self._apply_branch_gate(flat_obs, branch_gates, 0)
         linear_embed = self.dual_linear_encoder(linear_input)
 
-        attention_input = flat_obs * branch_gates[1].view(1, 1, -1)
+        attention_input = self._apply_branch_gate(flat_obs, branch_gates, 1)
         attention_self, attention_ally, attention_enemy = self._semantic_slot_views(
             attention_input
         )
@@ -2096,6 +2205,32 @@ class PublicTransformerRelationCapturer(nn.Module):
         self._branch_audit_keep = float(bool(keep))
 
     def _branch_keep_gates(self, reference):
+        if self.dynamic_branch_gate is not None:
+            gates, probabilities = self.dynamic_branch_gate(
+                reference, sample=not self._semantic_test_mode
+            )
+            self.latest_aux_stats.update(
+                {
+                    "dynamic_gate_linear_mean": gates[0].mean().detach(),
+                    "dynamic_gate_attention_mean": gates[1].mean().detach(),
+                    "dynamic_gate_linear_hard_keep_fraction": (
+                        gates[0] > 0.5
+                    ).float().mean().detach(),
+                    "dynamic_gate_attention_hard_keep_fraction": (
+                        gates[1] > 0.5
+                    ).float().mean().detach(),
+                    "dynamic_gate_linear_probability_mean": probabilities[0]
+                    .mean()
+                    .detach(),
+                    "dynamic_gate_attention_probability_mean": probabilities[1]
+                    .mean()
+                    .detach(),
+                    "dynamic_gate_probability_min": probabilities.min().detach(),
+                    "dynamic_gate_probability_max": probabilities.max().detach(),
+                }
+            )
+            return gates
+
         gates = self.branch_keep_mask.to(device=reference.device, dtype=reference.dtype).clone()
         if self._branch_audit_branch is not None:
             field_ids = self.semantic_field_ids.to(reference.device)
@@ -2106,6 +2241,13 @@ class PublicTransformerRelationCapturer(nn.Module):
                 self._branch_audit_keep,
             )
         return gates
+
+    @staticmethod
+    def _apply_branch_gate(reference, branch_gates, branch_index):
+        gate = branch_gates[branch_index]
+        if gate.dim() == 1:
+            gate = gate.view(*([1] * (reference.dim() - 1)), -1)
+        return reference * gate
 
     def branch_group_keep_state(self):
         states = []
@@ -4036,6 +4178,11 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         branch_drop_ema=0.9,
         branch_drop_warmup_steps=250000,
         branch_drop_freeze_steps=5000000,
+        dynamic_branch_gate_mode=None,
+        dynamic_branch_gate_hidden_dim=64,
+        cstg_gate_sigma=0.5,
+        bayesg_gate_temperature=0.5,
+        bayesg_gate_eval_threshold=0.08,
     ):
         nn.Module.__init__(self)
         self.n_agents = n_agents
@@ -4139,6 +4286,19 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.branch_drop_ema = float(branch_drop_ema)
         self.branch_drop_warmup_steps = int(branch_drop_warmup_steps)
         self.branch_drop_freeze_steps = int(branch_drop_freeze_steps)
+        self.dynamic_branch_gate_mode = dynamic_branch_gate_mode
+        if self.dynamic_branch_gate_mode not in {None, "cstg", "bayesg"}:
+            raise ValueError(
+                "dynamic_branch_gate_mode must be cstg, bayesg, or None"
+            )
+        if self.dynamic_branch_gate_mode is not None and self.branch_drop_mode is not None:
+            raise ValueError(
+                "dynamic observation gates and offline branch drop cannot be enabled together"
+            )
+        self.dynamic_branch_gate_hidden_dim = int(dynamic_branch_gate_hidden_dim)
+        self.cstg_gate_sigma = float(cstg_gate_sigma)
+        self.bayesg_gate_temperature = float(bayesg_gate_temperature)
+        self.bayesg_gate_eval_threshold = float(bayesg_gate_eval_threshold)
         self._branch_audit_branch = None
         self._branch_audit_group = None
         self._branch_audit_keep = None
@@ -4321,6 +4481,18 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.mlp_temporal_gru = nn.GRUCell(relation_dim, relation_dim)
         self.dual_linear_encoder = nn.Linear(self.expected_obs_dim, relation_dim)
         self.dual_condition_fuser = nn.Linear(2 * relation_dim, relation_dim)
+        self.dynamic_branch_gate = (
+            ObservationConditionedBranchGate(
+                obs_dim=self.expected_obs_dim,
+                hidden_dim=self.dynamic_branch_gate_hidden_dim,
+                mode=self.dynamic_branch_gate_mode,
+                cstg_sigma=self.cstg_gate_sigma,
+                bayesg_temperature=self.bayesg_gate_temperature,
+                bayesg_eval_threshold=self.bayesg_gate_eval_threshold,
+            )
+            if self.dynamic_branch_gate_mode is not None
+            else None
+        )
         self.l0_log_alpha = (
             nn.Parameter(th.full((self.expected_obs_dim,), 2.0))
             if self.l0_drop
@@ -4384,10 +4556,10 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         flat_obs = obs[..., : self.expected_obs_dim]
         branch_gates = self._branch_keep_gates(flat_obs)
 
-        linear_input = flat_obs * branch_gates[0].view(1, 1, -1)
+        linear_input = self._apply_branch_gate(flat_obs, branch_gates, 0)
         linear_embed = self.dual_linear_encoder(linear_input)
 
-        attention_input = flat_obs * branch_gates[1].view(1, 1, -1)
+        attention_input = self._apply_branch_gate(flat_obs, branch_gates, 1)
         (
             self_pos,
             ally_pos,
@@ -6962,6 +7134,18 @@ class CleanHyperAgent(nn.Module):
                 self.semantic_router_freeze_steps,
             )
         )
+        self.dynamic_branch_gate_hidden_dim = int(
+            getattr(args, "clean_dynamic_branch_gate_hidden_dim", 64)
+        )
+        self.cstg_gate_sigma = float(
+            getattr(args, "clean_cstg_gate_sigma", 0.5)
+        )
+        self.bayesg_gate_temperature = float(
+            getattr(args, "clean_bayesg_gate_temperature", 0.5)
+        )
+        self.bayesg_gate_eval_threshold = float(
+            getattr(args, "clean_bayesg_gate_eval_threshold", 0.08)
+        )
         self.semantic_router_fixed_mask = getattr(
             args, "clean_semantic_router_fixed_mask", ""
         )
@@ -8272,6 +8456,13 @@ class CleanHyperAgent(nn.Module):
             branch_drop_ema=self.branch_drop_ema,
             branch_drop_warmup_steps=self.branch_drop_warmup_steps,
             branch_drop_freeze_steps=self.branch_drop_freeze_steps,
+            dynamic_branch_gate_mode=(
+                GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL.get(self.model_type)
+            ),
+            dynamic_branch_gate_hidden_dim=self.dynamic_branch_gate_hidden_dim,
+            cstg_gate_sigma=self.cstg_gate_sigma,
+            bayesg_gate_temperature=self.bayesg_gate_temperature,
+            bayesg_gate_eval_threshold=self.bayesg_gate_eval_threshold,
         )
 
     def _init_grf_decision_maker_head(self):
@@ -8487,6 +8678,13 @@ class CleanHyperAgent(nn.Module):
                 branch_drop_ema=self.branch_drop_ema,
                 branch_drop_warmup_steps=self.branch_drop_warmup_steps,
                 branch_drop_freeze_steps=self.branch_drop_freeze_steps,
+                dynamic_branch_gate_mode=(
+                    RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL.get(self.model_type)
+                ),
+                dynamic_branch_gate_hidden_dim=self.dynamic_branch_gate_hidden_dim,
+                cstg_gate_sigma=self.cstg_gate_sigma,
+                bayesg_gate_temperature=self.bayesg_gate_temperature,
+                bayesg_gate_eval_threshold=self.bayesg_gate_eval_threshold,
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(

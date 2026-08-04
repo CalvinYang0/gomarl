@@ -540,6 +540,13 @@ hypernet_layers: 2
 # - rpg_dual_branch_parameter_invariant_drop_hypercond: same dual baseline;
 #                                      removes a branch/semantic group only when
 #                                      generated hypernetwork parameters barely change.
+# - rpg_dual_branch_cstg_gate_hypercond: current local obs generates separate
+#                                      Linear/Attention slot gates at every
+#                                      timestep using conditional-STG Gaussian
+#                                      perturbation and clipping.
+# - rpg_dual_branch_bayesg_gate_hypercond: same observation-conditioned dual
+#                                      gates, using BayesG's Gumbel-sigmoid
+#                                      relaxation and deterministic eval threshold.
 # - rpg_semantic_selfattn_relation_hypercond: relation-generator ablation.
 #                                             It factorizes obs into feature
 #                                             semantic fields such as health,
@@ -805,6 +812,13 @@ clean_branch_drop_parameter_threshold: 0.01
 clean_branch_drop_ema: 0.9
 clean_branch_drop_warmup_steps: 250000
 clean_branch_drop_freeze_steps: 5000000
+# Observation-conditioned dual gates have no sparsity/KL/parameter auxiliary
+# loss. Both variants use the same MLP and differ only in gate sampling.
+clean_dynamic_branch_gate_hidden_dim: 64
+clean_cstg_gate_sigma: 0.5
+clean_bayesg_gate_temperature: 0.5
+# This intentionally matches BayesG's GraphMaskGenerator implementation.
+clean_bayesg_gate_eval_threshold: 0.08
 clean_relation_distill_coef: 0.05
 clean_relation_teacher_td_coef: 0.2
 clean_smooth_head_loss_coef: 0.01

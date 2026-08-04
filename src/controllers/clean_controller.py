@@ -25,6 +25,8 @@ class CleanMAC(BasicMAC):
             "rpg_dual_branch_relation_hypercond",
             "rpg_dual_branch_td_benefit_drop_hypercond",
             "rpg_dual_branch_parameter_invariant_drop_hypercond",
+            "rpg_dual_branch_cstg_gate_hypercond",
+            "rpg_dual_branch_bayesg_gate_hypercond",
             "rpg_public_transformer_hypercond",
             "rpg_public_future_delta_token_transformer_hypercond",
             "rpg_public_future_delta_bias_transformer_hypercond",
