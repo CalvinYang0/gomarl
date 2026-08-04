@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Upload the latest three dual-branch Counter runs from OzSTAR's local W&B
-# store. Select by semantic config markers instead of display names because
-# older W&B versions do not always persist wandb_run_name in config.yaml.
+# Upload the three dual-branch Counter runs from OzSTAR's local W&B store.
+# Match each offline directory to its Slurm job start time; this works even
+# when the local W&B version does not write useful fields to config.yaml.
 # The append/no-mark-synced combination makes this safe to rerun: completed
 # runs keep the same remote run id, while an active run can upload new records
 # again after it advances or finishes.
@@ -14,8 +14,8 @@ WANDB_ROOT="${WANDB_ROOT:-wandb}"
 WANDB_ENTITY="${WANDB_ENTITY:-hjh331-sjtu}"
 WANDB_PROJECT="${WANDB_PROJECT:-gomarl}"
 SYNC_TIMEOUT="${SYNC_TIMEOUT:-600}"
-COUNTER_MARKER="${COUNTER_MARKER:-academy_counterattack_easy}"
-MODEL_MARKER="${MODEL_MARKER:-dual_branch}"
+JOB_IDS="${JOB_IDS:-15022706 15022707 15022708}"
+MAX_START_DELTA_SECONDS="${MAX_START_DELTA_SECONDS:-1800}"
 
 cd "$REPO_DIR"
 
@@ -27,7 +27,7 @@ if [[ ! -d "$WANDB_ROOT" ]]; then
   echo "ERROR: W&B directory does not exist: $REPO_DIR/$WANDB_ROOT" >&2
   exit 2
 fi
-for command in find grep sort tail timeout; do
+for command in awk basename date find sacct sort timeout; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "ERROR: required command is unavailable: $command" >&2
     exit 2
@@ -37,24 +37,70 @@ done
 echo "== Dual-branch Counter W&B sync =="
 echo "repo: $REPO_DIR"
 echo "destination: $WANDB_ENTITY/$WANDB_PROJECT"
-echo "selection: latest 3 runs containing $COUNTER_MARKER + $MODEL_MARKER"
+echo "jobs: $JOB_IDS"
 
-mapfile -t RUN_DIRS < <(
-  while IFS= read -r -d '' config; do
-    if grep -qF -- "$COUNTER_MARKER" "$config" \
-      && grep -qF -- "$MODEL_MARKER" "$config"; then
-      dirname "$(dirname "$config")"
-    fi
-  done < <(find "$WANDB_ROOT" -maxdepth 3 -type f \
-    -path "$WANDB_ROOT/offline-run-*/files/config.yaml" -print0 2>/dev/null) \
-    | LC_ALL=C sort \
-    | tail -3
+mapfile -t ALL_RUN_DIRS < <(
+  find "$WANDB_ROOT" -maxdepth 1 -type d -name 'offline-run-*' -print \
+    | LC_ALL=C sort
 )
 
-if (( ${#RUN_DIRS[@]} != 3 )); then
-  echo "ERROR: expected 3 recent Counter dual-branch runs, found ${#RUN_DIRS[@]}" >&2
+if (( ${#ALL_RUN_DIRS[@]} == 0 )); then
+  echo "ERROR: no offline-run-* directories found below $WANDB_ROOT" >&2
   exit 2
 fi
+
+run_dir_epoch() {
+  local run_dir="$1"
+  local base date_part time_part
+  base="$(basename "$run_dir")"
+  if [[ ! "$base" =~ ^offline-run-([0-9]{8})_([0-9]{6})- ]]; then
+    return 1
+  fi
+  date_part="${BASH_REMATCH[1]}"
+  time_part="${BASH_REMATCH[2]}"
+  date -d "${date_part:0:4}-${date_part:4:2}-${date_part:6:2} ${time_part:0:2}:${time_part:2:2}:${time_part:4:2}" +%s
+}
+
+job_start_epoch() {
+  local job_id="$1"
+  local start
+  start="$(sacct -X -n -P -j "$job_id" --format=JobIDRaw,Start \
+    | awk -F'|' -v expected="$job_id" '$1 == expected && $2 != "" && $2 != "Unknown" {print $2; exit}')"
+  [[ -n "$start" ]] || return 1
+  date -d "$start" +%s
+}
+
+declare -A USED_RUN_DIRS
+RUN_DIRS=()
+for job_id in $JOB_IDS; do
+  start_epoch="$(job_start_epoch "$job_id")" || {
+    echo "ERROR: cannot resolve start time for Slurm job $job_id" >&2
+    exit 2
+  }
+
+  best_dir=""
+  best_delta=$((MAX_START_DELTA_SECONDS + 1))
+  for candidate in "${ALL_RUN_DIRS[@]}"; do
+    [[ -z "${USED_RUN_DIRS[$candidate]:-}" ]] || continue
+    candidate_epoch="$(run_dir_epoch "$candidate")" || continue
+    delta=$((candidate_epoch - start_epoch))
+    (( delta >= -120 && delta <= MAX_START_DELTA_SECONDS )) || continue
+    absolute_delta="$delta"
+    (( absolute_delta >= 0 )) || absolute_delta=$((-absolute_delta))
+    if (( absolute_delta < best_delta )); then
+      best_dir="$candidate"
+      best_delta="$absolute_delta"
+    fi
+  done
+
+  if [[ -z "$best_dir" ]]; then
+    echo "ERROR: no W&B run started near Slurm job $job_id" >&2
+    exit 2
+  fi
+  USED_RUN_DIRS["$best_dir"]=1
+  RUN_DIRS+=("$best_dir")
+  echo "matched job=$job_id delta=${best_delta}s run=$best_dir"
+done
 
 synced=0
 failed=0
