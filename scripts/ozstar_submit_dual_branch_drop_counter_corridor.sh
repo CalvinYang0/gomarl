@@ -2,17 +2,19 @@
 set -euo pipefail
 
 # Full dual-branch baseline plus two causal DROP variants on GRF Counter and
-# SMAC Corridor. Defaults to one seed (6 jobs total).
+# SMAC Corridor. Defaults to one seed and both scenes (6 jobs total). Set
+# SCENES=corridor to submit only the three Corridor variants.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
 SEEDS="${SEEDS:-1}"
+SCENES="${SCENES:-counter corridor}"
 TIME="${TIME:-1-00:00:00}"
 T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
 GRF_MEM="${GRF_MEM:-16G}"
-CORRIDOR_MEM="${CORRIDOR_MEM:-48G}"
+CORRIDOR_MEM="${CORRIDOR_MEM:-64G}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 BUFFER_SIZE="${BUFFER_SIZE:-5000}"
@@ -130,7 +132,7 @@ submit_one() {
 }
 
 submitted=0
-for scene in counter corridor; do
+for scene in $SCENES; do
   for variant in full benefit parameter; do
     for seed in $SEEDS; do
       if (( submitted > 0 )); then
