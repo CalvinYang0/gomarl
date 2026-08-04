@@ -1,7 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Upload the three dual-branch Counter runs from OzSTAR's local W&B store.
+# Upload the latest three dual-branch Counter runs from OzSTAR's local W&B
+# store. Select by semantic config markers instead of display names because
+# older W&B versions do not always persist wandb_run_name in config.yaml.
 # The append/no-mark-synced combination makes this safe to rerun: completed
 # runs keep the same remote run id, while an active run can upload new records
 # again after it advances or finishes.
@@ -12,12 +14,8 @@ WANDB_ROOT="${WANDB_ROOT:-wandb}"
 WANDB_ENTITY="${WANDB_ENTITY:-hjh331-sjtu}"
 WANDB_PROJECT="${WANDB_PROJECT:-gomarl}"
 SYNC_TIMEOUT="${SYNC_TIMEOUT:-600}"
-
-RUN_NAMES=(
-  grf_counter_dual_full_10m_s1
-  grf_counter_dual_benefit_10m_s1
-  grf_counter_dual_param_10m_s1
-)
+COUNTER_MARKER="${COUNTER_MARKER:-academy_counterattack_easy}"
+MODEL_MARKER="${MODEL_MARKER:-dual_branch}"
 
 cd "$REPO_DIR"
 
@@ -36,34 +34,31 @@ for command in find grep sort tail timeout; do
   }
 done
 
-find_latest_run_dir() {
-  local run_name="$1"
-  local config
+echo "== Dual-branch Counter W&B sync =="
+echo "repo: $REPO_DIR"
+echo "destination: $WANDB_ENTITY/$WANDB_PROJECT"
+echo "selection: latest 3 runs containing $COUNTER_MARKER + $MODEL_MARKER"
 
+mapfile -t RUN_DIRS < <(
   while IFS= read -r -d '' config; do
-    if grep -qF -- "$run_name" "$config"; then
+    if grep -qF -- "$COUNTER_MARKER" "$config" \
+      && grep -qF -- "$MODEL_MARKER" "$config"; then
       dirname "$(dirname "$config")"
     fi
   done < <(find "$WANDB_ROOT" -maxdepth 3 -type f \
     -path "$WANDB_ROOT/offline-run-*/files/config.yaml" -print0 2>/dev/null) \
     | LC_ALL=C sort \
-    | tail -1
-}
+    | tail -3
+)
 
-echo "== Dual-branch Counter W&B sync =="
-echo "repo: $REPO_DIR"
-echo "destination: $WANDB_ENTITY/$WANDB_PROJECT"
+if (( ${#RUN_DIRS[@]} != 3 )); then
+  echo "ERROR: expected 3 recent Counter dual-branch runs, found ${#RUN_DIRS[@]}" >&2
+  exit 2
+fi
 
 synced=0
 failed=0
-for run_name in "${RUN_NAMES[@]}"; do
-  run_dir="$(find_latest_run_dir "$run_name")"
-  if [[ -z "$run_dir" ]]; then
-    echo "ERROR: no offline W&B directory found for $run_name" >&2
-    failed=$((failed + 1))
-    continue
-  fi
-
+for run_dir in "${RUN_DIRS[@]}"; do
   run_file="$(find "$run_dir" -maxdepth 1 -type f -name 'run-*.wandb' -print -quit)"
   if [[ -z "$run_file" ]]; then
     echo "ERROR: no run-*.wandb file found in $run_dir" >&2
@@ -71,8 +66,7 @@ for run_name in "${RUN_NAMES[@]}"; do
     continue
   fi
 
-  echo "syncing: $run_name"
-  echo "source: $run_dir"
+  echo "syncing: $run_dir"
   if timeout "$SYNC_TIMEOUT" "$PYTHON_BIN" -m wandb sync \
     -e "$WANDB_ENTITY" \
     -p "$WANDB_PROJECT" \
@@ -84,7 +78,7 @@ for run_name in "${RUN_NAMES[@]}"; do
     "$run_dir"; then
     synced=$((synced + 1))
   else
-    echo "ERROR: W&B sync failed for $run_name" >&2
+    echo "ERROR: W&B sync failed for $run_dir" >&2
     failed=$((failed + 1))
   fi
 done
