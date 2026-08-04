@@ -547,6 +547,10 @@ hypernet_layers: 2
 # - rpg_dual_branch_bayesg_gate_hypercond: same observation-conditioned dual
 #                                      gates, using BayesG's Gumbel-sigmoid
 #                                      relaxation and deterministic eval threshold.
+# - grf_abs_single_transformer_branch_hypercond: Counter structural control;
+#                                      keeps the dual baseline's full-observation
+#                                      entity Transformer branch and removes the
+#                                      Linear branch, fusion layer, and gates.
 # - rpg_semantic_selfattn_relation_hypercond: relation-generator ablation.
 #                                             It factorizes obs into feature
 #                                             semantic fields such as health,

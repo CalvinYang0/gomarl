@@ -423,6 +423,9 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_cstg_gate_hypercond": "cstg",
     "grf_abs_dual_branch_bayesg_gate_hypercond": "bayesg",
 }
+GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
+    "grf_abs_single_transformer_branch_hypercond",
+}
 GRF_DECISION_MAKER_VARIANTS |= GRF_MLP_RELATION_VARIANTS
 GRF_TWO_LAYER_HEAD_VARIANTS = {
     "grf_public_private_bias_transformer_two_layer_head_hypercond",
@@ -496,6 +499,7 @@ GRF_PUBLIC_TRANSFORMER_VARIANTS = {
     *GRF_DECISION_MAKER_VARIANTS,
     *GRF_SEMANTIC_ROUTER_VARIANTS,
     *GRF_DUAL_BRANCH_VARIANTS,
+    *GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS,
 }
 
 
@@ -4252,8 +4256,15 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         if self.semantic_router_sparse_coef < 0.0:
             raise ValueError("semantic_router_sparse_coef must be non-negative")
         self.relation_encoder_style = str(relation_encoder_style)
-        if self.relation_encoder_style not in {"transformer", "mlp", "dual"}:
-            raise ValueError("relation_encoder_style must be transformer, mlp, or dual")
+        if self.relation_encoder_style not in {
+            "transformer",
+            "mlp",
+            "dual",
+            "attention_only",
+        }:
+            raise ValueError(
+                "relation_encoder_style must be transformer, mlp, dual, or attention_only"
+            )
         self.l0_drop = bool(l0_drop)
         self.mlp_soft_gate = bool(mlp_soft_gate)
         self.mlp_stochastic_hard_gate = bool(mlp_stochastic_hard_gate)
@@ -4479,8 +4490,12 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             nn.Linear(relation_dim, relation_dim),
         )
         self.mlp_temporal_gru = nn.GRUCell(relation_dim, relation_dim)
-        self.dual_linear_encoder = nn.Linear(self.expected_obs_dim, relation_dim)
-        self.dual_condition_fuser = nn.Linear(2 * relation_dim, relation_dim)
+        if self.relation_encoder_style == "attention_only":
+            self.dual_linear_encoder = None
+            self.dual_condition_fuser = None
+        else:
+            self.dual_linear_encoder = nn.Linear(self.expected_obs_dim, relation_dim)
+            self.dual_condition_fuser = nn.Linear(2 * relation_dim, relation_dim)
         self.dynamic_branch_gate = (
             ObservationConditionedBranchGate(
                 obs_dim=self.expected_obs_dim,
@@ -4551,15 +4566,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.latest_context_token = relation_embed
         return self.output_encoder(next_relation_hidden), next_relation_hidden
 
-    def _forward_dual_relation(self, obs):
-        batch_size, n_agents, _ = obs.shape
-        flat_obs = obs[..., : self.expected_obs_dim]
-        branch_gates = self._branch_keep_gates(flat_obs)
-
-        linear_input = self._apply_branch_gate(flat_obs, branch_gates, 0)
-        linear_embed = self.dual_linear_encoder(linear_input)
-
-        attention_input = self._apply_branch_gate(flat_obs, branch_gates, 1)
+    def _forward_full_obs_attention_branch(self, attention_input):
+        batch_size, n_agents, _ = attention_input.shape
         (
             self_pos,
             ally_pos,
@@ -4613,7 +4621,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             batch_size * n_agents,
             tokens.size(2),
             dtype=th.bool,
-            device=obs.device,
+            device=attention_input.device,
         )
         for layer in self.transformer_layers:
             flat_tokens = layer(flat_tokens, full_mask)
@@ -4622,9 +4630,6 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         )
         encoded_entities = encoded
         attention_embed = encoded_entities[:, :, 0]
-        next_relation_hidden = self.dual_condition_fuser(
-            th.cat([linear_embed, attention_embed], dim=-1)
-        )
         ally_start = 1
         opponent_start = ally_start + (self.n_agents - 1)
         ball_index = opponent_start + self.n_opponents
@@ -4633,6 +4638,30 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.latest_opponent_tokens = encoded_entities[:, :, opponent_start:ball_index]
         self.latest_ball_token = encoded_entities[:, :, ball_index]
         self.latest_context_token = attention_embed
+        return attention_embed
+
+    def _forward_attention_only_relation(self, obs):
+        flat_obs = obs[..., : self.expected_obs_dim]
+        next_relation_hidden = self._forward_full_obs_attention_branch(flat_obs)
+        condition = (
+            next_relation_hidden
+            if self.output_dim == self.relation_dim
+            else self.output_encoder(next_relation_hidden)
+        )
+        return condition, next_relation_hidden
+
+    def _forward_dual_relation(self, obs):
+        flat_obs = obs[..., : self.expected_obs_dim]
+        branch_gates = self._branch_keep_gates(flat_obs)
+
+        linear_input = self._apply_branch_gate(flat_obs, branch_gates, 0)
+        linear_embed = self.dual_linear_encoder(linear_input)
+
+        attention_input = self._apply_branch_gate(flat_obs, branch_gates, 1)
+        attention_embed = self._forward_full_obs_attention_branch(attention_input)
+        next_relation_hidden = self.dual_condition_fuser(
+            th.cat([linear_embed, attention_embed], dim=-1)
+        )
         condition = (
             next_relation_hidden
             if self.output_dim == self.relation_dim
@@ -5061,6 +5090,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         batch_size, n_agents, _ = obs.shape
         if self.relation_encoder_style == "dual":
             return self._forward_dual_relation(obs)
+        if self.relation_encoder_style == "attention_only":
+            return self._forward_attention_only_relation(obs)
         if self.relation_encoder_style == "mlp":
             return self._forward_mlp_relation(obs, prev_relation_hidden)
         if self.semantic_router_active:
@@ -8393,6 +8424,7 @@ class CleanHyperAgent(nn.Module):
                 *GRF_SEMANTIC_ROUTER_VARIANTS,
                 *GRF_MLP_RELATION_VARIANTS,
                 *GRF_DUAL_BRANCH_VARIANTS,
+                *GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS,
             },
             semantic_router_mode=GRF_SEMANTIC_ROUTER_MODE_BY_MODEL.get(
                 self.model_type
@@ -8428,6 +8460,8 @@ class CleanHyperAgent(nn.Module):
             relation_encoder_style=(
                 "dual"
                 if self.model_type in GRF_DUAL_BRANCH_VARIANTS
+                else "attention_only"
+                if self.model_type in GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS
                 else "mlp"
                 if self.model_type in GRF_MLP_RELATION_VARIANTS
                 else "transformer"
