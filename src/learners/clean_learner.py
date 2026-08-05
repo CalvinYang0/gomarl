@@ -100,6 +100,27 @@ class CleanLearner:
         self.latest_semantic_counterfactual_stats = {}
         self.last_semantic_route_version_logged = -1
         self.last_branch_drop_version_logged = -1
+        self.condition_gradient_consistency_active = (
+            getattr(self.mac.agent, "model_type", "")
+            == "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond"
+        )
+        self.condition_gradient_consistency_coef = float(
+            getattr(args, "clean_condition_gradient_consistency_coef", 0.1)
+        )
+        self.condition_gradient_consistency_pairs = max(
+            1,
+            int(getattr(args, "clean_condition_gradient_consistency_pairs", 2)),
+        )
+        self.condition_gradient_consistency_warmup_steps = max(
+            0,
+            int(
+                getattr(
+                    args,
+                    "clean_condition_gradient_consistency_warmup_steps",
+                    getattr(args, "clean_dynamic_branch_gate_warmup_steps", 250000),
+                )
+            ),
+        )
 
     def _amp_context(self):
         return th.cuda.amp.autocast(enabled=True) if self.use_amp else nullcontext()
@@ -138,6 +159,100 @@ class CleanLearner:
         target_router = self._semantic_router(self.target_mac)
         if router is not None and target_router is not None:
             target_router.copy_semantic_router_from(router)
+
+    def _condition_gradient_consistency_loss(
+        self, td_error, td_mask, condition_graphs
+    ):
+        """Compare TD gradients in condition space at sampled adjacent steps."""
+        zero = td_error.new_zeros(())
+        if len(condition_graphs) < 2 or td_error.shape[1] < 2:
+            return zero, {
+                "condition_grad_consistency_cosine": zero,
+                "condition_grad_consistency_pairs": zero,
+            }
+
+        time_valid = td_mask.reshape(
+            td_mask.shape[0], td_mask.shape[1], -1
+        ).any(dim=-1)
+        candidate_times = (
+            (time_valid[:, 1:] & time_valid[:, :-1])
+            .any(dim=0)
+            .nonzero(as_tuple=False)
+            .flatten()
+            + 1
+        )
+        if candidate_times.numel() == 0:
+            return zero, {
+                "condition_grad_consistency_cosine": zero,
+                "condition_grad_consistency_pairs": zero,
+            }
+        if candidate_times.numel() > self.condition_gradient_consistency_pairs:
+            order = th.randperm(candidate_times.numel(), device=candidate_times.device)
+            candidate_times = candidate_times[
+                order[: self.condition_gradient_consistency_pairs]
+            ]
+
+        gradient_cache = {}
+
+        def condition_gradient(time_index):
+            if time_index not in gradient_cache:
+                step_mask = td_mask[:, time_index]
+                step_loss = (
+                    td_error[:, time_index].pow(2) * step_mask
+                ).sum() / step_mask.sum().clamp(min=1.0)
+                gradient_cache[time_index] = th.autograd.grad(
+                    step_loss,
+                    condition_graphs[time_index],
+                    create_graph=True,
+                    retain_graph=True,
+                    allow_unused=True,
+                )[0]
+            return gradient_cache[time_index]
+
+        losses = []
+        cosine_sums = []
+        valid_counts = []
+        used_pairs = 0
+        for time_index in candidate_times.tolist():
+            previous_gradient = condition_gradient(time_index - 1)
+            current_gradient = condition_gradient(time_index)
+            if previous_gradient is None or current_gradient is None:
+                continue
+
+            previous_gradient = previous_gradient.float()
+            current_gradient = current_gradient.float()
+            cosine = F.cosine_similarity(
+                current_gradient, previous_gradient, dim=-1, eps=1e-8
+            )
+            pair_valid = (
+                time_valid[:, time_index]
+                & time_valid[:, time_index - 1]
+            ).unsqueeze(-1).expand_as(cosine)
+            nonzero_gradient = (
+                current_gradient.norm(dim=-1) > 1e-8
+            ) & (previous_gradient.norm(dim=-1) > 1e-8)
+            valid = pair_valid & nonzero_gradient
+            if not valid.any():
+                continue
+            valid_float = valid.to(cosine.dtype)
+            valid_count = valid_float.sum()
+            losses.append(((1.0 - cosine) * valid_float).sum())
+            cosine_sums.append((cosine * valid_float).sum())
+            valid_counts.append(valid_count)
+            used_pairs += 1
+
+        if not losses:
+            return zero, {
+                "condition_grad_consistency_cosine": zero,
+                "condition_grad_consistency_pairs": zero,
+            }
+        total_valid = th.stack(valid_counts).sum().clamp(min=1.0)
+        consistency_loss = th.stack(losses).sum() / total_valid
+        mean_cosine = th.stack(cosine_sums).sum() / total_valid
+        return consistency_loss, {
+            "condition_grad_consistency_cosine": mean_cosine.detach(),
+            "condition_grad_consistency_pairs": zero.new_tensor(float(used_pairs)),
+        }
 
     def _counterfactual_td_loss(self, batch, actions, targets, td_mask):
         mac_out = []
@@ -543,6 +658,10 @@ class CleanLearner:
         return True
 
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
+        if hasattr(self.mac, "set_dynamic_branch_gate_t_env"):
+            self.mac.set_dynamic_branch_gate_t_env(t_env)
+        if hasattr(self.target_mac, "set_dynamic_branch_gate_t_env"):
+            self.target_mac.set_dynamic_branch_gate_t_env(t_env)
         rewards = batch["reward"][:, :-1]
         actions = batch["actions"][:, :-1]
         terminated = batch["terminated"][:, :-1].float()
@@ -562,6 +681,12 @@ class CleanLearner:
         ):
             semantic_router.begin_semantic_critical_capture()
         generated_parameter_graphs = []
+        condition_graphs = (
+            []
+            if self.condition_gradient_consistency_active
+            and t_env >= self.condition_gradient_consistency_warmup_steps
+            else None
+        )
         parameter_probe_times = set()
         observation_probe_times = set()
         if (
@@ -595,6 +720,16 @@ class CleanLearner:
                         t in observation_probe_times
                     )
                 mac_out.append(self.mac.forward(batch, t=t))
+                if condition_graphs is not None:
+                    condition_graph = getattr(
+                        self.mac, "latest_condition_graph", None
+                    )
+                    if condition_graph is None:
+                        raise RuntimeError(
+                            "Condition-gradient consistency requires a "
+                            "differentiable condition graph."
+                        )
+                    condition_graphs.append(condition_graph)
                 if (
                     semantic_router is not None
                     and semantic_router.semantic_router_needs_parameter_graph()
@@ -697,7 +832,25 @@ class CleanLearner:
                 teacher_td_error = teacher_chosen_qvals - targets.detach()
                 teacher_masked_td_error = teacher_td_error * td_mask
                 teacher_td_loss = (teacher_masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
-            loss = td_loss + aux_loss + float(getattr(self.args, "clean_relation_teacher_td_coef", 0.0)) * teacher_td_loss
+            condition_gradient_consistency_loss = td_loss.new_zeros(())
+            condition_gradient_consistency_stats = {}
+            if condition_graphs is not None:
+                (
+                    condition_gradient_consistency_loss,
+                    condition_gradient_consistency_stats,
+                ) = self._condition_gradient_consistency_loss(
+                    td_error, td_mask, condition_graphs[:-1]
+                )
+            loss = (
+                td_loss
+                + aux_loss
+                + float(
+                    getattr(self.args, "clean_relation_teacher_td_coef", 0.0)
+                )
+                * teacher_td_loss
+                + self.condition_gradient_consistency_coef
+                * condition_gradient_consistency_loss
+            )
 
         parameter_sensitivity_score = None
         if (
@@ -916,6 +1069,19 @@ class CleanLearner:
                         )
             if teacher_mac_out is not None:
                 self.logger.log_stat("loss_teacher_td", teacher_td_loss.item(), t_env)
+            if self.condition_gradient_consistency_active:
+                self.logger.log_stat(
+                    "loss_condition_grad_consistency",
+                    condition_gradient_consistency_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "condition_grad_consistency_active",
+                    float(condition_graphs is not None),
+                    t_env,
+                )
+                for stat_name, stat_value in condition_gradient_consistency_stats.items():
+                    self.logger.log_stat(stat_name, stat_value.item(), t_env)
             if self.latest_relation_gate_mean is not None:
                 self.logger.log_stat("relation_gate_mean", self.latest_relation_gate_mean, t_env)
                 self.logger.log_stat("relation_gate_std", self.latest_relation_gate_std, t_env)

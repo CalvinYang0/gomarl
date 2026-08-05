@@ -4,6 +4,16 @@ from .basic_controller import BasicMAC
 
 
 class CleanMAC(BasicMAC):
+    def set_dynamic_branch_gate_t_env(self, t_env):
+        if hasattr(self.agent, "set_dynamic_branch_gate_t_env"):
+            self.agent.set_dynamic_branch_gate_t_env(t_env)
+
+    def select_actions(self, ep_batch, t_ep, t_env, bs=slice(None), test_mode=False):
+        self.set_dynamic_branch_gate_t_env(t_env)
+        return super().select_actions(
+            ep_batch, t_ep, t_env, bs=bs, test_mode=test_mode
+        )
+
     def _exclude_agent_id_from_trunk(self):
         model_type = getattr(self.args, "clean_model_type", "baseline").replace("-", "_")
         if model_type.startswith("rpg_simple_bias_"):
@@ -27,6 +37,7 @@ class CleanMAC(BasicMAC):
             "rpg_dual_branch_parameter_invariant_drop_hypercond",
             "rpg_dual_branch_cstg_gate_hypercond",
             "rpg_dual_branch_bayesg_gate_hypercond",
+            "rpg_dual_branch_hard_gate_hypercond",
             "rpg_public_transformer_hypercond",
             "rpg_public_future_delta_token_transformer_hypercond",
             "rpg_public_future_delta_bias_transformer_hypercond",
@@ -178,6 +189,9 @@ class CleanMAC(BasicMAC):
         self.latest_graph_adj = getattr(self.agent, "latest_graph_adj", None)
         self.latest_graph_nodes = getattr(self.agent, "latest_graph_nodes", None)
         self.latest_condition = getattr(self.agent, "latest_condition", None)
+        self.latest_condition_graph = getattr(
+            self.agent, "latest_condition_graph", None
+        )
         self.latest_aux_loss = getattr(self.agent, "latest_aux_loss", None)
         self.latest_aux_stats = getattr(self.agent, "latest_aux_stats", {})
         self.latest_teacher_q = getattr(self.agent, "latest_teacher_q", None)

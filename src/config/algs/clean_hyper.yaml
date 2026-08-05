@@ -547,6 +547,15 @@ hypernet_layers: 2
 # - rpg_dual_branch_bayesg_gate_hypercond: same observation-conditioned dual
 #                                      gates, using BayesG's Gumbel-sigmoid
 #                                      relaxation and deterministic eval threshold.
+# - rpg_dual_branch_hard_gate_hypercond: observation-conditioned dual gates
+#                                      with one independent decision per raw
+#                                      scalar and exact 0/1 forward masks. A sigmoid
+#                                      straight-through estimator supplies
+#                                      gradients, with identical train/eval rules.
+# - grf_abs_dual_branch_hard_gate_grad_consistency_hypercond: Counter hard-gate
+#                                      variant. It samples a few adjacent
+#                                      timesteps and aligns their TD gradients
+#                                      in the low-dimensional condition space.
 # - grf_abs_single_transformer_branch_hypercond: Counter structural control;
 #                                      keeps the dual baseline's full-observation
 #                                      entity Transformer branch and removes the
@@ -823,6 +832,17 @@ clean_cstg_gate_sigma: 0.5
 clean_bayesg_gate_temperature: 0.5
 # This intentionally matches BayesG's GraphMaskGenerator implementation.
 clean_bayesg_gate_eval_threshold: 0.08
+# Corrected dynamic-gate baseline. It starts as a full-observation model and
+# enables independent deterministic scalar decisions only after the dual
+# condition has warmed up.
+clean_hard_gate_threshold: 0.5
+clean_hard_gate_initial_keep_probability: 0.55
+clean_dynamic_branch_gate_warmup_steps: 250000
+# Counter-only condition-gradient auxiliary. It is deliberately conservative:
+# two adjacent pairs per learner update, enabled only after gate warmup.
+clean_condition_gradient_consistency_coef: 0.1
+clean_condition_gradient_consistency_pairs: 2
+clean_condition_gradient_consistency_warmup_steps: 250000
 clean_relation_distill_coef: 0.05
 clean_relation_teacher_td_coef: 0.2
 clean_smooth_head_loss_coef: 0.01

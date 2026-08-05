@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# One-seed GRF Counter comparison: c-STG dual gate, BayesG dual gate, and the
-# ungated single Transformer branch. Defaults to exactly 3 jobs.
+# One-seed GRF Counter run for the condition-gradient hard dual gate.
+# The already-completed legacy c-STG/BayesG runs are intentionally not reused.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
@@ -11,7 +11,7 @@ TIME="${TIME:-1-00:00:00}"
 T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
-MEMORY="${MEMORY:-16G}"
+MEMORY="${MEMORY:-64G}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 BUFFER_SIZE="${BUFFER_SIZE:-5000}"
@@ -27,6 +27,7 @@ WANDB_MODE="${WANDB_MODE:-offline}"
 USE_CUDA="${USE_CUDA:-False}"
 SUBMIT_GAP_SECONDS="${SUBMIT_GAP_SECONDS:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+VARIANTS="${VARIANTS:-grad}"
 
 cd "$REPO_DIR"
 mkdir -p ozstar_logs
@@ -55,13 +56,13 @@ submit_one() {
   local model suffix
 
   case "$variant" in
-    cstg)
-      model="grf_abs_dual_branch_cstg_gate_hypercond"
-      suffix="cstg_gate"
+    hard)
+      model="grf_abs_dual_branch_hard_gate_hypercond"
+      suffix="hard_gate"
       ;;
-    bayesg)
-      model="grf_abs_dual_branch_bayesg_gate_hypercond"
-      suffix="bayesg_gate"
+    grad)
+      model="grf_abs_dual_branch_hard_gate_grad_consistency_hypercond"
+      suffix="hard_gate_grad_consistency"
       ;;
     transformer)
       model="grf_abs_single_transformer_branch_hypercond"
@@ -98,7 +99,7 @@ submit_one() {
 }
 
 submitted=0
-for variant in cstg bayesg transformer; do
+for variant in $VARIANTS; do
   for seed in $SEEDS; do
     if (( submitted > 0 )); then
       sleep "$SUBMIT_GAP_SECONDS"

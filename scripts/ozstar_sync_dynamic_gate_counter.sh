@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# One-shot W&B update for the latest c-STG dual, BayesG dual, and
-# Transformer-only GRF Counter jobs. Job ids are discovered from their exact
-# Slurm names, then matched to offline W&B directories by start timestamp.
+# One-shot W&B update for the gradient-consistency hard-gate Counter job. The job id
+# is discovered from its exact Slurm name, then matched to the offline W&B
+# directory by start timestamp.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
@@ -34,9 +34,7 @@ done
 
 START_DATE="$(date -d "$LOOKBACK_DAYS days ago" +%F)"
 JOB_NAMES=(
-  "grf_counter_cstg_gate_s${SEED}"
-  "grf_counter_bayesg_gate_s${SEED}"
-  "grf_counter_transformer_only_s${SEED}"
+  "grf_counter_hard_gate_grad_consistency_s${SEED}"
 )
 
 echo "== Dynamic-gate Counter W&B update =="
