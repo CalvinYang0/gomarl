@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# One-seed GRF Counter run for the condition-gradient hard dual gate.
+# One-seed GRF Counter comparison of parameter- and gradient-stability gates.
 # The already-completed legacy c-STG/BayesG runs are intentionally not reused.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
@@ -27,7 +27,7 @@ WANDB_MODE="${WANDB_MODE:-offline}"
 USE_CUDA="${USE_CUDA:-False}"
 SUBMIT_GAP_SECONDS="${SUBMIT_GAP_SECONDS:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
-VARIANTS="${VARIANTS:-grad}"
+VARIANTS="${VARIANTS:-param grad}"
 
 cd "$REPO_DIR"
 mkdir -p ozstar_logs
@@ -56,20 +56,16 @@ submit_one() {
   local model suffix
 
   case "$variant" in
-    hard)
-      model="grf_abs_dual_branch_hard_gate_hypercond"
-      suffix="hard_gate"
-      ;;
     grad)
       model="grf_abs_dual_branch_hard_gate_grad_consistency_hypercond"
       suffix="hard_gate_grad_consistency"
       ;;
-    transformer)
-      model="grf_abs_single_transformer_branch_hypercond"
-      suffix="transformer_only"
+    param)
+      model="grf_abs_dual_branch_hard_gate_param_stability_hypercond"
+      suffix="hard_gate_param_stability"
       ;;
     *)
-      echo "ERROR: unsupported variant: $variant" >&2
+      echo "ERROR: unsupported variant: $variant (expected param or grad)" >&2
       return 2
       ;;
   esac

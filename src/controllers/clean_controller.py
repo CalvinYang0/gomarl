@@ -192,6 +192,9 @@ class CleanMAC(BasicMAC):
         self.latest_condition_graph = getattr(
             self.agent, "latest_condition_graph", None
         )
+        self.latest_generated_parameter_graph = getattr(
+            self.agent, "latest_generated_parameter_graph", None
+        )
         self.latest_aux_loss = getattr(self.agent, "latest_aux_loss", None)
         self.latest_aux_stats = getattr(self.agent, "latest_aux_stats", {})
         self.latest_teacher_q = getattr(self.agent, "latest_teacher_q", None)

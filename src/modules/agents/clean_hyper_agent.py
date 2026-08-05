@@ -417,6 +417,7 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_cstg_gate_hypercond",
     "grf_abs_dual_branch_bayesg_gate_hypercond",
     "grf_abs_dual_branch_hard_gate_hypercond",
+    "grf_abs_dual_branch_hard_gate_param_stability_hypercond",
     "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond",
 }
 GRF_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
@@ -427,6 +428,7 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_cstg_gate_hypercond": "cstg",
     "grf_abs_dual_branch_bayesg_gate_hypercond": "bayesg",
     "grf_abs_dual_branch_hard_gate_hypercond": "hard_st",
+    "grf_abs_dual_branch_hard_gate_param_stability_hypercond": "hard_st",
     "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond": "hard_st",
 }
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
@@ -8196,6 +8198,7 @@ class CleanHyperAgent(nn.Module):
 
         self.latest_condition = None
         self.latest_condition_graph = None
+        self.latest_generated_parameter_graph = None
         self.latest_aux_loss = None
         self.latest_aux_stats = {}
         self.latest_teacher_q = None
@@ -9471,6 +9474,21 @@ class CleanHyperAgent(nn.Module):
         )
         out_b = self.hyper_out_b(flat_condition).view(batch_size * n_agents, 1, self.n_actions)
 
+        if (
+            self.model_type
+            == "grf_abs_dual_branch_hard_gate_param_stability_hypercond"
+            and th.is_grad_enabled()
+        ):
+            # Keep views of the exact generated tensors. The learner reduces
+            # adjacent differences immediately, avoiding a second flattened
+            # copy of every generated parameter at every timestep.
+            self.latest_generated_parameter_graph = (
+                bottleneck_w,
+                bottleneck_b,
+                out_w,
+                out_b,
+            )
+
         semantic_router = getattr(self, "rpg_relation_capturer", None)
         if (
             self.capture_semantic_parameter_graph
@@ -10516,6 +10534,7 @@ class CleanHyperAgent(nn.Module):
         self.latest_relation_enemy_attn = None
         self.latest_condition = None
         self.latest_condition_graph = None
+        self.latest_generated_parameter_graph = None
         self.latest_aux_loss = None
         self.latest_aux_stats = {}
         self.latest_teacher_q = None

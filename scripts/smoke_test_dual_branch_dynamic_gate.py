@@ -136,6 +136,28 @@ def check_condition_gradient_consistency():
     assert source.grad.abs().sum().item() > 0.0
 
 
+def check_generated_parameter_stability():
+    model_name = "grf_abs_dual_branch_hard_gate_param_stability_hypercond"
+    assert model_name in GRF_DUAL_BRANCH_VARIANTS
+    assert GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[model_name] == "hard_st"
+
+    batch_size = 3
+    n_agents = 2
+    source = th.randn(batch_size * n_agents, 7, requires_grad=True)
+    previous = (source[:, :4] * 0.5, source[:, 4:] * 0.25)
+    current = (source[:, :4], source[:, 4:])
+    pair_valid = th.tensor([True, False, True])
+    total, count = CleanLearner._generated_parameter_stability_pair(
+        previous, current, pair_valid, batch_size, n_agents
+    )
+    loss = total / count.clamp(min=1.0)
+    assert th.isfinite(loss)
+    assert count.item() == 4.0
+    loss.backward()
+    assert source.grad is not None
+    assert source.grad.abs().sum().item() > 0.0
+
+
 def main():
     th.manual_seed(17)
     check_grf("hard_st")
@@ -144,6 +166,8 @@ def main():
     print("single_transformer_branch forward_backward=ok")
     check_condition_gradient_consistency()
     print("condition_gradient_consistency second_order=ok")
+    check_generated_parameter_stability()
+    print("generated_parameter_stability exact_l1=ok")
 
 
 if __name__ == "__main__":

@@ -121,6 +121,23 @@ class CleanLearner:
                 )
             ),
         )
+        self.generated_parameter_stability_active = (
+            getattr(self.mac.agent, "model_type", "")
+            == "grf_abs_dual_branch_hard_gate_param_stability_hypercond"
+        )
+        self.generated_parameter_stability_coef = float(
+            getattr(args, "clean_generated_parameter_stability_coef", 0.1)
+        )
+        self.generated_parameter_stability_warmup_steps = max(
+            0,
+            int(
+                getattr(
+                    args,
+                    "clean_generated_parameter_stability_warmup_steps",
+                    getattr(args, "clean_dynamic_branch_gate_warmup_steps", 250000),
+                )
+            ),
+        )
 
     def _amp_context(self):
         return th.cuda.amp.autocast(enabled=True) if self.use_amp else nullcontext()
@@ -253,6 +270,38 @@ class CleanLearner:
             "condition_grad_consistency_cosine": mean_cosine.detach(),
             "condition_grad_consistency_pairs": zero.new_tensor(float(used_pairs)),
         }
+
+    @staticmethod
+    def _generated_parameter_stability_pair(
+        previous_parameters,
+        current_parameters,
+        pair_valid,
+        batch_size,
+        n_agents,
+    ):
+        """Exact mean L1 change for one valid adjacent parameter pair."""
+        if len(previous_parameters) != len(current_parameters):
+            raise RuntimeError("Generated parameter structures do not match.")
+        absolute_sum = None
+        parameter_count = 0
+        for previous, current in zip(previous_parameters, current_parameters):
+            if previous.shape != current.shape:
+                raise RuntimeError("Adjacent generated parameter shapes do not match.")
+            difference = (current - previous).abs().reshape(
+                batch_size, n_agents, -1
+            )
+            part_sum = difference.sum(dim=-1)
+            absolute_sum = (
+                part_sum if absolute_sum is None else absolute_sum + part_sum
+            )
+            parameter_count += difference.shape[-1]
+        if absolute_sum is None or parameter_count == 0:
+            zero = pair_valid.new_zeros((), dtype=th.float32)
+            return zero, zero
+        per_agent_mean = absolute_sum / float(parameter_count)
+        valid = pair_valid.reshape(batch_size, 1).expand(-1, n_agents)
+        valid_float = valid.to(per_agent_mean.dtype)
+        return (per_agent_mean * valid_float).sum(), valid_float.sum()
 
     def _counterfactual_td_loss(self, batch, actions, targets, td_mask):
         mac_out = []
@@ -687,6 +736,13 @@ class CleanLearner:
             and t_env >= self.condition_gradient_consistency_warmup_steps
             else None
         )
+        generated_parameter_stability_enabled = (
+            self.generated_parameter_stability_active
+            and t_env >= self.generated_parameter_stability_warmup_steps
+        )
+        previous_generated_parameters = None
+        generated_parameter_stability_sum = None
+        generated_parameter_stability_count = mask.new_zeros(())
         parameter_probe_times = set()
         observation_probe_times = set()
         if (
@@ -720,6 +776,37 @@ class CleanLearner:
                         t in observation_probe_times
                     )
                 mac_out.append(self.mac.forward(batch, t=t))
+                if generated_parameter_stability_enabled and t < mask.shape[1]:
+                    current_generated_parameters = getattr(
+                        self.mac, "latest_generated_parameter_graph", None
+                    )
+                    if current_generated_parameters is None:
+                        raise RuntimeError(
+                            "Generated-parameter stability requires the exact "
+                            "differentiable hypernetwork outputs."
+                        )
+                    if previous_generated_parameters is not None:
+                        pair_valid = (
+                            mask[:, t].reshape(batch.batch_size) > 0
+                        ) & (mask[:, t - 1].reshape(batch.batch_size) > 0)
+                        pair_sum, pair_count = (
+                            self._generated_parameter_stability_pair(
+                                previous_generated_parameters,
+                                current_generated_parameters,
+                                pair_valid,
+                                batch.batch_size,
+                                self.args.n_agents,
+                            )
+                        )
+                        generated_parameter_stability_sum = (
+                            pair_sum
+                            if generated_parameter_stability_sum is None
+                            else generated_parameter_stability_sum + pair_sum
+                        )
+                        generated_parameter_stability_count = (
+                            generated_parameter_stability_count + pair_count
+                        )
+                    previous_generated_parameters = current_generated_parameters
                 if condition_graphs is not None:
                     condition_graph = getattr(
                         self.mac, "latest_condition_graph", None
@@ -841,6 +928,12 @@ class CleanLearner:
                 ) = self._condition_gradient_consistency_loss(
                     td_error, td_mask, condition_graphs[:-1]
                 )
+            generated_parameter_stability_loss = td_loss.new_zeros(())
+            if generated_parameter_stability_sum is not None:
+                generated_parameter_stability_loss = (
+                    generated_parameter_stability_sum
+                    / generated_parameter_stability_count.clamp(min=1.0)
+                )
             loss = (
                 td_loss
                 + aux_loss
@@ -850,6 +943,8 @@ class CleanLearner:
                 * teacher_td_loss
                 + self.condition_gradient_consistency_coef
                 * condition_gradient_consistency_loss
+                + self.generated_parameter_stability_coef
+                * generated_parameter_stability_loss
             )
 
         parameter_sensitivity_score = None
@@ -1082,6 +1177,17 @@ class CleanLearner:
                 )
                 for stat_name, stat_value in condition_gradient_consistency_stats.items():
                     self.logger.log_stat(stat_name, stat_value.item(), t_env)
+            if self.generated_parameter_stability_active:
+                self.logger.log_stat(
+                    "loss_generated_parameter_stability",
+                    generated_parameter_stability_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "generated_parameter_stability_active",
+                    float(generated_parameter_stability_enabled),
+                    t_env,
+                )
             if self.latest_relation_gate_mean is not None:
                 self.logger.log_stat("relation_gate_mean", self.latest_relation_gate_mean, t_env)
                 self.logger.log_stat("relation_gate_std", self.latest_relation_gate_std, t_env)

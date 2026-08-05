@@ -556,6 +556,9 @@ hypernet_layers: 2
 #                                      variant. It samples a few adjacent
 #                                      timesteps and aligns their TD gradients
 #                                      in the low-dimensional condition space.
+# - grf_abs_dual_branch_hard_gate_param_stability_hypercond: Counter hard-gate
+#                                      variant using the exact adjacent-step L1
+#                                      change of every generated weight and bias.
 # - grf_abs_single_transformer_branch_hypercond: Counter structural control;
 #                                      keeps the dual baseline's full-observation
 #                                      entity Transformer branch and removes the
@@ -843,6 +846,8 @@ clean_dynamic_branch_gate_warmup_steps: 250000
 clean_condition_gradient_consistency_coef: 0.1
 clean_condition_gradient_consistency_pairs: 2
 clean_condition_gradient_consistency_warmup_steps: 250000
+clean_generated_parameter_stability_coef: 0.1
+clean_generated_parameter_stability_warmup_steps: 250000
 clean_relation_distill_coef: 0.05
 clean_relation_teacher_td_coef: 0.2
 clean_smooth_head_loss_coef: 0.01

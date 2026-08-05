@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# One-shot W&B update for the gradient-consistency hard-gate Counter job. The job id
+# One-shot W&B update for both stability hard-gate Counter jobs. The job id
 # is discovered from its exact Slurm name, then matched to the offline W&B
 # directory by start timestamp.
 
@@ -34,6 +34,7 @@ done
 
 START_DATE="$(date -d "$LOOKBACK_DAYS days ago" +%F)"
 JOB_NAMES=(
+  "grf_counter_hard_gate_param_stability_s${SEED}"
   "grf_counter_hard_gate_grad_consistency_s${SEED}"
 )
 
