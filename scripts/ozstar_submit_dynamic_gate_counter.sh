@@ -10,7 +10,8 @@ SEEDS="${SEEDS:-1}"
 TIME="${TIME:-1-00:00:00}"
 T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
-CPUS_PER_TASK="${CPUS_PER_TASK:-32}"
+COUNTER_CPUS_PER_TASK="${COUNTER_CPUS_PER_TASK:-28}"
+CORRIDOR_CPUS_PER_TASK="${CORRIDOR_CPUS_PER_TASK:-32}"
 COUNTER_MEMORY="${COUNTER_MEMORY:-10G}"
 CORRIDOR_MEMORY="${CORRIDOR_MEMORY:-96G}"
 COUNTER_AUX_COEF="${COUNTER_AUX_COEF:-0.1}"
@@ -18,7 +19,8 @@ CORRIDOR_AUX_COEF="${CORRIDOR_AUX_COEF:-0.01}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 BUFFER_SIZE="${BUFFER_SIZE:-5000}"
-TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-$CPUS_PER_TASK}"
+COUNTER_TORCH_NUM_THREADS="${COUNTER_TORCH_NUM_THREADS:-$COUNTER_CPUS_PER_TASK}"
+CORRIDOR_TORCH_NUM_THREADS="${CORRIDOR_TORCH_NUM_THREADS:-$CORRIDOR_CPUS_PER_TASK}"
 TORCH_NUM_INTEROP_THREADS="${TORCH_NUM_INTEROP_THREADS:-1}"
 LEARNER_UPDATES_PER_COLLECT="${LEARNER_UPDATES_PER_COLLECT:-1}"
 ENV_WORKER_STARTUP_STAGGER="${ENV_WORKER_STARTUP_STAGGER:-0.25}"
@@ -42,7 +44,8 @@ fi
 "$PYTHON_BIN" scripts/smoke_test_dual_branch_dynamic_gate.py
 
 common_args() {
-  printf '%s' "$EXTRA_ARGS torch_num_threads=$TORCH_NUM_THREADS torch_num_interop_threads=$TORCH_NUM_INTEROP_THREADS learner_updates_per_collect=$LEARNER_UPDATES_PER_COLLECT clean_relation_teacher_td_coef=0.0 clean_relation_distill_coef=0.0 clean_smooth_head_loss_coef=0.0 clean_action_pred_loss_coef=0.0 clean_public_delta_loss_coef=0.0 save_battle_trace=False"
+  local torch_num_threads="$1"
+  printf '%s' "$EXTRA_ARGS torch_num_threads=$torch_num_threads torch_num_interop_threads=$TORCH_NUM_INTEROP_THREADS learner_updates_per_collect=$LEARNER_UPDATES_PER_COLLECT clean_relation_teacher_td_coef=0.0 clean_relation_distill_coef=0.0 clean_smooth_head_loss_coef=0.0 clean_action_pred_loss_coef=0.0 clean_public_delta_loss_coef=0.0 save_battle_trace=False"
 }
 
 active_job() {
@@ -56,7 +59,7 @@ submit_one() {
   local scene="$1"
   local variant="$2"
   local seed="$3"
-  local tag env_config map_name memory model suffix scene_args
+  local tag env_config map_name memory cpus_per_task torch_num_threads model suffix scene_args
 
   case "$scene" in
     counter)
@@ -64,6 +67,8 @@ submit_one() {
       env_config="academy_counterattack_easy"
       map_name="academy_counterattack_easy"
       memory="$COUNTER_MEMORY"
+      cpus_per_task="$COUNTER_CPUS_PER_TASK"
+      torch_num_threads="$COUNTER_TORCH_NUM_THREADS"
       scene_args="clean_condition_gradient_consistency_coef=$COUNTER_AUX_COEF clean_generated_parameter_stability_coef=$COUNTER_AUX_COEF env_worker_startup_stagger=$ENV_WORKER_STARTUP_STAGGER env_worker_reset_retries=$ENV_WORKER_RESET_RETRIES env_worker_reset_retry_delay=$ENV_WORKER_RESET_RETRY_DELAY env_worker_response_timeout=$ENV_WORKER_RESPONSE_TIMEOUT env_args.write_video=False"
       case "$variant" in
         param)
@@ -85,6 +90,8 @@ submit_one() {
       env_config="sc2"
       map_name="corridor"
       memory="$CORRIDOR_MEMORY"
+      cpus_per_task="$CORRIDOR_CPUS_PER_TASK"
+      torch_num_threads="$CORRIDOR_TORCH_NUM_THREADS"
       scene_args="clean_condition_gradient_consistency_coef=$CORRIDOR_AUX_COEF clean_generated_parameter_stability_coef=$CORRIDOR_AUX_COEF"
       case "$variant" in
         full)
@@ -123,16 +130,16 @@ submit_one() {
   job_id=$(sbatch --parsable \
     --nodes=1 \
     --ntasks=1 \
-    --cpus-per-task="$CPUS_PER_TASK" \
+    --cpus-per-task="$cpus_per_task" \
     --mem="$memory" \
     --time="$TIME" \
     --job-name="$job_name" \
     --output=ozstar_logs/%x_%j.out \
     --error=ozstar_logs/%x_%j.err \
-    --export=ALL,PYTHON_BIN="$PYTHON_BIN",CONFIG=clean_hyper,ENV_CONFIG="$env_config",MAP_NAME="$map_name",MODEL_TYPE="$model",SEED="$seed",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",EXPECTED_BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",GROUP_NAME="$run_name",OMP_NUM_THREADS="$TORCH_NUM_THREADS",MKL_NUM_THREADS="$TORCH_NUM_THREADS",OPENBLAS_NUM_THREADS="$TORCH_NUM_THREADS",NUMEXPR_NUM_THREADS="$TORCH_NUM_THREADS",EXTRA_ARGS="$(common_args) $scene_args" \
+    --export=ALL,PYTHON_BIN="$PYTHON_BIN",CONFIG=clean_hyper,ENV_CONFIG="$env_config",MAP_NAME="$map_name",MODEL_TYPE="$model",SEED="$seed",T_MAX="$T_MAX",TEST_INTERVAL="$TEST_INTERVAL",BATCH_SIZE_RUN="$BATCH_SIZE_RUN",EXPECTED_BATCH_SIZE_RUN="$BATCH_SIZE_RUN",BATCH_SIZE="$BATCH_SIZE",BUFFER_SIZE="$BUFFER_SIZE",USE_WANDB="$USE_WANDB",WANDB_MODE="$WANDB_MODE",USE_CUDA="$USE_CUDA",RUN_NAME="$run_name",GROUP_NAME="$run_name",OMP_NUM_THREADS="$torch_num_threads",MKL_NUM_THREADS="$torch_num_threads",OPENBLAS_NUM_THREADS="$torch_num_threads",NUMEXPR_NUM_THREADS="$torch_num_threads",EXTRA_ARGS="$(common_args "$torch_num_threads") $scene_args" \
     scripts/ozstar_train_offline.sbatch)
-  printf 'submitted job=%s scene=%s variant=%s seed=%s memory=%s model=%s\n' \
-    "${job_id%%;*}" "$scene" "$variant" "$seed" "$memory" "$model"
+  printf 'submitted job=%s scene=%s variant=%s seed=%s cpus=%s memory=%s model=%s\n' \
+    "${job_id%%;*}" "$scene" "$variant" "$seed" "$cpus_per_task" "$memory" "$model"
 }
 
 submitted=0
