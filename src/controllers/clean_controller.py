@@ -38,6 +38,8 @@ class CleanMAC(BasicMAC):
             "rpg_dual_branch_cstg_gate_hypercond",
             "rpg_dual_branch_bayesg_gate_hypercond",
             "rpg_dual_branch_hard_gate_hypercond",
+            "rpg_dual_branch_hard_gate_param_stability_hypercond",
+            "rpg_dual_branch_hard_gate_grad_consistency_hypercond",
             "rpg_public_transformer_hypercond",
             "rpg_public_future_delta_token_transformer_hypercond",
             "rpg_public_future_delta_bias_transformer_hypercond",

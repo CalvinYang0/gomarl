@@ -14,6 +14,8 @@ from modules.agents.clean_hyper_agent import (  # noqa: E402
     GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL,
     GRF_DUAL_BRANCH_VARIANTS,
     GRFPublicPrivateBiasTransformerCapturer,
+    RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL,
+    RPG_DUAL_BRANCH_VARIANTS,
 )
 from learners.clean_learner import CleanLearner  # noqa: E402
 
@@ -157,6 +159,19 @@ def check_generated_parameter_stability():
     assert source.grad is not None
     assert source.grad.abs().sum().item() > 0.0
 
+    corridor_model_name = "rpg_dual_branch_hard_gate_param_stability_hypercond"
+    assert corridor_model_name in RPG_DUAL_BRANCH_VARIANTS
+    assert (
+        RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[corridor_model_name]
+        == "hard_st"
+    )
+
+
+def check_corridor_gradient_consistency_registration():
+    model_name = "rpg_dual_branch_hard_gate_grad_consistency_hypercond"
+    assert model_name in RPG_DUAL_BRANCH_VARIANTS
+    assert RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[model_name] == "hard_st"
+
 
 def main():
     th.manual_seed(17)
@@ -168,6 +183,8 @@ def main():
     print("condition_gradient_consistency second_order=ok")
     check_generated_parameter_stability()
     print("generated_parameter_stability exact_l1=ok")
+    check_corridor_gradient_consistency_registration()
+    print("corridor_stability_variants registration=ok")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# One-shot W&B update for both stability hard-gate Counter jobs. The job id
+# One-shot W&B update for the five Counter/Corridor comparison jobs. The job id
 # is discovered from its exact Slurm name, then matched to the offline W&B
 # directory by start timestamp.
 
@@ -36,9 +36,12 @@ START_DATE="$(date -d "$LOOKBACK_DAYS days ago" +%F)"
 JOB_NAMES=(
   "grf_counter_hard_gate_param_stability_s${SEED}"
   "grf_counter_hard_gate_grad_consistency_s${SEED}"
+  "corridor_dual_full_gate_cmp_s${SEED}"
+  "corridor_dual_hard_gate_param_stability_s${SEED}"
+  "corridor_dual_hard_gate_grad_consistency_s${SEED}"
 )
 
-echo "== Dynamic-gate Counter W&B update =="
+echo "== Counter/Corridor stability comparison W&B update =="
 echo "repo: $REPO_DIR"
 echo "destination: $WANDB_ENTITY/$WANDB_PROJECT"
 echo "search window: $START_DATE to now"

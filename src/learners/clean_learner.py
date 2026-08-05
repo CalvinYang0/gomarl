@@ -102,7 +102,10 @@ class CleanLearner:
         self.last_branch_drop_version_logged = -1
         self.condition_gradient_consistency_active = (
             getattr(self.mac.agent, "model_type", "")
-            == "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond"
+            in {
+                "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond",
+                "rpg_dual_branch_hard_gate_grad_consistency_hypercond",
+            }
         )
         self.condition_gradient_consistency_coef = float(
             getattr(args, "clean_condition_gradient_consistency_coef", 0.1)
@@ -123,7 +126,10 @@ class CleanLearner:
         )
         self.generated_parameter_stability_active = (
             getattr(self.mac.agent, "model_type", "")
-            == "grf_abs_dual_branch_hard_gate_param_stability_hypercond"
+            in {
+                "grf_abs_dual_branch_hard_gate_param_stability_hypercond",
+                "rpg_dual_branch_hard_gate_param_stability_hypercond",
+            }
         )
         self.generated_parameter_stability_coef = float(
             getattr(args, "clean_generated_parameter_stability_coef", 0.1)

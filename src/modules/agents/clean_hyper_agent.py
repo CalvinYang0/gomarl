@@ -241,6 +241,8 @@ RPG_DUAL_BRANCH_VARIANTS = {
     "rpg_dual_branch_cstg_gate_hypercond",
     "rpg_dual_branch_bayesg_gate_hypercond",
     "rpg_dual_branch_hard_gate_hypercond",
+    "rpg_dual_branch_hard_gate_param_stability_hypercond",
+    "rpg_dual_branch_hard_gate_grad_consistency_hypercond",
 }
 RPG_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
     "rpg_dual_branch_td_benefit_drop_hypercond": "td_benefit",
@@ -250,6 +252,8 @@ RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "rpg_dual_branch_cstg_gate_hypercond": "cstg",
     "rpg_dual_branch_bayesg_gate_hypercond": "bayesg",
     "rpg_dual_branch_hard_gate_hypercond": "hard_st",
+    "rpg_dual_branch_hard_gate_param_stability_hypercond": "hard_st",
+    "rpg_dual_branch_hard_gate_grad_consistency_hypercond": "hard_st",
 }
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",
@@ -9476,7 +9480,10 @@ class CleanHyperAgent(nn.Module):
 
         if (
             self.model_type
-            == "grf_abs_dual_branch_hard_gate_param_stability_hypercond"
+            in {
+                "grf_abs_dual_branch_hard_gate_param_stability_hypercond",
+                "rpg_dual_branch_hard_gate_param_stability_hypercond",
+            }
             and th.is_grad_enabled()
         ):
             # Keep views of the exact generated tensors. The learner reduces
@@ -9888,6 +9895,16 @@ class CleanHyperAgent(nn.Module):
             batch_size * n_agents, self.rpg_interaction_input_dim, 1
         )
         interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(batch_size * n_agents, 1, 1)
+        if (
+            self.model_type
+            == "rpg_dual_branch_hard_gate_param_stability_hypercond"
+            and th.is_grad_enabled()
+        ):
+            previous_parts = self.latest_generated_parameter_graph or ()
+            self.latest_generated_parameter_graph = previous_parts + (
+                interaction_out_w,
+                interaction_out_b,
+            )
         capture_parameter_graph = (
             (
                 SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
@@ -10258,6 +10275,17 @@ class CleanHyperAgent(nn.Module):
             ego_out_b = self.rpg_ego_out_b(flat_condition).view(
                 batch_size * n_agents, 1, self.rpg_n_ego_actions
             )
+            if (
+                self.model_type
+                == "rpg_dual_branch_hard_gate_param_stability_hypercond"
+                and th.is_grad_enabled()
+            ):
+                self.latest_generated_parameter_graph = (
+                    ego_bottleneck_w,
+                    ego_bottleneck_b,
+                    ego_out_w,
+                    ego_out_b,
+                )
             if (
                 (
                     SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
@@ -10743,6 +10771,13 @@ class CleanHyperAgent(nn.Module):
                 relation_condition, next_relation_hidden, enemy_tokens, enemy_mask = self._build_rpg_condition(
                     context, relation_hidden_state, test_mode=test_mode
                 )
+                if (
+                    self.model_type
+                    == "rpg_dual_branch_hard_gate_grad_consistency_hypercond"
+                    and th.is_grad_enabled()
+                    and not test_mode
+                ):
+                    self.latest_condition_graph = relation_condition
                 if self.model_type in TOKEN_DECISION_HEAD_VARIANTS:
                     condition = relation_condition
                     self.latest_condition = condition.detach()

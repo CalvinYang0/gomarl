@@ -559,6 +559,8 @@ hypernet_layers: 2
 # - grf_abs_dual_branch_hard_gate_param_stability_hypercond: Counter hard-gate
 #                                      variant using the exact adjacent-step L1
 #                                      change of every generated weight and bias.
+#   The corresponding SMAC Corridor variants use the same suffixes without
+#   grf_abs_: rpg_dual_branch_hard_gate_{param_stability,grad_consistency}_hypercond.
 # - grf_abs_single_transformer_branch_hypercond: Counter structural control;
 #                                      keeps the dual baseline's full-observation
 #                                      entity Transformer branch and removes the
