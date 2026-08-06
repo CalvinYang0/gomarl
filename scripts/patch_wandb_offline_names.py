@@ -74,7 +74,14 @@ def _record_is_run(record):
             return False
 
 
-def patch_wandb_file(path, max_group_len, max_name_len, new_run_id=None):
+def patch_wandb_file(
+    path,
+    max_group_len,
+    max_name_len,
+    new_run_id=None,
+    display_name_override=None,
+    run_group_override=None,
+):
     from wandb.proto import wandb_internal_pb2
     from wandb.sdk.internal.datastore import DataStore
 
@@ -106,12 +113,28 @@ def patch_wandb_file(path, max_group_len, max_name_len, new_run_id=None):
                     if old_run_id != new_run_id:
                         run.run_id = new_run_id
                         changed.append(("run_id", old_run_id, new_run_id))
+                if display_name_override is not None:
+                    old_display_name = run.display_name
+                    new_display_name = shorten_name(display_name_override, max_name_len)
+                    if old_display_name != new_display_name:
+                        run.display_name = new_display_name
+                        changed.append(("display_name", old_display_name, new_display_name))
+                if run_group_override is not None:
+                    old_run_group = run.run_group
+                    new_run_group = shorten_name(run_group_override, max_group_len)
+                    if old_run_group != new_run_group:
+                        run.run_group = new_run_group
+                        changed.append(("run_group", old_run_group, new_run_group))
                 for field_name, max_len in (
                     ("run_group", max_group_len),
                     ("display_name", max_name_len),
                     ("job_type", max_group_len),
                 ):
                     if not hasattr(run, field_name):
+                        continue
+                    if display_name_override is not None and field_name == "display_name":
+                        continue
+                    if run_group_override is not None and field_name == "run_group":
                         continue
                     old = getattr(run, field_name)
                     if not old:
@@ -152,6 +175,14 @@ def main():
         help="Assign a fresh 8-character W&B run id to the copied run. "
         "Use without a value to generate one automatically.",
     )
+    parser.add_argument(
+        "--display-name",
+        help="Override the uploaded W&B display name in the copied run.",
+    )
+    parser.add_argument(
+        "--run-group",
+        help="Override the uploaded W&B group in the copied run.",
+    )
     args = parser.parse_args()
 
     src = Path(args.run_dir).resolve()
@@ -185,7 +216,12 @@ def main():
         run_files = [renamed_run_file]
 
     changed = patch_wandb_file(
-        run_files[0], args.max_group_len, args.max_name_len, new_run_id=new_run_id
+        run_files[0],
+        args.max_group_len,
+        args.max_name_len,
+        new_run_id=new_run_id,
+        display_name_override=args.display_name,
+        run_group_override=args.run_group,
     )
     for field_name, old, new in changed:
         print("patched {}: {} -> {}".format(field_name, old, new), file=sys.stderr)
