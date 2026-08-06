@@ -12,7 +12,8 @@ T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 COUNTER_CPUS_PER_TASK="${COUNTER_CPUS_PER_TASK:-28}"
 CORRIDOR_CPUS_PER_TASK="${CORRIDOR_CPUS_PER_TASK:-32}"
-COUNTER_MEMORY="${COUNTER_MEMORY:-10G}"
+COUNTER_PARAM_MEMORY="${COUNTER_PARAM_MEMORY:-10G}"
+COUNTER_GRAD_MEMORY="${COUNTER_GRAD_MEMORY:-16G}"
 CORRIDOR_MEMORY="${CORRIDOR_MEMORY:-96G}"
 COUNTER_AUX_COEF="${COUNTER_AUX_COEF:-0.1}"
 CORRIDOR_AUX_COEF="${CORRIDOR_AUX_COEF:-0.01}"
@@ -66,16 +67,17 @@ submit_one() {
       tag="grf_counter"
       env_config="academy_counterattack_easy"
       map_name="academy_counterattack_easy"
-      memory="$COUNTER_MEMORY"
       cpus_per_task="$COUNTER_CPUS_PER_TASK"
       torch_num_threads="$COUNTER_TORCH_NUM_THREADS"
       scene_args="clean_condition_gradient_consistency_coef=$COUNTER_AUX_COEF clean_generated_parameter_stability_coef=$COUNTER_AUX_COEF env_worker_startup_stagger=$ENV_WORKER_STARTUP_STAGGER env_worker_reset_retries=$ENV_WORKER_RESET_RETRIES env_worker_reset_retry_delay=$ENV_WORKER_RESET_RETRY_DELAY env_worker_response_timeout=$ENV_WORKER_RESPONSE_TIMEOUT env_args.write_video=False"
       case "$variant" in
         param)
+          memory="$COUNTER_PARAM_MEMORY"
           model="grf_abs_dual_branch_hard_gate_param_stability_hypercond"
           suffix="hard_gate_param_stability"
           ;;
         grad)
+          memory="$COUNTER_GRAD_MEMORY"
           model="grf_abs_dual_branch_hard_gate_grad_consistency_hypercond"
           suffix="hard_gate_grad_consistency"
           ;;
