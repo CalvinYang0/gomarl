@@ -111,6 +111,8 @@ class CleanLearner:
                 "rpg_dual_branch_binary_concrete_grad_consistency_hypercond",
                 "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
                 "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
+                "rpg_dual_branch_attention_only_hard_gate_grad_consistency_hypercond",
+                "rpg_dual_branch_split_head_hard_gate_grad_consistency_hypercond",
             }
         )
         self.condition_gradient_consistency_coef = float(
@@ -139,6 +141,8 @@ class CleanLearner:
                 "rpg_dual_branch_binary_concrete_param_stability_hypercond",
                 "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond",
                 "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
+                "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
+                "rpg_dual_branch_split_head_hard_gate_param_stability_hypercond",
             }
         )
         self.generated_parameter_stability_coef = float(

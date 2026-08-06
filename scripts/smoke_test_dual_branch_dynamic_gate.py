@@ -15,6 +15,8 @@ from modules.agents.clean_hyper_agent import (  # noqa: E402
     GRF_DUAL_BRANCH_VARIANTS,
     GRFPublicPrivateBiasTransformerCapturer,
     RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL,
+    RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS,
+    RPG_DUAL_BRANCH_SPLIT_HEAD_VARIANTS,
     RPG_DUAL_BRANCH_VARIANTS,
 )
 from learners.clean_learner import CleanLearner  # noqa: E402
@@ -202,6 +204,18 @@ def check_new_variant_registration():
             assert adaptive in variants
             assert modes[adaptive] == "hard_st"
 
+    for auxiliary in ("param_stability", "grad_consistency"):
+        attention_only = (
+            f"rpg_dual_branch_attention_only_hard_gate_{auxiliary}_hypercond"
+        )
+        split_head = f"rpg_dual_branch_split_head_hard_gate_{auxiliary}_hypercond"
+        assert attention_only in RPG_DUAL_BRANCH_VARIANTS
+        assert attention_only in RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS
+        assert RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[attention_only] == "hard_st"
+        assert split_head in RPG_DUAL_BRANCH_VARIANTS
+        assert split_head in RPG_DUAL_BRANCH_SPLIT_HEAD_VARIANTS
+        assert RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[split_head] == "hard_st"
+
 
 def check_adaptive_auxiliary_ratio_detached():
     learner = CleanLearner.__new__(CleanLearner)
@@ -241,7 +255,7 @@ def main():
     check_corridor_gradient_consistency_registration()
     print("corridor_stability_variants registration=ok")
     check_new_variant_registration()
-    print("new_concrete_and_adaptive_variants registration=ok")
+    print("new_gate_and_branch_role_variants registration=ok")
     check_adaptive_auxiliary_ratio_detached()
     print("adaptive_auxiliary detached_ema_ratio=ok")
 

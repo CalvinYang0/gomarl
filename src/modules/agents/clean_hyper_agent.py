@@ -247,6 +247,32 @@ RPG_DUAL_BRANCH_VARIANTS = {
     "rpg_dual_branch_binary_concrete_grad_consistency_hypercond",
     "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
     "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
+    "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
+    "rpg_dual_branch_attention_only_hard_gate_grad_consistency_hypercond",
+    "rpg_dual_branch_split_head_hard_gate_param_stability_hypercond",
+    "rpg_dual_branch_split_head_hard_gate_grad_consistency_hypercond",
+}
+RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
+    "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
+    "rpg_dual_branch_attention_only_hard_gate_grad_consistency_hypercond",
+}
+RPG_DUAL_BRANCH_SPLIT_HEAD_VARIANTS = {
+    "rpg_dual_branch_split_head_hard_gate_param_stability_hypercond",
+    "rpg_dual_branch_split_head_hard_gate_grad_consistency_hypercond",
+}
+RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS = {
+    "rpg_dual_branch_hard_gate_param_stability_hypercond",
+    "rpg_dual_branch_binary_concrete_param_stability_hypercond",
+    "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
+    "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
+    "rpg_dual_branch_split_head_hard_gate_param_stability_hypercond",
+}
+RPG_DUAL_BRANCH_GRAD_CONSISTENCY_VARIANTS = {
+    "rpg_dual_branch_hard_gate_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_grad_consistency_hypercond",
+    "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
+    "rpg_dual_branch_attention_only_hard_gate_grad_consistency_hypercond",
+    "rpg_dual_branch_split_head_hard_gate_grad_consistency_hypercond",
 }
 RPG_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
     "rpg_dual_branch_td_benefit_drop_hypercond": "td_benefit",
@@ -262,6 +288,10 @@ RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "rpg_dual_branch_binary_concrete_grad_consistency_hypercond": "binary_concrete",
     "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond": "hard_st",
     "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond": "hard_st",
+    "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond": "hard_st",
+    "rpg_dual_branch_attention_only_hard_gate_grad_consistency_hypercond": "hard_st",
+    "rpg_dual_branch_split_head_hard_gate_param_stability_hypercond": "hard_st",
+    "rpg_dual_branch_split_head_hard_gate_grad_consistency_hypercond": "hard_st",
 }
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",
@@ -1476,6 +1506,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         hard_gate_threshold=0.5,
         hard_gate_initial_keep_probability=0.55,
         dynamic_branch_gate_warmup_steps=250000,
+        dynamic_branch_gate_scope="both",
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -1622,6 +1653,11 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.dynamic_branch_gate_warmup_steps = int(
             dynamic_branch_gate_warmup_steps
         )
+        self.dynamic_branch_gate_scope = str(dynamic_branch_gate_scope)
+        if self.dynamic_branch_gate_scope not in {"both", "attention_only"}:
+            raise ValueError(
+                "dynamic_branch_gate_scope must be both or attention_only"
+            )
         self._dynamic_branch_gate_t_env = 0
         self._dynamic_branch_gate_target_mode = False
         self._branch_audit_branch = None
@@ -1908,6 +1944,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         )
         self.latest_aux_loss = None
         self.latest_aux_stats = {}
+        self.latest_dual_linear_condition = None
+        self.latest_dual_attention_condition = None
 
     def _l0_gate(self, reference):
         if self.l0_log_alpha is None:
@@ -2114,6 +2152,16 @@ class PublicTransformerRelationCapturer(nn.Module):
             batch_size, n_agents, tokens.size(2), self.relation_dim
         )
         attention_embed = encoded[:, :, 0]
+        self.latest_dual_linear_condition = (
+            linear_embed
+            if self.output_dim == self.relation_dim
+            else self.output_encoder(linear_embed)
+        )
+        self.latest_dual_attention_condition = (
+            attention_embed
+            if self.output_dim == self.relation_dim
+            else self.output_encoder(attention_embed)
+        )
         relation_hidden = self.dual_condition_fuser(
             th.cat([linear_embed, attention_embed], dim=-1)
         )
@@ -2319,6 +2367,13 @@ class PublicTransformerRelationCapturer(nn.Module):
                 sample=not self._semantic_test_mode,
                 deterministic_soft=self._dynamic_branch_gate_target_mode,
             )
+            if self.dynamic_branch_gate_scope == "attention_only":
+                gates = th.stack(
+                    [th.ones_like(gates[0]), gates[1]], dim=0
+                )
+                probabilities = th.stack(
+                    [th.ones_like(probabilities[0]), probabilities[1]], dim=0
+                )
             warmup_active = (
                 self.dynamic_branch_gate_mode in {"hard_st", "binary_concrete"}
                 and self._dynamic_branch_gate_t_env
@@ -8899,6 +8954,12 @@ class CleanHyperAgent(nn.Module):
                 dynamic_branch_gate_warmup_steps=(
                     self.dynamic_branch_gate_warmup_steps
                 ),
+                dynamic_branch_gate_scope=(
+                    "attention_only"
+                    if self.model_type
+                    in RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS
+                    else "both"
+                ),
             )
         elif capturer_cls is SemanticSelfAttentionRelationCapturer:
             capturer_kwargs.update(
@@ -9961,12 +10022,7 @@ class CleanHyperAgent(nn.Module):
         )
         interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(batch_size * n_agents, 1, 1)
         if (
-            self.model_type
-            in {
-                "rpg_dual_branch_hard_gate_param_stability_hypercond",
-                "rpg_dual_branch_binary_concrete_param_stability_hypercond",
-                "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
-            }
+            self.model_type in RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
             and th.is_grad_enabled()
         ):
             previous_parts = self.latest_generated_parameter_graph or ()
@@ -10315,7 +10371,25 @@ class CleanHyperAgent(nn.Module):
     def _apply_rpg_structured_maker(self, hidden, relation_condition, enemy_tokens, enemy_mask, context=None):
         batch_size, n_agents, _ = hidden.shape
         flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
-        flat_condition = relation_condition.reshape(batch_size * n_agents, -1)
+        ego_condition = relation_condition
+        interaction_condition = relation_condition
+        if self.model_type in RPG_DUAL_BRANCH_SPLIT_HEAD_VARIANTS:
+            ego_condition = getattr(
+                self.rpg_relation_capturer,
+                "latest_dual_linear_condition",
+                None,
+            )
+            interaction_condition = getattr(
+                self.rpg_relation_capturer,
+                "latest_dual_attention_condition",
+                None,
+            )
+            if ego_condition is None or interaction_condition is None:
+                raise RuntimeError(
+                    "Split-head dual branch requires both Linear and "
+                    "Transformer branch conditions."
+                )
+        flat_condition = ego_condition.reshape(batch_size * n_agents, -1)
         compute_training_aux = th.is_grad_enabled()
         generated_ego_head = None
 
@@ -10345,12 +10419,7 @@ class CleanHyperAgent(nn.Module):
                 batch_size * n_agents, 1, self.rpg_n_ego_actions
             )
             if (
-                self.model_type
-                in {
-                    "rpg_dual_branch_hard_gate_param_stability_hypercond",
-                    "rpg_dual_branch_binary_concrete_param_stability_hypercond",
-                    "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
-                }
+                self.model_type in RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
                 and th.is_grad_enabled()
             ):
                 self.latest_generated_parameter_graph = (
@@ -10414,6 +10483,10 @@ class CleanHyperAgent(nn.Module):
                     self.latest_aux_stats["residual_ego_gate"] = gate.mean().detach()
             q_ego = q_ego.view(batch_size, n_agents, self.rpg_n_ego_actions)
 
+        # The split-head variant generates self/ego action parameters from the
+        # Linear branch and enemy-interaction parameters from the Transformer
+        # branch. Other variants keep using the fused dual condition.
+        flat_condition = interaction_condition.reshape(batch_size * n_agents, -1)
         hidden_rep = hidden.unsqueeze(2).expand(-1, -1, self.rpg_obs_layout["n_enemies"], -1)
         if self.model_type == "rpg_full_structured_hypercond":
             interaction_input = th.cat([hidden_rep, enemy_tokens], dim=-1)
@@ -10856,16 +10929,31 @@ class CleanHyperAgent(nn.Module):
                     context, relation_hidden_state, test_mode=test_mode
                 )
                 if (
-                    self.model_type
-                    in {
-                        "rpg_dual_branch_hard_gate_grad_consistency_hypercond",
-                        "rpg_dual_branch_binary_concrete_grad_consistency_hypercond",
-                        "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
-                    }
+                    self.model_type in RPG_DUAL_BRANCH_GRAD_CONSISTENCY_VARIANTS
                     and th.is_grad_enabled()
                     and not test_mode
                 ):
-                    self.latest_condition_graph = relation_condition
+                    if self.model_type in RPG_DUAL_BRANCH_SPLIT_HEAD_VARIANTS:
+                        linear_condition = getattr(
+                            self.rpg_relation_capturer,
+                            "latest_dual_linear_condition",
+                            None,
+                        )
+                        attention_condition = getattr(
+                            self.rpg_relation_capturer,
+                            "latest_dual_attention_condition",
+                            None,
+                        )
+                        if linear_condition is None or attention_condition is None:
+                            raise RuntimeError(
+                                "Split-head gradient consistency requires both "
+                                "branch condition graphs."
+                            )
+                        self.latest_condition_graph = th.cat(
+                            [linear_condition, attention_condition], dim=-1
+                        )
+                    else:
+                        self.latest_condition_graph = relation_condition
                 if self.model_type in TOKEN_DECISION_HEAD_VARIANTS:
                     condition = relation_condition
                     self.latest_condition = condition.detach()
