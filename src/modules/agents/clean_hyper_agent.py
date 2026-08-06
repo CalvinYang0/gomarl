@@ -243,6 +243,10 @@ RPG_DUAL_BRANCH_VARIANTS = {
     "rpg_dual_branch_hard_gate_hypercond",
     "rpg_dual_branch_hard_gate_param_stability_hypercond",
     "rpg_dual_branch_hard_gate_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_param_stability_hypercond",
+    "rpg_dual_branch_binary_concrete_grad_consistency_hypercond",
+    "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
+    "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
 }
 RPG_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
     "rpg_dual_branch_td_benefit_drop_hypercond": "td_benefit",
@@ -254,6 +258,10 @@ RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "rpg_dual_branch_hard_gate_hypercond": "hard_st",
     "rpg_dual_branch_hard_gate_param_stability_hypercond": "hard_st",
     "rpg_dual_branch_hard_gate_grad_consistency_hypercond": "hard_st",
+    "rpg_dual_branch_binary_concrete_param_stability_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_grad_consistency_hypercond": "binary_concrete",
+    "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond": "hard_st",
+    "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond": "hard_st",
 }
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",
@@ -423,6 +431,10 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_hard_gate_hypercond",
     "grf_abs_dual_branch_hard_gate_param_stability_hypercond",
     "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_param_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_grad_consistency_hypercond",
+    "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond",
+    "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
 }
 GRF_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
     "grf_abs_dual_branch_td_benefit_drop_hypercond": "td_benefit",
@@ -434,6 +446,10 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_hard_gate_hypercond": "hard_st",
     "grf_abs_dual_branch_hard_gate_param_stability_hypercond": "hard_st",
     "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond": "hard_st",
+    "grf_abs_dual_branch_binary_concrete_param_stability_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_grad_consistency_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond": "hard_st",
+    "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond": "hard_st",
 }
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_hypercond",
@@ -765,19 +781,23 @@ class ObservationConditionedBranchGate(nn.Module):
         mode,
         cstg_sigma=0.5,
         bayesg_temperature=0.5,
+        binary_concrete_temperature=0.5,
         bayesg_eval_threshold=0.08,
         hard_threshold=0.5,
         initial_keep_probability=0.55,
     ):
         super().__init__()
-        if mode not in {"cstg", "bayesg", "hard_st"}:
+        if mode not in {"cstg", "bayesg", "hard_st", "binary_concrete"}:
             raise ValueError(
-                "dynamic branch gate mode must be cstg, bayesg, or hard_st"
+                "dynamic branch gate mode must be cstg, bayesg, hard_st, "
+                "or binary_concrete"
             )
         if cstg_sigma < 0.0:
             raise ValueError("cstg_sigma must be non-negative")
         if bayesg_temperature <= 0.0:
             raise ValueError("bayesg_temperature must be positive")
+        if binary_concrete_temperature <= 0.0:
+            raise ValueError("binary_concrete_temperature must be positive")
         if not 0.0 <= bayesg_eval_threshold <= 1.0:
             raise ValueError("bayesg_eval_threshold must be in [0, 1]")
         if not 0.0 < hard_threshold < 1.0:
@@ -791,6 +811,7 @@ class ObservationConditionedBranchGate(nn.Module):
         self.mode = mode
         self.cstg_sigma = float(cstg_sigma)
         self.bayesg_temperature = float(bayesg_temperature)
+        self.binary_concrete_temperature = float(binary_concrete_temperature)
         self.bayesg_eval_threshold = float(bayesg_eval_threshold)
         self.hard_threshold = float(hard_threshold)
         hidden_dim = int(hidden_dim)
@@ -803,7 +824,7 @@ class ObservationConditionedBranchGate(nn.Module):
         else:
             self.gate_network = nn.Linear(self.obs_dim, 2 * self.obs_dim)
 
-        if self.mode == "hard_st":
+        if self.mode in {"hard_st", "binary_concrete"}:
             final_layer = (
                 self.gate_network[-1]
                 if isinstance(self.gate_network, nn.Sequential)
@@ -814,7 +835,7 @@ class ObservationConditionedBranchGate(nn.Module):
             )
             nn.init.zeros_(final_layer.weight)
             nn.init.constant_(final_layer.bias, initial_logit)
-    def forward(self, obs, sample=True):
+    def forward(self, obs, sample=True, deterministic_soft=False):
         logits = self.gate_network(obs).view(
             *obs.shape[:-1], 2, self.obs_dim
         )
@@ -838,6 +859,24 @@ class ObservationConditionedBranchGate(nn.Module):
             )
         elif self.mode == "bayesg":
             gate = (probability > self.bayesg_eval_threshold).to(obs.dtype)
+        elif self.mode == "binary_concrete":
+            if deterministic_soft:
+                # The lagged target network uses the expectation to avoid
+                # injecting independent gate noise into every TD target.
+                gate = probability
+            elif sample:
+                # A Bernoulli Concrete sample uses logistic noise (the
+                # difference of two Gumbels). Unlike the deterministic hard
+                # STE, a low-probability slot can be sampled back into the
+                # computation and receive task feedback during training.
+                uniform = th.rand_like(logits).clamp_(1e-8, 1.0 - 1e-8)
+                logistic_noise = th.log(uniform) - th.log1p(-uniform)
+                gate = th.sigmoid(
+                    (logits + logistic_noise) / self.binary_concrete_temperature
+                )
+            else:
+                # Evaluation remains an exact scalar mask.
+                gate = (probability > self.hard_threshold).to(obs.dtype)
         else:
             # Exact 0/1 observations in the forward pass, with the sigmoid
             # probability supplying a straight-through gradient in backward.
@@ -1432,6 +1471,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         dynamic_branch_gate_hidden_dim=64,
         cstg_gate_sigma=0.5,
         bayesg_gate_temperature=0.5,
+        binary_concrete_temperature=0.5,
         bayesg_gate_eval_threshold=0.08,
         hard_gate_threshold=0.5,
         hard_gate_initial_keep_probability=0.55,
@@ -1560,9 +1600,11 @@ class PublicTransformerRelationCapturer(nn.Module):
             "cstg",
             "bayesg",
             "hard_st",
+            "binary_concrete",
         }:
             raise ValueError(
-                "dynamic_branch_gate_mode must be cstg, bayesg, hard_st, or None"
+                "dynamic_branch_gate_mode must be cstg, bayesg, hard_st, "
+                "binary_concrete, or None"
             )
         if self.dynamic_branch_gate_mode is not None and self.branch_drop_mode is not None:
             raise ValueError(
@@ -1571,6 +1613,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.dynamic_branch_gate_hidden_dim = int(dynamic_branch_gate_hidden_dim)
         self.cstg_gate_sigma = float(cstg_gate_sigma)
         self.bayesg_gate_temperature = float(bayesg_gate_temperature)
+        self.binary_concrete_temperature = float(binary_concrete_temperature)
         self.bayesg_gate_eval_threshold = float(bayesg_gate_eval_threshold)
         self.hard_gate_threshold = float(hard_gate_threshold)
         self.hard_gate_initial_keep_probability = float(
@@ -1580,6 +1623,7 @@ class PublicTransformerRelationCapturer(nn.Module):
             dynamic_branch_gate_warmup_steps
         )
         self._dynamic_branch_gate_t_env = 0
+        self._dynamic_branch_gate_target_mode = False
         self._branch_audit_branch = None
         self._branch_audit_group = None
         self._branch_audit_keep = None
@@ -1841,6 +1885,7 @@ class PublicTransformerRelationCapturer(nn.Module):
                 mode=self.dynamic_branch_gate_mode,
                 cstg_sigma=self.cstg_gate_sigma,
                 bayesg_temperature=self.bayesg_gate_temperature,
+                binary_concrete_temperature=self.binary_concrete_temperature,
                 bayesg_eval_threshold=self.bayesg_gate_eval_threshold,
                 hard_threshold=self.hard_gate_threshold,
                 initial_keep_probability=(
@@ -2270,10 +2315,12 @@ class PublicTransformerRelationCapturer(nn.Module):
     def _branch_keep_gates(self, reference):
         if self.dynamic_branch_gate is not None:
             gates, probabilities = self.dynamic_branch_gate(
-                reference, sample=not self._semantic_test_mode
+                reference,
+                sample=not self._semantic_test_mode,
+                deterministic_soft=self._dynamic_branch_gate_target_mode,
             )
             warmup_active = (
-                self.dynamic_branch_gate_mode == "hard_st"
+                self.dynamic_branch_gate_mode in {"hard_st", "binary_concrete"}
                 and self._dynamic_branch_gate_t_env
                 < self.dynamic_branch_gate_warmup_steps
             )
@@ -2581,6 +2628,9 @@ class PublicTransformerRelationCapturer(nn.Module):
 
     def set_dynamic_branch_gate_t_env(self, t_env):
         self._dynamic_branch_gate_t_env = max(0, int(t_env))
+
+    def set_dynamic_branch_gate_target_mode(self, enabled):
+        self._dynamic_branch_gate_target_mode = bool(enabled)
 
     def semantic_router_needs_binary_audit(self):
         return (
@@ -4260,6 +4310,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         dynamic_branch_gate_hidden_dim=64,
         cstg_gate_sigma=0.5,
         bayesg_gate_temperature=0.5,
+        binary_concrete_temperature=0.5,
         bayesg_gate_eval_threshold=0.08,
         hard_gate_threshold=0.5,
         hard_gate_initial_keep_probability=0.55,
@@ -4380,9 +4431,11 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             "cstg",
             "bayesg",
             "hard_st",
+            "binary_concrete",
         }:
             raise ValueError(
-                "dynamic_branch_gate_mode must be cstg, bayesg, hard_st, or None"
+                "dynamic_branch_gate_mode must be cstg, bayesg, hard_st, "
+                "binary_concrete, or None"
             )
         if self.dynamic_branch_gate_mode is not None and self.branch_drop_mode is not None:
             raise ValueError(
@@ -4391,6 +4444,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.dynamic_branch_gate_hidden_dim = int(dynamic_branch_gate_hidden_dim)
         self.cstg_gate_sigma = float(cstg_gate_sigma)
         self.bayesg_gate_temperature = float(bayesg_gate_temperature)
+        self.binary_concrete_temperature = float(binary_concrete_temperature)
         self.bayesg_gate_eval_threshold = float(bayesg_gate_eval_threshold)
         self.hard_gate_threshold = float(hard_gate_threshold)
         self.hard_gate_initial_keep_probability = float(
@@ -4400,6 +4454,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             dynamic_branch_gate_warmup_steps
         )
         self._dynamic_branch_gate_t_env = 0
+        self._dynamic_branch_gate_target_mode = False
         self._branch_audit_branch = None
         self._branch_audit_group = None
         self._branch_audit_keep = None
@@ -4593,6 +4648,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
                 mode=self.dynamic_branch_gate_mode,
                 cstg_sigma=self.cstg_gate_sigma,
                 bayesg_temperature=self.bayesg_gate_temperature,
+                binary_concrete_temperature=self.binary_concrete_temperature,
                 bayesg_eval_threshold=self.bayesg_gate_eval_threshold,
                 hard_threshold=self.hard_gate_threshold,
                 initial_keep_probability=(
@@ -7268,6 +7324,9 @@ class CleanHyperAgent(nn.Module):
         self.bayesg_gate_temperature = float(
             getattr(args, "clean_bayesg_gate_temperature", 0.5)
         )
+        self.binary_concrete_temperature = float(
+            getattr(args, "clean_binary_concrete_temperature", 0.5)
+        )
         self.bayesg_gate_eval_threshold = float(
             getattr(args, "clean_bayesg_gate_eval_threshold", 0.08)
         )
@@ -8601,6 +8660,7 @@ class CleanHyperAgent(nn.Module):
             dynamic_branch_gate_hidden_dim=self.dynamic_branch_gate_hidden_dim,
             cstg_gate_sigma=self.cstg_gate_sigma,
             bayesg_gate_temperature=self.bayesg_gate_temperature,
+            binary_concrete_temperature=self.binary_concrete_temperature,
             bayesg_gate_eval_threshold=self.bayesg_gate_eval_threshold,
             hard_gate_threshold=self.hard_gate_threshold,
             hard_gate_initial_keep_probability=(
@@ -8830,6 +8890,7 @@ class CleanHyperAgent(nn.Module):
                 dynamic_branch_gate_hidden_dim=self.dynamic_branch_gate_hidden_dim,
                 cstg_gate_sigma=self.cstg_gate_sigma,
                 bayesg_gate_temperature=self.bayesg_gate_temperature,
+                binary_concrete_temperature=self.binary_concrete_temperature,
                 bayesg_gate_eval_threshold=self.bayesg_gate_eval_threshold,
                 hard_gate_threshold=self.hard_gate_threshold,
                 hard_gate_initial_keep_probability=(
@@ -9482,7 +9543,11 @@ class CleanHyperAgent(nn.Module):
             self.model_type
             in {
                 "grf_abs_dual_branch_hard_gate_param_stability_hypercond",
+                "grf_abs_dual_branch_binary_concrete_param_stability_hypercond",
+                "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond",
                 "rpg_dual_branch_hard_gate_param_stability_hypercond",
+                "rpg_dual_branch_binary_concrete_param_stability_hypercond",
+                "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
             }
             and th.is_grad_enabled()
         ):
@@ -9897,7 +9962,11 @@ class CleanHyperAgent(nn.Module):
         interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(batch_size * n_agents, 1, 1)
         if (
             self.model_type
-            == "rpg_dual_branch_hard_gate_param_stability_hypercond"
+            in {
+                "rpg_dual_branch_hard_gate_param_stability_hypercond",
+                "rpg_dual_branch_binary_concrete_param_stability_hypercond",
+                "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
+            }
             and th.is_grad_enabled()
         ):
             previous_parts = self.latest_generated_parameter_graph or ()
@@ -10277,7 +10346,11 @@ class CleanHyperAgent(nn.Module):
             )
             if (
                 self.model_type
-                == "rpg_dual_branch_hard_gate_param_stability_hypercond"
+                in {
+                    "rpg_dual_branch_hard_gate_param_stability_hypercond",
+                    "rpg_dual_branch_binary_concrete_param_stability_hypercond",
+                    "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
+                }
                 and th.is_grad_enabled()
             ):
                 self.latest_generated_parameter_graph = (
@@ -10549,6 +10622,13 @@ class CleanHyperAgent(nn.Module):
         ):
             relation_capturer.set_dynamic_branch_gate_t_env(t_env)
 
+    def set_dynamic_branch_gate_target_mode(self, enabled):
+        relation_capturer = getattr(self, "rpg_relation_capturer", None)
+        if relation_capturer is not None and hasattr(
+            relation_capturer, "set_dynamic_branch_gate_target_mode"
+        ):
+            relation_capturer.set_dynamic_branch_gate_target_mode(enabled)
+
     def forward(self, inputs, hidden_state, context=None, test_mode=False):
         batch_size, n_agents, _ = inputs.shape
         flat_inputs = inputs.reshape(batch_size * n_agents, -1)
@@ -10665,7 +10745,11 @@ class CleanHyperAgent(nn.Module):
                 self.latest_condition = relation_condition.detach()
                 if (
                     self.model_type
-                    == "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond"
+                    in {
+                        "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond",
+                        "grf_abs_dual_branch_binary_concrete_grad_consistency_hypercond",
+                        "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
+                    }
                     and th.is_grad_enabled()
                     and not test_mode
                 ):
@@ -10773,7 +10857,11 @@ class CleanHyperAgent(nn.Module):
                 )
                 if (
                     self.model_type
-                    == "rpg_dual_branch_hard_gate_grad_consistency_hypercond"
+                    in {
+                        "rpg_dual_branch_hard_gate_grad_consistency_hypercond",
+                        "rpg_dual_branch_binary_concrete_grad_consistency_hypercond",
+                        "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
+                    }
                     and th.is_grad_enabled()
                     and not test_mode
                 ):

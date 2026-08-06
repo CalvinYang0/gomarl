@@ -561,6 +561,16 @@ hypernet_layers: 2
 #                                      change of every generated weight and bias.
 #   The corresponding SMAC Corridor variants use the same suffixes without
 #   grf_abs_: rpg_dual_branch_hard_gate_{param_stability,grad_consistency}_hypercond.
+# - *_dual_branch_binary_concrete_{param_stability,grad_consistency}_hypercond:
+#                                      same auxiliary targets with stochastic
+#                                      continuous Binary-Concrete gates during
+#                                      gradient-enabled training, deterministic
+#                                      probability gates for target forwards,
+#                                      and exact 0/1 evaluation masks.
+# - *_dual_branch_hard_gate_adaptive_{param_stability,grad_consistency}_hypercond:
+#                                      keep hard STE gates and adapt the detached
+#                                      EMA-weighted auxiliary term to a fixed
+#                                      fraction of TD loss.
 # - grf_abs_single_transformer_branch_hypercond: Counter structural control;
 #                                      keeps the dual baseline's full-observation
 #                                      entity Transformer branch and removes the
@@ -835,6 +845,7 @@ clean_branch_drop_freeze_steps: 5000000
 clean_dynamic_branch_gate_hidden_dim: 64
 clean_cstg_gate_sigma: 0.5
 clean_bayesg_gate_temperature: 0.5
+clean_binary_concrete_temperature: 0.5
 # This intentionally matches BayesG's GraphMaskGenerator implementation.
 clean_bayesg_gate_eval_threshold: 0.08
 # Corrected dynamic-gate baseline. It starts as a full-observation model and
@@ -850,6 +861,13 @@ clean_condition_gradient_consistency_pairs: 2
 clean_condition_gradient_consistency_warmup_steps: 250000
 clean_generated_parameter_stability_coef: 0.1
 clean_generated_parameter_stability_warmup_steps: 250000
+# Adaptive variants target a 10% auxiliary/TD scalar-loss ratio. EMA values and
+# the derived coefficient are detached from autograd; the cap is only a guard
+# against invalid/near-zero auxiliary batches.
+clean_adaptive_auxiliary_target_ratio: 0.1
+clean_adaptive_auxiliary_ema_decay: 0.99
+clean_adaptive_auxiliary_eps: 0.00000001
+clean_adaptive_auxiliary_max_coef: 100.0
 clean_relation_distill_coef: 0.05
 clean_relation_teacher_td_coef: 0.2
 clean_smooth_head_loss_coef: 0.01

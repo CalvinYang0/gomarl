@@ -50,13 +50,29 @@ def check_gate_module(model, obs):
     generator = model.dynamic_branch_gate
     assert generator is not None
     eval_gate_1, eval_prob_1 = generator(obs, sample=False)
-    eval_gate_2, eval_prob_2 = generator(obs, sample=True)
     expected_shape = (2,) + tuple(obs.shape)
     assert eval_gate_1.shape == expected_shape
     assert eval_prob_1.shape == expected_shape
-    assert th.equal(eval_gate_1, eval_gate_2)
-    assert th.equal(eval_prob_1, eval_prob_2)
     assert th.all((eval_gate_1 == 0.0) | (eval_gate_1 == 1.0))
+    if generator.mode == "binary_concrete":
+        train_gate_1, train_prob_1 = generator(obs, sample=True)
+        train_gate_2, train_prob_2 = generator(obs, sample=True)
+        assert th.equal(eval_prob_1, train_prob_1)
+        assert th.equal(train_prob_1, train_prob_2)
+        assert not th.equal(train_gate_1, train_gate_2)
+        assert th.any((train_gate_1 > 0.0) & (train_gate_1 < 1.0))
+        with th.no_grad():
+            rollout_gate_1, _ = generator(obs, sample=True)
+            rollout_gate_2, _ = generator(obs, sample=True)
+            target_gate, target_prob = generator(
+                obs, sample=True, deterministic_soft=True
+            )
+        assert not th.equal(rollout_gate_1, rollout_gate_2)
+        assert th.equal(target_gate, target_prob)
+    else:
+        eval_gate_2, eval_prob_2 = generator(obs, sample=True)
+        assert th.equal(eval_gate_1, eval_gate_2)
+        assert th.equal(eval_prob_1, eval_prob_2)
     final_layer = generator.gate_network[-1]
     assert final_layer.out_features == 2 * generator.obs_dim
     with th.no_grad():
@@ -173,10 +189,49 @@ def check_corridor_gradient_consistency_registration():
     assert RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[model_name] == "hard_st"
 
 
+def check_new_variant_registration():
+    for prefix, variants, modes in (
+        ("grf_abs", GRF_DUAL_BRANCH_VARIANTS, GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL),
+        ("rpg", RPG_DUAL_BRANCH_VARIANTS, RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL),
+    ):
+        for auxiliary in ("param_stability", "grad_consistency"):
+            concrete = f"{prefix}_dual_branch_binary_concrete_{auxiliary}_hypercond"
+            adaptive = f"{prefix}_dual_branch_hard_gate_adaptive_{auxiliary}_hypercond"
+            assert concrete in variants
+            assert modes[concrete] == "binary_concrete"
+            assert adaptive in variants
+            assert modes[adaptive] == "hard_st"
+
+
+def check_adaptive_auxiliary_ratio_detached():
+    learner = CleanLearner.__new__(CleanLearner)
+    learner.adaptive_auxiliary_target_ratio = 0.1
+    learner.adaptive_auxiliary_ema_decay = 0.9
+    learner.adaptive_auxiliary_eps = 1e-8
+    learner.adaptive_auxiliary_max_coef = 100.0
+    learner.adaptive_auxiliary_ema_td = None
+    learner.adaptive_auxiliary_ema_aux = None
+    learner.latest_adaptive_auxiliary_stats = {}
+
+    td_source = th.tensor(2.0, requires_grad=True)
+    aux_source = th.tensor(0.5, requires_grad=True)
+    td_loss = td_source.square()
+    auxiliary_loss = aux_source.square()
+    coefficient = learner._adaptive_auxiliary_coefficient(td_loss, auxiliary_loss)
+    assert isinstance(coefficient, float)
+    assert abs(coefficient * auxiliary_loss.item() / td_loss.item() - 0.1) < 1e-6
+    total = td_loss + coefficient * auxiliary_loss
+    total.backward()
+    assert abs(td_source.grad.item() - 4.0) < 1e-6
+    assert abs(aux_source.grad.item() - coefficient) < 1e-6
+
+
 def main():
     th.manual_seed(17)
     check_grf("hard_st")
     print("dual_branch hard_st scalar_forward_backward=ok")
+    check_grf("binary_concrete")
+    print("dual_branch binary_concrete stochastic_recovery=ok")
     check_grf_transformer_only()
     print("single_transformer_branch forward_backward=ok")
     check_condition_gradient_consistency()
@@ -185,6 +240,10 @@ def main():
     print("generated_parameter_stability exact_l1=ok")
     check_corridor_gradient_consistency_registration()
     print("corridor_stability_variants registration=ok")
+    check_new_variant_registration()
+    print("new_concrete_and_adaptive_variants registration=ok")
+    check_adaptive_auxiliary_ratio_detached()
+    print("adaptive_auxiliary detached_ema_ratio=ok")
 
 
 if __name__ == "__main__":

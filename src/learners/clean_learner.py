@@ -19,6 +19,8 @@ class CleanLearner:
         self.args = args
         self.mac = mac
         self.target_mac = copy.deepcopy(mac)
+        if hasattr(self.target_mac.agent, "set_dynamic_branch_gate_target_mode"):
+            self.target_mac.agent.set_dynamic_branch_gate_target_mode(True)
         self.logger = logger
         self.params = [
             parameter
@@ -105,6 +107,10 @@ class CleanLearner:
             in {
                 "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond",
                 "rpg_dual_branch_hard_gate_grad_consistency_hypercond",
+                "grf_abs_dual_branch_binary_concrete_grad_consistency_hypercond",
+                "rpg_dual_branch_binary_concrete_grad_consistency_hypercond",
+                "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
+                "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
             }
         )
         self.condition_gradient_consistency_coef = float(
@@ -129,6 +135,10 @@ class CleanLearner:
             in {
                 "grf_abs_dual_branch_hard_gate_param_stability_hypercond",
                 "rpg_dual_branch_hard_gate_param_stability_hypercond",
+                "grf_abs_dual_branch_binary_concrete_param_stability_hypercond",
+                "rpg_dual_branch_binary_concrete_param_stability_hypercond",
+                "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond",
+                "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
             }
         )
         self.generated_parameter_stability_coef = float(
@@ -144,9 +154,93 @@ class CleanLearner:
                 )
             ),
         )
+        model_type = getattr(self.mac.agent, "model_type", "")
+        self.adaptive_auxiliary_ratio_active = model_type in {
+            "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
+            "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
+            "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond",
+            "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
+        }
+        self.adaptive_auxiliary_target_ratio = float(
+            getattr(args, "clean_adaptive_auxiliary_target_ratio", 0.1)
+        )
+        self.adaptive_auxiliary_ema_decay = float(
+            getattr(args, "clean_adaptive_auxiliary_ema_decay", 0.99)
+        )
+        self.adaptive_auxiliary_eps = float(
+            getattr(args, "clean_adaptive_auxiliary_eps", 1e-8)
+        )
+        self.adaptive_auxiliary_max_coef = float(
+            getattr(args, "clean_adaptive_auxiliary_max_coef", 100.0)
+        )
+        if not 0.0 < self.adaptive_auxiliary_target_ratio:
+            raise ValueError("clean_adaptive_auxiliary_target_ratio must be positive")
+        if not 0.0 <= self.adaptive_auxiliary_ema_decay < 1.0:
+            raise ValueError("clean_adaptive_auxiliary_ema_decay must be in [0, 1)")
+        if not 0.0 < self.adaptive_auxiliary_eps:
+            raise ValueError("clean_adaptive_auxiliary_eps must be positive")
+        if not 0.0 < self.adaptive_auxiliary_max_coef:
+            raise ValueError("clean_adaptive_auxiliary_max_coef must be positive")
+        self.adaptive_auxiliary_ema_td = None
+        self.adaptive_auxiliary_ema_aux = None
+        self.latest_adaptive_auxiliary_stats = {}
 
     def _amp_context(self):
         return th.cuda.amp.autocast(enabled=True) if self.use_amp else nullcontext()
+
+    def _adaptive_auxiliary_coefficient(self, td_loss, auxiliary_loss):
+        """Match a detached EMA-scaled auxiliary term to a target TD ratio."""
+        with th.no_grad():
+            td_value = float(td_loss.detach().float().item())
+            auxiliary_value = float(auxiliary_loss.detach().float().item())
+            if auxiliary_value <= self.adaptive_auxiliary_eps:
+                self.latest_adaptive_auxiliary_stats = {
+                    "adaptive_auxiliary_ema_td": (
+                        0.0
+                        if self.adaptive_auxiliary_ema_td is None
+                        else self.adaptive_auxiliary_ema_td
+                    ),
+                    "adaptive_auxiliary_ema_loss": (
+                        0.0
+                        if self.adaptive_auxiliary_ema_aux is None
+                        else self.adaptive_auxiliary_ema_aux
+                    ),
+                    "adaptive_auxiliary_effective_coef": 0.0,
+                    "adaptive_auxiliary_weighted_loss": 0.0,
+                    "adaptive_auxiliary_weighted_to_td_ratio": 0.0,
+                    "adaptive_auxiliary_target_ratio": self.adaptive_auxiliary_target_ratio,
+                }
+                return 0.0
+            if self.adaptive_auxiliary_ema_td is None:
+                self.adaptive_auxiliary_ema_td = td_value
+                self.adaptive_auxiliary_ema_aux = auxiliary_value
+            else:
+                decay = self.adaptive_auxiliary_ema_decay
+                self.adaptive_auxiliary_ema_td = (
+                    decay * self.adaptive_auxiliary_ema_td
+                    + (1.0 - decay) * td_value
+                )
+                self.adaptive_auxiliary_ema_aux = (
+                    decay * self.adaptive_auxiliary_ema_aux
+                    + (1.0 - decay) * auxiliary_value
+                )
+            coefficient = (
+                self.adaptive_auxiliary_target_ratio
+                * self.adaptive_auxiliary_ema_td
+                / max(self.adaptive_auxiliary_ema_aux, self.adaptive_auxiliary_eps)
+            )
+            coefficient = min(coefficient, self.adaptive_auxiliary_max_coef)
+            weighted_value = coefficient * auxiliary_value
+            actual_ratio = weighted_value / max(td_value, self.adaptive_auxiliary_eps)
+            self.latest_adaptive_auxiliary_stats = {
+                "adaptive_auxiliary_ema_td": self.adaptive_auxiliary_ema_td,
+                "adaptive_auxiliary_ema_loss": self.adaptive_auxiliary_ema_aux,
+                "adaptive_auxiliary_effective_coef": coefficient,
+                "adaptive_auxiliary_weighted_loss": weighted_value,
+                "adaptive_auxiliary_weighted_to_td_ratio": actual_ratio,
+                "adaptive_auxiliary_target_ratio": self.adaptive_auxiliary_target_ratio,
+            }
+        return coefficient
 
     @staticmethod
     def _semantic_router(mac):
@@ -940,6 +1034,30 @@ class CleanLearner:
                     generated_parameter_stability_sum
                     / generated_parameter_stability_count.clamp(min=1.0)
                 )
+            condition_gradient_consistency_coef = (
+                self.condition_gradient_consistency_coef
+            )
+            generated_parameter_stability_coef = (
+                self.generated_parameter_stability_coef
+            )
+            adaptive_auxiliary_enabled = False
+            if self.adaptive_auxiliary_ratio_active:
+                if condition_graphs is not None:
+                    condition_gradient_consistency_coef = (
+                        self._adaptive_auxiliary_coefficient(
+                            td_loss, condition_gradient_consistency_loss
+                        )
+                    )
+                    adaptive_auxiliary_enabled = True
+                elif generated_parameter_stability_sum is not None:
+                    generated_parameter_stability_coef = (
+                        self._adaptive_auxiliary_coefficient(
+                            td_loss, generated_parameter_stability_loss
+                        )
+                    )
+                    adaptive_auxiliary_enabled = True
+            if not adaptive_auxiliary_enabled:
+                self.latest_adaptive_auxiliary_stats = {}
             loss = (
                 td_loss
                 + aux_loss
@@ -947,9 +1065,9 @@ class CleanLearner:
                     getattr(self.args, "clean_relation_teacher_td_coef", 0.0)
                 )
                 * teacher_td_loss
-                + self.condition_gradient_consistency_coef
+                + condition_gradient_consistency_coef
                 * condition_gradient_consistency_loss
-                + self.generated_parameter_stability_coef
+                + generated_parameter_stability_coef
                 * generated_parameter_stability_loss
             )
 
@@ -1171,9 +1289,24 @@ class CleanLearner:
             if teacher_mac_out is not None:
                 self.logger.log_stat("loss_teacher_td", teacher_td_loss.item(), t_env)
             if self.condition_gradient_consistency_active:
+                weighted_condition_gradient_loss = (
+                    condition_gradient_consistency_coef
+                    * condition_gradient_consistency_loss.item()
+                )
                 self.logger.log_stat(
                     "loss_condition_grad_consistency",
                     condition_gradient_consistency_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_condition_grad_consistency",
+                    weighted_condition_gradient_loss,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "condition_grad_consistency_to_td_ratio",
+                    weighted_condition_gradient_loss
+                    / max(td_loss.item(), self.adaptive_auxiliary_eps),
                     t_env,
                 )
                 self.logger.log_stat(
@@ -1184,9 +1317,24 @@ class CleanLearner:
                 for stat_name, stat_value in condition_gradient_consistency_stats.items():
                     self.logger.log_stat(stat_name, stat_value.item(), t_env)
             if self.generated_parameter_stability_active:
+                weighted_parameter_stability_loss = (
+                    generated_parameter_stability_coef
+                    * generated_parameter_stability_loss.item()
+                )
                 self.logger.log_stat(
                     "loss_generated_parameter_stability",
                     generated_parameter_stability_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_generated_parameter_stability",
+                    weighted_parameter_stability_loss,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "generated_parameter_stability_to_td_ratio",
+                    weighted_parameter_stability_loss
+                    / max(td_loss.item(), self.adaptive_auxiliary_eps),
                     t_env,
                 )
                 self.logger.log_stat(
@@ -1194,6 +1342,8 @@ class CleanLearner:
                     float(generated_parameter_stability_enabled),
                     t_env,
                 )
+            for stat_name, stat_value in self.latest_adaptive_auxiliary_stats.items():
+                self.logger.log_stat(stat_name, float(stat_value), t_env)
             if self.latest_relation_gate_mean is not None:
                 self.logger.log_stat("relation_gate_mean", self.latest_relation_gate_mean, t_env)
                 self.logger.log_stat("relation_gate_std", self.latest_relation_gate_std, t_env)
@@ -1251,6 +1401,14 @@ class CleanLearner:
             th.save(self.relation_mixer_gate.state_dict(), "{}/relation_mixer_gate.th".format(path))
         if self.use_amp:
             th.save(self.amp_scaler.state_dict(), "{}/amp_scaler.th".format(path))
+        if self.adaptive_auxiliary_ratio_active:
+            th.save(
+                {
+                    "ema_td": self.adaptive_auxiliary_ema_td,
+                    "ema_aux": self.adaptive_auxiliary_ema_aux,
+                },
+                "{}/adaptive_auxiliary_ema.th".format(path),
+            )
         th.save(self.optimiser.state_dict(), "{}/opt.th".format(path))
 
     def load_models(self, path):
@@ -1268,3 +1426,10 @@ class CleanLearner:
         amp_scaler_path = "{}/amp_scaler.th".format(path)
         if self.use_amp and os.path.exists(amp_scaler_path):
             self.amp_scaler.load_state_dict(th.load(amp_scaler_path, map_location=lambda storage, loc: storage))
+        adaptive_ema_path = "{}/adaptive_auxiliary_ema.th".format(path)
+        if self.adaptive_auxiliary_ratio_active and os.path.exists(adaptive_ema_path):
+            adaptive_state = th.load(
+                adaptive_ema_path, map_location=lambda storage, loc: storage
+            )
+            self.adaptive_auxiliary_ema_td = adaptive_state.get("ema_td")
+            self.adaptive_auxiliary_ema_aux = adaptive_state.get("ema_aux")
