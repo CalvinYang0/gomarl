@@ -15,7 +15,8 @@ CORRIDOR_CPUS_PER_TASK="${CORRIDOR_CPUS_PER_TASK:-32}"
 COUNTER_PARAM_MEMORY="${COUNTER_PARAM_MEMORY:-10G}"
 COUNTER_GRAD_MEMORY="${COUNTER_GRAD_MEMORY:-16G}"
 CORRIDOR_MEMORY="${CORRIDOR_MEMORY:-96G}"
-COUNTER_AUX_COEF="${COUNTER_AUX_COEF:-0.1}"
+COUNTER_PARAM_AUX_COEF="${COUNTER_PARAM_AUX_COEF:-0.03}"
+COUNTER_GRAD_AUX_COEF="${COUNTER_GRAD_AUX_COEF:-0.1}"
 CORRIDOR_AUX_COEF="${CORRIDOR_AUX_COEF:-0.01}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-8}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
@@ -69,17 +70,18 @@ submit_one() {
       map_name="academy_counterattack_easy"
       cpus_per_task="$COUNTER_CPUS_PER_TASK"
       torch_num_threads="$COUNTER_TORCH_NUM_THREADS"
-      scene_args="clean_condition_gradient_consistency_coef=$COUNTER_AUX_COEF clean_generated_parameter_stability_coef=$COUNTER_AUX_COEF env_worker_startup_stagger=$ENV_WORKER_STARTUP_STAGGER env_worker_reset_retries=$ENV_WORKER_RESET_RETRIES env_worker_reset_retry_delay=$ENV_WORKER_RESET_RETRY_DELAY env_worker_response_timeout=$ENV_WORKER_RESPONSE_TIMEOUT env_args.write_video=False"
       case "$variant" in
         param)
           memory="$COUNTER_PARAM_MEMORY"
           model="grf_abs_dual_branch_hard_gate_param_stability_hypercond"
           suffix="hard_gate_param_stability"
+          scene_args="clean_condition_gradient_consistency_coef=0.0 clean_generated_parameter_stability_coef=$COUNTER_PARAM_AUX_COEF env_worker_startup_stagger=$ENV_WORKER_STARTUP_STAGGER env_worker_reset_retries=$ENV_WORKER_RESET_RETRIES env_worker_reset_retry_delay=$ENV_WORKER_RESET_RETRY_DELAY env_worker_response_timeout=$ENV_WORKER_RESPONSE_TIMEOUT env_args.write_video=False"
           ;;
         grad)
           memory="$COUNTER_GRAD_MEMORY"
           model="grf_abs_dual_branch_hard_gate_grad_consistency_hypercond"
           suffix="hard_gate_grad_consistency"
+          scene_args="clean_condition_gradient_consistency_coef=$COUNTER_GRAD_AUX_COEF clean_generated_parameter_stability_coef=0.0 env_worker_startup_stagger=$ENV_WORKER_STARTUP_STAGGER env_worker_reset_retries=$ENV_WORKER_RESET_RETRIES env_worker_reset_retry_delay=$ENV_WORKER_RESET_RETRY_DELAY env_worker_response_timeout=$ENV_WORKER_RESPONSE_TIMEOUT env_args.write_video=False"
           ;;
         *)
           echo "ERROR: Counter expects param or grad, got: $variant" >&2
