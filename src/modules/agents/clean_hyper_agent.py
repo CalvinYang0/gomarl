@@ -251,14 +251,23 @@ RPG_DUAL_BRANCH_VARIANTS = {
     "rpg_dual_branch_attention_only_hard_gate_grad_consistency_hypercond",
     "rpg_dual_branch_split_head_hard_gate_param_stability_hypercond",
     "rpg_dual_branch_split_head_hard_gate_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
 }
 RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
     "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
     "rpg_dual_branch_attention_only_hard_gate_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+}
+RPG_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS = {
+    "rpg_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
 }
 RPG_DUAL_BRANCH_SPLIT_HEAD_VARIANTS = {
     "rpg_dual_branch_split_head_hard_gate_param_stability_hypercond",
     "rpg_dual_branch_split_head_hard_gate_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
 }
 RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS = {
     "rpg_dual_branch_hard_gate_param_stability_hypercond",
@@ -273,6 +282,10 @@ RPG_DUAL_BRANCH_GRAD_CONSISTENCY_VARIANTS = {
     "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
     "rpg_dual_branch_attention_only_hard_gate_grad_consistency_hypercond",
     "rpg_dual_branch_split_head_hard_gate_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
 }
 RPG_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
     "rpg_dual_branch_td_benefit_drop_hypercond": "td_benefit",
@@ -292,6 +305,10 @@ RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "rpg_dual_branch_attention_only_hard_gate_grad_consistency_hypercond": "hard_st",
     "rpg_dual_branch_split_head_hard_gate_param_stability_hypercond": "hard_st",
     "rpg_dual_branch_split_head_hard_gate_grad_consistency_hypercond": "hard_st",
+    "rpg_dual_branch_binary_concrete_adaptive_grad_consistency_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond": "binary_concrete",
 }
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",
@@ -465,6 +482,28 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_grad_consistency_hypercond",
     "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond",
     "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
+}
+GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+}
+GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS = {
+    "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
+}
+GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS = {
+    "grf_abs_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
+}
+GRF_DUAL_BRANCH_GRAD_CONSISTENCY_VARIANTS = {
+    "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_grad_consistency_hypercond",
+    "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
 }
 GRF_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
     "grf_abs_dual_branch_td_benefit_drop_hypercond": "td_benefit",
@@ -480,11 +519,15 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_grad_consistency_hypercond": "binary_concrete",
     "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond": "hard_st",
     "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond": "hard_st",
+    "grf_abs_dual_branch_binary_concrete_adaptive_grad_consistency_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond": "binary_concrete",
 }
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_hypercond",
 }
-GRF_DECISION_MAKER_VARIANTS |= GRF_MLP_RELATION_VARIANTS
+GRF_DECISION_MAKER_VARIANTS |= GRF_MLP_RELATION_VARIANTS | GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS
 GRF_TWO_LAYER_HEAD_VARIANTS = {
     "grf_public_private_bias_transformer_two_layer_head_hypercond",
     "grf_abs_public_private_bias_transformer_two_layer_head_hypercond",
@@ -815,6 +858,7 @@ class ObservationConditionedBranchGate(nn.Module):
         bayesg_eval_threshold=0.08,
         hard_threshold=0.5,
         initial_keep_probability=0.55,
+        gate_scope="both",
     ):
         super().__init__()
         if mode not in {"cstg", "bayesg", "hard_st", "binary_concrete"}:
@@ -839,20 +883,24 @@ class ObservationConditionedBranchGate(nn.Module):
 
         self.obs_dim = int(obs_dim)
         self.mode = mode
+        self.gate_scope = str(gate_scope)
+        if self.gate_scope not in {"both", "shared"}:
+            raise ValueError("gate_scope must be both or shared")
         self.cstg_sigma = float(cstg_sigma)
         self.bayesg_temperature = float(bayesg_temperature)
         self.binary_concrete_temperature = float(binary_concrete_temperature)
         self.bayesg_eval_threshold = float(bayesg_eval_threshold)
         self.hard_threshold = float(hard_threshold)
         hidden_dim = int(hidden_dim)
+        output_dim = self.obs_dim if self.gate_scope == "shared" else 2 * self.obs_dim
         if hidden_dim > 0:
             self.gate_network = nn.Sequential(
                 nn.Linear(self.obs_dim, hidden_dim),
                 nn.ReLU(inplace=True),
-                nn.Linear(hidden_dim, 2 * self.obs_dim),
+                nn.Linear(hidden_dim, output_dim),
             )
         else:
-            self.gate_network = nn.Linear(self.obs_dim, 2 * self.obs_dim)
+            self.gate_network = nn.Linear(self.obs_dim, output_dim)
 
         if self.mode in {"hard_st", "binary_concrete"}:
             final_layer = (
@@ -866,9 +914,13 @@ class ObservationConditionedBranchGate(nn.Module):
             nn.init.zeros_(final_layer.weight)
             nn.init.constant_(final_layer.bias, initial_logit)
     def forward(self, obs, sample=True, deterministic_soft=False):
-        logits = self.gate_network(obs).view(
-            *obs.shape[:-1], 2, self.obs_dim
-        )
+        logits = self.gate_network(obs)
+        if self.gate_scope == "shared":
+            logits = logits.unsqueeze(-2).expand(
+                *obs.shape[:-1], 2, self.obs_dim
+            )
+        else:
+            logits = logits.view(*obs.shape[:-1], 2, self.obs_dim)
         probability = th.sigmoid(logits)
 
         if self.mode == "cstg":
@@ -1654,9 +1706,9 @@ class PublicTransformerRelationCapturer(nn.Module):
             dynamic_branch_gate_warmup_steps
         )
         self.dynamic_branch_gate_scope = str(dynamic_branch_gate_scope)
-        if self.dynamic_branch_gate_scope not in {"both", "attention_only"}:
+        if self.dynamic_branch_gate_scope not in {"both", "attention_only", "shared"}:
             raise ValueError(
-                "dynamic_branch_gate_scope must be both or attention_only"
+                "dynamic_branch_gate_scope must be both, attention_only, or shared"
             )
         self._dynamic_branch_gate_t_env = 0
         self._dynamic_branch_gate_target_mode = False
@@ -1926,6 +1978,11 @@ class PublicTransformerRelationCapturer(nn.Module):
                 hard_threshold=self.hard_gate_threshold,
                 initial_keep_probability=(
                     self.hard_gate_initial_keep_probability
+                ),
+                gate_scope=(
+                    "shared"
+                    if self.dynamic_branch_gate_scope == "shared"
+                    else "both"
                 ),
             )
             if self.dynamic_branch_gate_mode is not None
@@ -4370,6 +4427,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         hard_gate_threshold=0.5,
         hard_gate_initial_keep_probability=0.55,
         dynamic_branch_gate_warmup_steps=250000,
+        dynamic_branch_gate_scope="both",
     ):
         nn.Module.__init__(self)
         self.n_agents = n_agents
@@ -4508,6 +4566,11 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.dynamic_branch_gate_warmup_steps = int(
             dynamic_branch_gate_warmup_steps
         )
+        self.dynamic_branch_gate_scope = str(dynamic_branch_gate_scope)
+        if self.dynamic_branch_gate_scope not in {"both", "attention_only", "shared"}:
+            raise ValueError(
+                "dynamic_branch_gate_scope must be both, attention_only, or shared"
+            )
         self._dynamic_branch_gate_t_env = 0
         self._dynamic_branch_gate_target_mode = False
         self._branch_audit_branch = None
@@ -4709,6 +4772,11 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
                 initial_keep_probability=(
                     self.hard_gate_initial_keep_probability
                 ),
+                gate_scope=(
+                    "shared"
+                    if self.dynamic_branch_gate_scope == "shared"
+                    else "both"
+                ),
             )
             if self.dynamic_branch_gate_mode is not None
             else None
@@ -4728,6 +4796,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         )
         self.latest_aux_loss = None
         self.latest_aux_stats = {}
+        self.latest_dual_linear_condition = None
+        self.latest_dual_attention_condition = None
 
     def _cache_unrouted_grf_entity_tokens(self, obs):
         (
@@ -4864,6 +4934,16 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
 
         attention_input = self._apply_branch_gate(flat_obs, branch_gates, 1)
         attention_embed = self._forward_full_obs_attention_branch(attention_input)
+        self.latest_dual_linear_condition = (
+            linear_embed
+            if self.output_dim == self.relation_dim
+            else self.output_encoder(linear_embed)
+        )
+        self.latest_dual_attention_condition = (
+            attention_embed
+            if self.output_dim == self.relation_dim
+            else self.output_encoder(attention_embed)
+        )
         next_relation_hidden = self.dual_condition_fuser(
             th.cat([linear_embed, attention_embed], dim=-1)
         )
@@ -8724,6 +8804,13 @@ class CleanHyperAgent(nn.Module):
             dynamic_branch_gate_warmup_steps=(
                 self.dynamic_branch_gate_warmup_steps
             ),
+            dynamic_branch_gate_scope=(
+                "shared"
+                if self.model_type in GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS
+                else "attention_only"
+                if self.model_type in GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS
+                else "both"
+            ),
         )
 
     def _init_grf_decision_maker_head(self):
@@ -8955,9 +9042,10 @@ class CleanHyperAgent(nn.Module):
                     self.dynamic_branch_gate_warmup_steps
                 ),
                 dynamic_branch_gate_scope=(
-                    "attention_only"
-                    if self.model_type
-                    in RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS
+                    "shared"
+                    if self.model_type in RPG_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS
+                    else "attention_only"
+                    if self.model_type in RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS
                     else "both"
                 ),
             )
@@ -9735,15 +9823,36 @@ class CleanHyperAgent(nn.Module):
         ally_input = th.cat([hidden, self_token, ally_context], dim=-1)
         opponent_input = th.cat([hidden, self_token, opponent_context], dim=-1)
 
+        if self.model_type in GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS:
+            linear_condition = getattr(
+                self.rpg_relation_capturer,
+                "latest_dual_linear_condition",
+                None,
+            )
+            attention_condition = getattr(
+                self.rpg_relation_capturer,
+                "latest_dual_attention_condition",
+                None,
+            )
+            if linear_condition is None or attention_condition is None:
+                raise RuntimeError(
+                    "Split-head GRF dual branch requires both branch conditions."
+                )
+            ego_condition = linear_condition
+            interaction_condition = attention_condition
+        else:
+            ego_condition = condition
+            interaction_condition = condition
+
         q = hidden.new_zeros(hidden.size(0), hidden.size(1), self.n_actions)
         q[:, :, self.grf_ego_action_idx] = self._apply_grf_generated_branch(
-            "ego", ego_input, condition, int(self.grf_ego_action_idx.numel())
+            "ego", ego_input, ego_condition, int(self.grf_ego_action_idx.numel())
         )
         q[:, :, self.grf_ally_action_idx] = self._apply_grf_generated_branch(
-            "ally", ally_input, condition, int(self.grf_ally_action_idx.numel())
+            "ally", ally_input, interaction_condition, int(self.grf_ally_action_idx.numel())
         )
         q[:, :, self.grf_opponent_action_idx] = self._apply_grf_generated_branch(
-            "opponent", opponent_input, condition, int(self.grf_opponent_action_idx.numel())
+            "opponent", opponent_input, interaction_condition, int(self.grf_opponent_action_idx.numel())
         )
         return q
 
@@ -10817,16 +10926,31 @@ class CleanHyperAgent(nn.Module):
                 )
                 self.latest_condition = relation_condition.detach()
                 if (
-                    self.model_type
-                    in {
-                        "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond",
-                        "grf_abs_dual_branch_binary_concrete_grad_consistency_hypercond",
-                        "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
-                    }
+                    self.model_type in GRF_DUAL_BRANCH_GRAD_CONSISTENCY_VARIANTS
                     and th.is_grad_enabled()
                     and not test_mode
                 ):
-                    self.latest_condition_graph = relation_condition
+                    if self.model_type in GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS:
+                        linear_condition = getattr(
+                            self.rpg_relation_capturer,
+                            "latest_dual_linear_condition",
+                            None,
+                        )
+                        attention_condition = getattr(
+                            self.rpg_relation_capturer,
+                            "latest_dual_attention_condition",
+                            None,
+                        )
+                        if linear_condition is None or attention_condition is None:
+                            raise RuntimeError(
+                                "Split-head GRF gradient consistency requires both "
+                                "branch condition graphs."
+                            )
+                        self.latest_condition_graph = th.cat(
+                            [linear_condition, attention_condition], dim=-1
+                        )
+                    else:
+                        self.latest_condition_graph = relation_condition
                 if self.model_type in GRF_DECISION_MAKER_VARIANTS:
                     q = self._apply_grf_decision_maker_head(hidden, relation_condition)
                 elif self.model_type in GRF_LINEAR_HEAD_VARIANTS:

@@ -12,17 +12,21 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from modules.agents.clean_hyper_agent import (  # noqa: E402
     GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL,
+    GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS,
+    GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS,
+    GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS,
     GRF_DUAL_BRANCH_VARIANTS,
     GRFPublicPrivateBiasTransformerCapturer,
     RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL,
     RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS,
+    RPG_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS,
     RPG_DUAL_BRANCH_SPLIT_HEAD_VARIANTS,
     RPG_DUAL_BRANCH_VARIANTS,
 )
 from learners.clean_learner import CleanLearner  # noqa: E402
 
 
-def build_grf(gate_mode):
+def build_grf(gate_mode, gate_scope="both"):
     return GRFPublicPrivateBiasTransformerCapturer(
         n_agents=4,
         relation_dim=16,
@@ -34,6 +38,7 @@ def build_grf(gate_mode):
         dynamic_branch_gate_mode=gate_mode,
         dynamic_branch_gate_hidden_dim=16,
         dynamic_branch_gate_warmup_steps=250000,
+        dynamic_branch_gate_scope=gate_scope,
     )
 
 
@@ -76,7 +81,16 @@ def check_gate_module(model, obs):
         assert th.equal(eval_gate_1, eval_gate_2)
         assert th.equal(eval_prob_1, eval_prob_2)
     final_layer = generator.gate_network[-1]
-    assert final_layer.out_features == 2 * generator.obs_dim
+    expected_out_features = (
+        generator.obs_dim
+        if generator.gate_scope == "shared"
+        else 2 * generator.obs_dim
+    )
+    assert final_layer.out_features == expected_out_features
+    if generator.gate_scope == "shared":
+        shared_gates, _ = generator(obs, sample=False)
+        assert th.equal(shared_gates[0], shared_gates[1])
+        return
     with th.no_grad():
         saved_bias = final_layer.bias.clone()
         final_layer.bias[0] = -1.0
@@ -126,6 +140,19 @@ def check_grf_transformer_only():
     assert model.dual_condition_fuser is None
     (condition.mean() + next_hidden.mean()).backward()
     assert model.transformer_layers[0].self_attn.qkv.weight.grad is not None
+
+
+def check_shared_slot_gate():
+    model = build_grf("binary_concrete", gate_scope="shared")
+    obs = th.randn(2, 4, 30)
+    hidden = th.zeros(2, 4, 16)
+    check_gate_module(model, obs)
+    model.set_dynamic_branch_gate_t_env(250000)
+    condition, next_hidden = model(obs, hidden)
+    assert condition.shape == (2, 4, 16)
+    assert next_hidden.shape == (2, 4, 16)
+    (condition.mean() + next_hidden.mean()).backward()
+    assert model.dynamic_branch_gate.gate_network[-1].weight.grad is not None
 
 
 def check_condition_gradient_consistency():
@@ -216,6 +243,33 @@ def check_new_variant_registration():
         assert split_head in RPG_DUAL_BRANCH_SPLIT_HEAD_VARIANTS
         assert RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[split_head] == "hard_st"
 
+    for prefix, variants, modes in (
+        ("grf_abs", GRF_DUAL_BRANCH_VARIANTS, GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL),
+        ("rpg", RPG_DUAL_BRANCH_VARIANTS, RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL),
+    ):
+        base = f"{prefix}_dual_branch_binary_concrete_adaptive"
+        for suffix in ("", "_slot", "_attention_only", "_split_head"):
+            model_name = f"{base}{suffix}_grad_consistency_hypercond"
+            assert model_name in variants
+            assert modes[model_name] == "binary_concrete"
+
+    assert (
+        "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond"
+        in GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS
+    )
+    assert (
+        "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond"
+        in GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS
+    )
+    assert (
+        "grf_abs_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond"
+        in GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS
+    )
+    assert (
+        "rpg_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond"
+        in RPG_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS
+    )
+
 
 def check_adaptive_auxiliary_ratio_detached():
     learner = CleanLearner.__new__(CleanLearner)
@@ -248,6 +302,8 @@ def main():
     print("dual_branch binary_concrete stochastic_recovery=ok")
     check_grf_transformer_only()
     print("single_transformer_branch forward_backward=ok")
+    check_shared_slot_gate()
+    print("shared_slot_binary_concrete forward_backward=ok")
     check_condition_gradient_consistency()
     print("condition_gradient_consistency second_order=ok")
     check_generated_parameter_stability()

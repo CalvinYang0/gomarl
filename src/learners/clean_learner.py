@@ -113,6 +113,14 @@ class CleanLearner:
                 "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
                 "rpg_dual_branch_attention_only_hard_gate_grad_consistency_hypercond",
                 "rpg_dual_branch_split_head_hard_gate_grad_consistency_hypercond",
+                "grf_abs_dual_branch_binary_concrete_adaptive_grad_consistency_hypercond",
+                "rpg_dual_branch_binary_concrete_adaptive_grad_consistency_hypercond",
+                "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
+                "rpg_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
+                "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+                "rpg_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+                "grf_abs_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
+                "rpg_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
             }
         )
         self.condition_gradient_consistency_coef = float(
@@ -164,6 +172,14 @@ class CleanLearner:
             "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
             "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond",
             "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
+            "grf_abs_dual_branch_binary_concrete_adaptive_grad_consistency_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_grad_consistency_hypercond",
+            "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
+            "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+            "grf_abs_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
         }
         self.adaptive_auxiliary_target_ratio = float(
             getattr(args, "clean_adaptive_auxiliary_target_ratio", 0.1)
