@@ -8,6 +8,10 @@ class CleanMAC(BasicMAC):
         if hasattr(self.agent, "set_dynamic_branch_gate_t_env"):
             self.agent.set_dynamic_branch_gate_t_env(t_env)
 
+    def set_dynamic_branch_gate_force_open(self, enabled):
+        if hasattr(self.agent, "set_dynamic_branch_gate_force_open"):
+            self.agent.set_dynamic_branch_gate_force_open(enabled)
+
     def select_actions(self, ep_batch, t_ep, t_env, bs=slice(None), test_mode=False):
         self.set_dynamic_branch_gate_t_env(t_env)
         return super().select_actions(

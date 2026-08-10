@@ -140,8 +140,9 @@ class CleanLearner:
                 )
             ),
         )
+        model_type = getattr(self.mac.agent, "model_type", "")
         self.generated_parameter_stability_active = (
-            getattr(self.mac.agent, "model_type", "")
+            model_type
             in {
                 "grf_abs_dual_branch_hard_gate_param_stability_hypercond",
                 "rpg_dual_branch_hard_gate_param_stability_hypercond",
@@ -151,6 +152,10 @@ class CleanLearner:
                 "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
                 "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
                 "rpg_dual_branch_split_head_hard_gate_param_stability_hypercond",
+                "grf_abs_dual_branch_binary_concrete_adaptive_param_stability_hypercond",
+                "rpg_dual_branch_binary_concrete_adaptive_param_stability_hypercond",
+                "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
+                "rpg_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
             }
         )
         self.generated_parameter_stability_coef = float(
@@ -166,7 +171,27 @@ class CleanLearner:
                 )
             ),
         )
-        model_type = getattr(self.mac.agent, "model_type", "")
+        self.generated_parameter_likelihood_active = model_type in {
+            "grf_abs_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
+            "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
+        }
+        self.generated_parameter_likelihood_std = float(
+            getattr(args, "clean_generated_parameter_likelihood_std", 1.0)
+        )
+        if self.generated_parameter_likelihood_std <= 0.0:
+            raise ValueError("clean_generated_parameter_likelihood_std must be positive")
+        self.generated_parameter_likelihood_warmup_steps = max(
+            0,
+            int(
+                getattr(
+                    args,
+                    "clean_generated_parameter_likelihood_warmup_steps",
+                    getattr(args, "clean_dynamic_branch_gate_warmup_steps", 250000),
+                )
+            ),
+        )
         self.adaptive_auxiliary_ratio_active = model_type in {
             "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
             "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
@@ -180,6 +205,14 @@ class CleanLearner:
             "rpg_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
             "grf_abs_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
             "rpg_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
+            "grf_abs_dual_branch_binary_concrete_adaptive_param_stability_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_param_stability_hypercond",
+            "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
+            "grf_abs_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
+            "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
         }
         self.adaptive_auxiliary_target_ratio = float(
             getattr(args, "clean_adaptive_auxiliary_target_ratio", 0.1)
@@ -422,6 +455,46 @@ class CleanLearner:
         valid = pair_valid.reshape(batch_size, 1).expand(-1, n_agents)
         valid_float = valid.to(per_agent_mean.dtype)
         return (per_agent_mean * valid_float).sum(), valid_float.sum()
+
+    def _generated_parameter_conditional_nll(
+        self,
+        masked_parameters,
+        full_target_parameters,
+        state_valid,
+        batch_size,
+        n_agents,
+    ):
+        """Fixed-scale Gaussian NLL of full target parameters under masked obs.
+
+        The detached target network supplies the Gaussian mean target. Each
+        parameter block is normalized by its target RMS so one large head does
+        not dominate merely because of scale. The variance is fixed to prevent
+        the likelihood model from improving by inflating a learned variance.
+        """
+        if len(masked_parameters) != len(full_target_parameters):
+            raise RuntimeError("Generated parameter structures do not match.")
+        squared_sum = None
+        parameter_count = 0
+        for masked, full_target in zip(masked_parameters, full_target_parameters):
+            if masked.shape != full_target.shape:
+                raise RuntimeError("Masked and full target parameter shapes do not match.")
+            masked_flat = masked.reshape(batch_size, n_agents, -1)
+            target_flat = full_target.detach().reshape(batch_size, n_agents, -1)
+            target_rms = target_flat.pow(2).mean(dim=-1, keepdim=True).sqrt()
+            target_rms = target_rms.clamp(min=self.adaptive_auxiliary_eps)
+            standardized = (masked_flat - target_flat) / (
+                self.generated_parameter_likelihood_std * target_rms
+            )
+            part_sum = 0.5 * standardized.pow(2).sum(dim=-1)
+            squared_sum = part_sum if squared_sum is None else squared_sum + part_sum
+            parameter_count += standardized.shape[-1]
+        if squared_sum is None or parameter_count == 0:
+            zero = state_valid.new_zeros((), dtype=th.float32)
+            return zero, zero
+        per_agent_nll = squared_sum / float(parameter_count)
+        valid = state_valid.reshape(batch_size, 1).expand(-1, n_agents)
+        valid_float = valid.to(per_agent_nll.dtype)
+        return (per_agent_nll * valid_float).sum(), valid_float.sum()
 
     def _counterfactual_td_loss(self, batch, actions, targets, td_mask):
         mac_out = []
@@ -863,6 +936,19 @@ class CleanLearner:
         previous_generated_parameters = None
         generated_parameter_stability_sum = None
         generated_parameter_stability_count = mask.new_zeros(())
+        generated_parameter_likelihood_enabled = (
+            self.generated_parameter_likelihood_active
+            and t_env >= self.generated_parameter_likelihood_warmup_steps
+        )
+        generated_parameter_likelihood_sum = None
+        generated_parameter_likelihood_count = mask.new_zeros(())
+        precomputed_target_mac_out = []
+        precomputed_target_relation_conditions = (
+            [] if self.target_relation_mixer_gate is not None else None
+        )
+        if generated_parameter_likelihood_enabled:
+            self.target_mac.init_hidden(batch.batch_size)
+            self.target_mac.set_dynamic_branch_gate_force_open(True)
         parameter_probe_times = set()
         observation_probe_times = set()
         if (
@@ -896,6 +982,57 @@ class CleanLearner:
                         t in observation_probe_times
                     )
                 mac_out.append(self.mac.forward(batch, t=t))
+                if generated_parameter_likelihood_enabled:
+                    masked_generated_parameters = getattr(
+                        self.mac, "latest_generated_parameter_graph", None
+                    )
+                    if masked_generated_parameters is None:
+                        raise RuntimeError(
+                            "Parameter likelihood requires differentiable masked "
+                            "hypernetwork outputs."
+                        )
+                    with th.no_grad():
+                        precomputed_target_mac_out.append(
+                            self.target_mac.forward(batch, t=t)
+                        )
+                        full_target_parameters = getattr(
+                            self.target_mac, "latest_generated_parameter_graph", None
+                        )
+                        if full_target_parameters is None:
+                            raise RuntimeError(
+                                "Parameter likelihood requires full-observation "
+                                "target hypernetwork outputs."
+                            )
+                        if precomputed_target_relation_conditions is not None:
+                            target_condition = getattr(
+                                self.target_mac, "latest_condition", None
+                            )
+                            if target_condition is None:
+                                raise RuntimeError(
+                                    "Relation mixer gate requires a target condition."
+                                )
+                            precomputed_target_relation_conditions.append(
+                                target_condition
+                            )
+                    if t < mask.shape[1]:
+                        state_valid = mask[:, t].reshape(batch.batch_size) > 0
+                        likelihood_sum, likelihood_count = (
+                            self._generated_parameter_conditional_nll(
+                                masked_generated_parameters,
+                                full_target_parameters,
+                                state_valid,
+                                batch.batch_size,
+                                self.args.n_agents,
+                            )
+                        )
+                        generated_parameter_likelihood_sum = (
+                            likelihood_sum
+                            if generated_parameter_likelihood_sum is None
+                            else generated_parameter_likelihood_sum + likelihood_sum
+                        )
+                        generated_parameter_likelihood_count = (
+                            generated_parameter_likelihood_count + likelihood_count
+                        )
                 if generated_parameter_stability_enabled and t < mask.shape[1]:
                     current_generated_parameters = getattr(
                         self.mac, "latest_generated_parameter_graph", None
@@ -980,16 +1117,21 @@ class CleanLearner:
             chosen_action_qvals = th.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)
 
             with th.no_grad():
-                target_mac_out = []
-                target_relation_conditions = [] if self.target_relation_mixer_gate is not None else None
-                self.target_mac.init_hidden(batch.batch_size)
-                for t in range(batch.max_seq_length):
-                    target_mac_out.append(self.target_mac.forward(batch, t=t))
-                    if target_relation_conditions is not None:
-                        condition = getattr(self.target_mac, "latest_condition", None)
-                        if condition is None:
-                            raise RuntimeError("clean_relation_mixer_gate=True requires a relation-conditioned clean model.")
-                        target_relation_conditions.append(condition)
+                target_mac_out = precomputed_target_mac_out
+                target_relation_conditions = precomputed_target_relation_conditions
+                if not generated_parameter_likelihood_enabled:
+                    target_mac_out = []
+                    target_relation_conditions = [] if self.target_relation_mixer_gate is not None else None
+                    self.target_mac.init_hidden(batch.batch_size)
+                    for t in range(batch.max_seq_length):
+                        target_mac_out.append(self.target_mac.forward(batch, t=t))
+                        if target_relation_conditions is not None:
+                            condition = getattr(self.target_mac, "latest_condition", None)
+                            if condition is None:
+                                raise RuntimeError("clean_relation_mixer_gate=True requires a relation-conditioned clean model.")
+                            target_relation_conditions.append(condition)
+                else:
+                    self.target_mac.set_dynamic_branch_gate_force_open(False)
                 target_mac_out = th.stack(target_mac_out, dim=1)
                 if target_relation_conditions is not None:
                     target_relation_conditions = th.stack(target_relation_conditions, dim=1)
@@ -1054,6 +1196,12 @@ class CleanLearner:
                     generated_parameter_stability_sum
                     / generated_parameter_stability_count.clamp(min=1.0)
                 )
+            generated_parameter_likelihood_loss = td_loss.new_zeros(())
+            if generated_parameter_likelihood_sum is not None:
+                generated_parameter_likelihood_loss = (
+                    generated_parameter_likelihood_sum
+                    / generated_parameter_likelihood_count.clamp(min=1.0)
+                )
             condition_gradient_consistency_coef = (
                 self.condition_gradient_consistency_coef
             )
@@ -1076,6 +1224,13 @@ class CleanLearner:
                         )
                     )
                     adaptive_auxiliary_enabled = True
+                elif generated_parameter_likelihood_sum is not None:
+                    generated_parameter_stability_coef = (
+                        self._adaptive_auxiliary_coefficient(
+                            td_loss, generated_parameter_likelihood_loss
+                        )
+                    )
+                    adaptive_auxiliary_enabled = True
             if not adaptive_auxiliary_enabled:
                 self.latest_adaptive_auxiliary_stats = {}
             loss = (
@@ -1089,6 +1244,8 @@ class CleanLearner:
                 * condition_gradient_consistency_loss
                 + generated_parameter_stability_coef
                 * generated_parameter_stability_loss
+                + generated_parameter_stability_coef
+                * generated_parameter_likelihood_loss
             )
 
         parameter_sensitivity_score = None
@@ -1360,6 +1517,32 @@ class CleanLearner:
                 self.logger.log_stat(
                     "generated_parameter_stability_active",
                     float(generated_parameter_stability_enabled),
+                    t_env,
+                )
+            if self.generated_parameter_likelihood_active:
+                weighted_parameter_likelihood_loss = (
+                    generated_parameter_stability_coef
+                    * generated_parameter_likelihood_loss.item()
+                )
+                self.logger.log_stat(
+                    "loss_generated_parameter_conditional_nll",
+                    generated_parameter_likelihood_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_generated_parameter_conditional_nll",
+                    weighted_parameter_likelihood_loss,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "generated_parameter_conditional_nll_to_td_ratio",
+                    weighted_parameter_likelihood_loss
+                    / max(td_loss.item(), self.adaptive_auxiliary_eps),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "generated_parameter_conditional_nll_active",
+                    float(generated_parameter_likelihood_enabled),
                     t_env,
                 )
             for stat_name, stat_value in self.latest_adaptive_auxiliary_stats.items():

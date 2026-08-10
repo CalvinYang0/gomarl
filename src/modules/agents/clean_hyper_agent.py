@@ -255,11 +255,17 @@ RPG_DUAL_BRANCH_VARIANTS = {
     "rpg_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
     "rpg_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_param_stability_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
 }
 RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
     "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
     "rpg_dual_branch_attention_only_hard_gate_grad_consistency_hypercond",
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
 }
 RPG_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS = {
     "rpg_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
@@ -275,7 +281,17 @@ RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS = {
     "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
     "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
     "rpg_dual_branch_split_head_hard_gate_param_stability_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_param_stability_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
 }
+RPG_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS = {
+    "rpg_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
+}
+RPG_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS = (
+    RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
+    | RPG_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS
+)
 RPG_DUAL_BRANCH_GRAD_CONSISTENCY_VARIANTS = {
     "rpg_dual_branch_hard_gate_grad_consistency_hypercond",
     "rpg_dual_branch_binary_concrete_grad_consistency_hypercond",
@@ -309,6 +325,10 @@ RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "rpg_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond": "binary_concrete",
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond": "binary_concrete",
     "rpg_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_adaptive_param_stability_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond": "binary_concrete",
 }
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",
@@ -486,9 +506,15 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_param_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
 }
 GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
 }
 GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
@@ -505,6 +531,21 @@ GRF_DUAL_BRANCH_GRAD_CONSISTENCY_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
 }
+GRF_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS = {
+    "grf_abs_dual_branch_hard_gate_param_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_param_stability_hypercond",
+    "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_param_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
+}
+GRF_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS = {
+    "grf_abs_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
+}
+GRF_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS = (
+    GRF_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
+    | GRF_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS
+)
 GRF_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
     "grf_abs_dual_branch_td_benefit_drop_hypercond": "td_benefit",
     "grf_abs_dual_branch_parameter_invariant_drop_hypercond": "generated_parameters",
@@ -523,6 +564,10 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_adaptive_param_stability_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond": "binary_concrete",
 }
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_hypercond",
@@ -1712,6 +1757,7 @@ class PublicTransformerRelationCapturer(nn.Module):
             )
         self._dynamic_branch_gate_t_env = 0
         self._dynamic_branch_gate_target_mode = False
+        self._dynamic_branch_gate_force_open = False
         self._branch_audit_branch = None
         self._branch_audit_group = None
         self._branch_audit_keep = None
@@ -2424,6 +2470,9 @@ class PublicTransformerRelationCapturer(nn.Module):
                 sample=not self._semantic_test_mode,
                 deterministic_soft=self._dynamic_branch_gate_target_mode,
             )
+            if self._dynamic_branch_gate_force_open:
+                gates = th.ones_like(gates)
+                probabilities = th.ones_like(probabilities)
             if self.dynamic_branch_gate_scope == "attention_only":
                 gates = th.stack(
                     [th.ones_like(gates[0]), gates[1]], dim=0
@@ -2743,6 +2792,9 @@ class PublicTransformerRelationCapturer(nn.Module):
 
     def set_dynamic_branch_gate_target_mode(self, enabled):
         self._dynamic_branch_gate_target_mode = bool(enabled)
+
+    def set_dynamic_branch_gate_force_open(self, enabled):
+        self._dynamic_branch_gate_force_open = bool(enabled)
 
     def semantic_router_needs_binary_audit(self):
         return (
@@ -4573,6 +4625,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             )
         self._dynamic_branch_gate_t_env = 0
         self._dynamic_branch_gate_target_mode = False
+        self._dynamic_branch_gate_force_open = False
         self._branch_audit_branch = None
         self._branch_audit_group = None
         self._branch_audit_keep = None
@@ -9689,16 +9742,7 @@ class CleanHyperAgent(nn.Module):
         out_b = self.hyper_out_b(flat_condition).view(batch_size * n_agents, 1, self.n_actions)
 
         if (
-            self.model_type
-            in {
-                "grf_abs_dual_branch_hard_gate_param_stability_hypercond",
-                "grf_abs_dual_branch_binary_concrete_param_stability_hypercond",
-                "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond",
-                "rpg_dual_branch_hard_gate_param_stability_hypercond",
-                "rpg_dual_branch_binary_concrete_param_stability_hypercond",
-                "rpg_dual_branch_hard_gate_adaptive_param_stability_hypercond",
-            }
-            and th.is_grad_enabled()
+            self.model_type in GRF_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS
         ):
             # Keep views of the exact generated tensors. The learner reduces
             # adjacent differences immediately, avoiding a second flattened
@@ -10131,8 +10175,7 @@ class CleanHyperAgent(nn.Module):
         )
         interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(batch_size * n_agents, 1, 1)
         if (
-            self.model_type in RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
-            and th.is_grad_enabled()
+            self.model_type in RPG_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS
         ):
             previous_parts = self.latest_generated_parameter_graph or ()
             self.latest_generated_parameter_graph = previous_parts + (
@@ -10528,8 +10571,7 @@ class CleanHyperAgent(nn.Module):
                 batch_size * n_agents, 1, self.rpg_n_ego_actions
             )
             if (
-                self.model_type in RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
-                and th.is_grad_enabled()
+                self.model_type in RPG_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS
             ):
                 self.latest_generated_parameter_graph = (
                     ego_bottleneck_w,
@@ -10810,6 +10852,13 @@ class CleanHyperAgent(nn.Module):
             relation_capturer, "set_dynamic_branch_gate_target_mode"
         ):
             relation_capturer.set_dynamic_branch_gate_target_mode(enabled)
+
+    def set_dynamic_branch_gate_force_open(self, enabled):
+        relation_capturer = getattr(self, "rpg_relation_capturer", None)
+        if relation_capturer is not None and hasattr(
+            relation_capturer, "set_dynamic_branch_gate_force_open"
+        ):
+            relation_capturer.set_dynamic_branch_gate_force_open(enabled)
 
     def forward(self, inputs, hidden_state, context=None, test_mode=False):
         batch_size, n_agents, _ = inputs.shape

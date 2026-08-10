@@ -127,6 +127,13 @@ def check_grf(gate_mode):
     assert model.latest_aux_stats["dynamic_gate_linear_mean"].item() == 1.0
     assert model.latest_aux_stats["dynamic_gate_attention_mean"].item() == 1.0
 
+    model.set_dynamic_branch_gate_t_env(250000)
+    model.set_dynamic_branch_gate_force_open(True)
+    model(obs, hidden)
+    assert model.latest_aux_stats["dynamic_gate_linear_mean"].item() == 1.0
+    assert model.latest_aux_stats["dynamic_gate_attention_mean"].item() == 1.0
+    model.set_dynamic_branch_gate_force_open(False)
+
 
 def check_grf_transformer_only():
     model = build_grf_transformer_only()
@@ -253,6 +260,16 @@ def check_new_variant_registration():
             assert model_name in variants
             assert modes[model_name] == "binary_concrete"
 
+        for suffix in (
+            "param_stability",
+            "attention_only_param_stability",
+            "parameter_likelihood",
+            "attention_only_parameter_likelihood",
+        ):
+            model_name = f"{base}_{suffix}_hypercond"
+            assert model_name in variants
+            assert modes[model_name] == "binary_concrete"
+
     assert (
         "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond"
         in GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS
@@ -294,6 +311,26 @@ def check_adaptive_auxiliary_ratio_detached():
     assert abs(aux_source.grad.item() - coefficient) < 1e-6
 
 
+def check_generated_parameter_conditional_nll():
+    learner = CleanLearner.__new__(CleanLearner)
+    learner.generated_parameter_likelihood_std = 1.0
+    learner.adaptive_auxiliary_eps = 1e-8
+    batch_size = 2
+    n_agents = 3
+    source = th.randn(batch_size * n_agents, 5, requires_grad=True)
+    target = th.randn(batch_size * n_agents, 5)
+    valid = th.tensor([True, False])
+    total, count = learner._generated_parameter_conditional_nll(
+        (source,), (target,), valid, batch_size, n_agents
+    )
+    loss = total / count.clamp(min=1.0)
+    assert th.isfinite(loss)
+    assert count.item() == 3.0
+    loss.backward()
+    assert source.grad is not None
+    assert source.grad.abs().sum().item() > 0.0
+
+
 def main():
     th.manual_seed(17)
     check_grf("hard_st")
@@ -314,6 +351,8 @@ def main():
     print("new_gate_and_branch_role_variants registration=ok")
     check_adaptive_auxiliary_ratio_detached()
     print("adaptive_auxiliary detached_ema_ratio=ok")
+    check_generated_parameter_conditional_nll()
+    print("generated_parameter_conditional_nll detached_target=ok")
 
 
 if __name__ == "__main__":
