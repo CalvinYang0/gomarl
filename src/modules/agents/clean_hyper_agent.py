@@ -259,6 +259,7 @@ RPG_DUAL_BRANCH_VARIANTS = {
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
     "rpg_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
 }
 RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
     "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
@@ -287,6 +288,9 @@ RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS = {
 RPG_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS = {
     "rpg_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
+}
+RPG_DUAL_BRANCH_TD_WEIGHTED_PARAMETER_LIKELIHOOD_VARIANTS = {
+    "rpg_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
 }
 RPG_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS = (
     RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
@@ -329,6 +333,7 @@ RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond": "binary_concrete",
     "rpg_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond": "binary_concrete",
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond": "binary_concrete",
 }
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",
@@ -510,6 +515,7 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
 }
 GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
@@ -542,6 +548,9 @@ GRF_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
 }
+GRF_DUAL_BRANCH_TD_WEIGHTED_PARAMETER_LIKELIHOOD_VARIANTS = {
+    "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
+}
 GRF_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS = (
     GRF_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
     | GRF_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS
@@ -568,6 +577,7 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond": "binary_concrete",
 }
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_hypercond",
@@ -7515,6 +7525,16 @@ class CleanHyperAgent(nn.Module):
         self.binary_concrete_temperature = float(
             getattr(args, "clean_binary_concrete_temperature", 0.5)
         )
+        self.td_parameter_relative_std = float(
+            getattr(args, "clean_td_parameter_relative_std", 0.02)
+        )
+        self.td_parameter_minimum_rms = float(
+            getattr(args, "clean_td_parameter_minimum_rms", 0.01)
+        )
+        if self.td_parameter_relative_std <= 0.0:
+            raise ValueError("clean_td_parameter_relative_std must be positive")
+        if self.td_parameter_minimum_rms <= 0.0:
+            raise ValueError("clean_td_parameter_minimum_rms must be positive")
         self.bayesg_gate_eval_threshold = float(
             getattr(args, "clean_bayesg_gate_eval_threshold", 0.08)
         )
@@ -8450,6 +8470,10 @@ class CleanHyperAgent(nn.Module):
         self.latest_condition = None
         self.latest_condition_graph = None
         self.latest_generated_parameter_graph = None
+        self.latest_generated_parameter_log_prob = None
+        self._generated_parameter_log_prob_sum = None
+        self._generated_parameter_log_prob_count = 0
+        self._td_parameter_sampling_enabled = False
         self.latest_aux_loss = None
         self.latest_aux_stats = {}
         self.latest_teacher_q = None
@@ -9727,6 +9751,48 @@ class CleanHyperAgent(nn.Module):
             self.latest_condition = None
         return condition
 
+    def _td_weighted_parameter_distribution_active(self):
+        return self.model_type in (
+            RPG_DUAL_BRANCH_TD_WEIGHTED_PARAMETER_LIKELIHOOD_VARIANTS
+            | GRF_DUAL_BRANCH_TD_WEIGHTED_PARAMETER_LIKELIHOOD_VARIANTS
+        )
+
+    def _sample_td_weighted_generated_parameter(self, mean):
+        """Sample one generated parameter block and retain its score graph.
+
+        The relative scale is detached, so log_prob(sample.detach()) is a
+        likelihood-ratio score for the conditional mean rather than a route
+        for shrinking a learned variance. Rollout and target forwards remain
+        deterministic because they run with gradients disabled.
+        """
+        if (
+            not self._td_weighted_parameter_distribution_active()
+            or not self._td_parameter_sampling_enabled
+            or not th.is_grad_enabled()
+        ):
+            return mean
+        reduce_dims = tuple(range(1, mean.dim()))
+        rms = mean.detach().pow(2).mean(dim=reduce_dims, keepdim=True).sqrt()
+        scale = self.td_parameter_relative_std * rms.clamp(
+            min=self.td_parameter_minimum_rms
+        )
+        sample = mean + scale * th.randn_like(mean)
+        score = -0.5 * ((sample.detach() - mean) / scale).pow(2)
+        score = score - th.log(scale) - 0.5 * math.log(2.0 * math.pi)
+        score_sum = score.reshape(mean.shape[0], -1).sum(dim=-1)
+        self._generated_parameter_log_prob_sum = (
+            score_sum
+            if self._generated_parameter_log_prob_sum is None
+            else self._generated_parameter_log_prob_sum + score_sum
+        )
+        self._generated_parameter_log_prob_count += score[0].numel()
+        batch_size = mean.shape[0] // self.n_agents
+        self.latest_generated_parameter_log_prob = (
+            self._generated_parameter_log_prob_sum
+            / math.sqrt(float(self._generated_parameter_log_prob_count))
+        ).view(batch_size, self.n_agents)
+        return sample
+
     def _apply_dynamic_head(self, hidden, condition):
         batch_size, n_agents, _ = hidden.shape
         flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
@@ -9740,6 +9806,11 @@ class CleanHyperAgent(nn.Module):
             batch_size * n_agents, self.hidden_dim, self.n_actions
         )
         out_b = self.hyper_out_b(flat_condition).view(batch_size * n_agents, 1, self.n_actions)
+
+        bottleneck_w = self._sample_td_weighted_generated_parameter(bottleneck_w)
+        bottleneck_b = self._sample_td_weighted_generated_parameter(bottleneck_b)
+        out_w = self._sample_td_weighted_generated_parameter(out_w)
+        out_b = self._sample_td_weighted_generated_parameter(out_b)
 
         if (
             self.model_type in GRF_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS
@@ -10174,6 +10245,12 @@ class CleanHyperAgent(nn.Module):
             batch_size * n_agents, self.rpg_interaction_input_dim, 1
         )
         interaction_out_b = self.rpg_interaction_out_b(flat_condition).view(batch_size * n_agents, 1, 1)
+        interaction_out_w = self._sample_td_weighted_generated_parameter(
+            interaction_out_w
+        )
+        interaction_out_b = self._sample_td_weighted_generated_parameter(
+            interaction_out_b
+        )
         if (
             self.model_type in RPG_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS
         ):
@@ -10570,6 +10647,14 @@ class CleanHyperAgent(nn.Module):
             ego_out_b = self.rpg_ego_out_b(flat_condition).view(
                 batch_size * n_agents, 1, self.rpg_n_ego_actions
             )
+            ego_bottleneck_w = self._sample_td_weighted_generated_parameter(
+                ego_bottleneck_w
+            )
+            ego_bottleneck_b = self._sample_td_weighted_generated_parameter(
+                ego_bottleneck_b
+            )
+            ego_out_w = self._sample_td_weighted_generated_parameter(ego_out_w)
+            ego_out_b = self._sample_td_weighted_generated_parameter(ego_out_b)
             if (
                 self.model_type in RPG_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS
             ):
@@ -10860,6 +10945,9 @@ class CleanHyperAgent(nn.Module):
         ):
             relation_capturer.set_dynamic_branch_gate_force_open(enabled)
 
+    def set_td_parameter_sampling_enabled(self, enabled):
+        self._td_parameter_sampling_enabled = bool(enabled)
+
     def forward(self, inputs, hidden_state, context=None, test_mode=False):
         batch_size, n_agents, _ = inputs.shape
         flat_inputs = inputs.reshape(batch_size * n_agents, -1)
@@ -10874,6 +10962,9 @@ class CleanHyperAgent(nn.Module):
         self.latest_condition = None
         self.latest_condition_graph = None
         self.latest_generated_parameter_graph = None
+        self.latest_generated_parameter_log_prob = None
+        self._generated_parameter_log_prob_sum = None
+        self._generated_parameter_log_prob_count = 0
         self.latest_aux_loss = None
         self.latest_aux_stats = {}
         self.latest_teacher_q = None

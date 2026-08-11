@@ -192,6 +192,31 @@ class CleanLearner:
                 )
             ),
         )
+        self.td_weighted_parameter_likelihood_active = model_type in {
+            "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
+        }
+        self.td_weighted_parameter_likelihood_coef = float(
+            getattr(
+                args,
+                "clean_td_weighted_parameter_likelihood_coef",
+                0.01,
+            )
+        )
+        self.td_weighted_parameter_likelihood_warmup_steps = max(
+            0,
+            int(
+                getattr(
+                    args,
+                    "clean_td_weighted_parameter_likelihood_warmup_steps",
+                    getattr(args, "clean_dynamic_branch_gate_warmup_steps", 250000),
+                )
+            ),
+        )
+        if self.td_weighted_parameter_likelihood_coef < 0.0:
+            raise ValueError(
+                "clean_td_weighted_parameter_likelihood_coef must be non-negative"
+            )
         self.adaptive_auxiliary_ratio_active = model_type in {
             "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
             "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
@@ -942,6 +967,17 @@ class CleanLearner:
         )
         generated_parameter_likelihood_sum = None
         generated_parameter_likelihood_count = mask.new_zeros(())
+        td_weighted_parameter_likelihood_enabled = (
+            self.td_weighted_parameter_likelihood_active
+            and t_env >= self.td_weighted_parameter_likelihood_warmup_steps
+        )
+        td_parameter_log_probs = (
+            [] if td_weighted_parameter_likelihood_enabled else None
+        )
+        if hasattr(self.mac, "set_td_parameter_sampling_enabled"):
+            self.mac.set_td_parameter_sampling_enabled(
+                td_weighted_parameter_likelihood_enabled
+            )
         precomputed_target_mac_out = []
         precomputed_target_relation_conditions = (
             [] if self.target_relation_mixer_gate is not None else None
@@ -982,6 +1018,16 @@ class CleanLearner:
                         t in observation_probe_times
                     )
                 mac_out.append(self.mac.forward(batch, t=t))
+                if td_parameter_log_probs is not None:
+                    parameter_log_prob = getattr(
+                        self.mac, "latest_generated_parameter_log_prob", None
+                    )
+                    if parameter_log_prob is None:
+                        raise RuntimeError(
+                            "TD-weighted parameter likelihood requires a "
+                            "stochastic generated-parameter score."
+                        )
+                    td_parameter_log_probs.append(parameter_log_prob)
                 if generated_parameter_likelihood_enabled:
                     masked_generated_parameters = getattr(
                         self.mac, "latest_generated_parameter_graph", None
@@ -1172,6 +1218,30 @@ class CleanLearner:
             td_mask = mask.expand_as(td_error)
             masked_td_error = td_error * td_mask
             td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
+            td_weighted_parameter_likelihood_loss = td_loss.new_zeros(())
+            td_parameter_quality_advantage_std = td_loss.new_zeros(())
+            td_parameter_mean_log_prob = td_loss.new_zeros(())
+            if td_parameter_log_probs is not None:
+                parameter_log_prob = th.stack(td_parameter_log_probs, dim=1)
+                parameter_log_prob = parameter_log_prob[:, :-1].mean(dim=-1)
+                per_state_td = td_error.detach().pow(2).mean(dim=-1)
+                state_mask = td_mask.detach().mean(dim=-1)
+                valid_count = state_mask.sum().clamp(min=1.0)
+                td_baseline = (per_state_td * state_mask).sum() / valid_count
+                centered_td = per_state_td - td_baseline
+                td_std = (
+                    (centered_td.pow(2) * state_mask).sum() / valid_count
+                ).sqrt().clamp(min=self.adaptive_auxiliary_eps)
+                quality_advantage = -centered_td / td_std
+                td_weighted_parameter_likelihood_loss = -(
+                    quality_advantage.detach() * parameter_log_prob * state_mask
+                ).sum() / valid_count
+                td_parameter_quality_advantage_std = (
+                    quality_advantage.detach().pow(2) * state_mask
+                ).sum().div(valid_count).sqrt()
+                td_parameter_mean_log_prob = (
+                    parameter_log_prob.detach() * state_mask
+                ).sum() / valid_count
             aux_loss = th.stack(aux_losses).mean() if aux_losses else td_loss.new_zeros(())
             teacher_td_loss = td_loss.new_zeros(())
             if teacher_mac_out is not None:
@@ -1246,6 +1316,8 @@ class CleanLearner:
                 * generated_parameter_stability_loss
                 + generated_parameter_stability_coef
                 * generated_parameter_likelihood_loss
+                + self.td_weighted_parameter_likelihood_coef
+                * td_weighted_parameter_likelihood_loss
             )
 
         parameter_sensitivity_score = None
@@ -1543,6 +1615,33 @@ class CleanLearner:
                 self.logger.log_stat(
                     "generated_parameter_conditional_nll_active",
                     float(generated_parameter_likelihood_enabled),
+                    t_env,
+                )
+            if self.td_weighted_parameter_likelihood_active:
+                self.logger.log_stat(
+                    "loss_td_weighted_parameter_likelihood",
+                    td_weighted_parameter_likelihood_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_td_parameter_likelihood",
+                    self.td_weighted_parameter_likelihood_coef
+                    * td_weighted_parameter_likelihood_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "td_parameter_quality_advantage_std",
+                    td_parameter_quality_advantage_std.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "td_parameter_mean_log_prob",
+                    td_parameter_mean_log_prob.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "td_weighted_parameter_likelihood_active",
+                    float(td_weighted_parameter_likelihood_enabled),
                     t_env,
                 )
             for stat_name, stat_value in self.latest_adaptive_auxiliary_stats.items():

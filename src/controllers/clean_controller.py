@@ -12,6 +12,10 @@ class CleanMAC(BasicMAC):
         if hasattr(self.agent, "set_dynamic_branch_gate_force_open"):
             self.agent.set_dynamic_branch_gate_force_open(enabled)
 
+    def set_td_parameter_sampling_enabled(self, enabled):
+        if hasattr(self.agent, "set_td_parameter_sampling_enabled"):
+            self.agent.set_td_parameter_sampling_enabled(enabled)
+
     def select_actions(self, ep_batch, t_ep, t_env, bs=slice(None), test_mode=False):
         self.set_dynamic_branch_gate_t_env(t_env)
         return super().select_actions(
@@ -212,6 +216,9 @@ class CleanMAC(BasicMAC):
         )
         self.latest_generated_parameter_graph = getattr(
             self.agent, "latest_generated_parameter_graph", None
+        )
+        self.latest_generated_parameter_log_prob = getattr(
+            self.agent, "latest_generated_parameter_log_prob", None
         )
         self.latest_aux_loss = getattr(self.agent, "latest_aux_loss", None)
         self.latest_aux_stats = getattr(self.agent, "latest_aux_stats", {})

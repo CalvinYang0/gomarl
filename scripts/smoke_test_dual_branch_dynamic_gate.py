@@ -17,6 +17,7 @@ from modules.agents.clean_hyper_agent import (  # noqa: E402
     GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS,
     GRF_DUAL_BRANCH_VARIANTS,
     GRFPublicPrivateBiasTransformerCapturer,
+    CleanHyperAgent,
     RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL,
     RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS,
     RPG_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS,
@@ -270,6 +271,12 @@ def check_new_variant_registration():
             assert model_name in variants
             assert modes[model_name] == "binary_concrete"
 
+        td_weighted = (
+            f"{base}_td_weighted_param_likelihood_hypercond"
+        )
+        assert td_weighted in variants
+        assert modes[td_weighted] == "binary_concrete"
+
     assert (
         "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond"
         in GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS
@@ -331,6 +338,31 @@ def check_generated_parameter_conditional_nll():
     assert source.grad.abs().sum().item() > 0.0
 
 
+def check_td_weighted_parameter_score():
+    agent = CleanHyperAgent.__new__(CleanHyperAgent)
+    th.nn.Module.__init__(agent)
+    agent.model_type = (
+        "grf_abs_dual_branch_binary_concrete_adaptive_"
+        "td_weighted_param_likelihood_hypercond"
+    )
+    agent.n_agents = 2
+    agent.td_parameter_relative_std = 0.02
+    agent.td_parameter_minimum_rms = 0.01
+    agent._td_parameter_sampling_enabled = True
+    agent._generated_parameter_log_prob_sum = None
+    agent._generated_parameter_log_prob_count = 0
+    agent.latest_generated_parameter_log_prob = None
+    mean = th.randn(6, 4, requires_grad=True)
+    sample = agent._sample_td_weighted_generated_parameter(mean)
+    assert sample.shape == mean.shape
+    assert not th.equal(sample, mean)
+    assert agent.latest_generated_parameter_log_prob.shape == (3, 2)
+    score_loss = -agent.latest_generated_parameter_log_prob.mean()
+    score_loss.backward()
+    assert mean.grad is not None
+    assert mean.grad.abs().sum().item() > 0.0
+
+
 def main():
     th.manual_seed(17)
     check_grf("hard_st")
@@ -353,6 +385,8 @@ def main():
     print("adaptive_auxiliary detached_ema_ratio=ok")
     check_generated_parameter_conditional_nll()
     print("generated_parameter_conditional_nll detached_target=ok")
+    check_td_weighted_parameter_score()
+    print("td_weighted_parameter_likelihood score_gradient=ok")
 
 
 if __name__ == "__main__":
