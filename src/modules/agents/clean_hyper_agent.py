@@ -260,6 +260,7 @@ RPG_DUAL_BRANCH_VARIANTS = {
     "rpg_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
     "rpg_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
+    "rpg_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
 }
 RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
     "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
@@ -292,9 +293,13 @@ RPG_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS = {
 RPG_DUAL_BRANCH_TD_WEIGHTED_PARAMETER_LIKELIHOOD_VARIANTS = {
     "rpg_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
 }
+RPG_DUAL_BRANCH_TRAJECTORY_PARAMETER_LIKELIHOOD_VARIANTS = {
+    "rpg_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
+}
 RPG_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS = (
     RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
     | RPG_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS
+    | RPG_DUAL_BRANCH_TRAJECTORY_PARAMETER_LIKELIHOOD_VARIANTS
 )
 RPG_DUAL_BRANCH_GRAD_CONSISTENCY_VARIANTS = {
     "rpg_dual_branch_hard_gate_grad_consistency_hypercond",
@@ -334,6 +339,7 @@ RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "rpg_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond": "binary_concrete",
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond": "binary_concrete",
     "rpg_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond": "binary_concrete",
 }
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",
@@ -516,6 +522,7 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
+    "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
 }
 GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
@@ -551,9 +558,13 @@ GRF_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS = {
 GRF_DUAL_BRANCH_TD_WEIGHTED_PARAMETER_LIKELIHOOD_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
 }
+GRF_DUAL_BRANCH_TRAJECTORY_PARAMETER_LIKELIHOOD_VARIANTS = {
+    "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
+}
 GRF_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS = (
     GRF_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
     | GRF_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS
+    | GRF_DUAL_BRANCH_TRAJECTORY_PARAMETER_LIKELIHOOD_VARIANTS
 )
 GRF_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
     "grf_abs_dual_branch_td_benefit_drop_hypercond": "td_benefit",
@@ -578,6 +589,7 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond": "binary_concrete",
 }
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_hypercond",

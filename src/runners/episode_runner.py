@@ -89,6 +89,20 @@ class EpisodeRunner:
             actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
             cpu_actions = actions.to("cpu").numpy()
 
+            trajectory_projection = getattr(
+                self.mac, "latest_trajectory_parameter_projection", None
+            )
+            if trajectory_projection is not None and not test_mode:
+                self.batch.update(
+                    {
+                        "trajectory_parameter_projection": trajectory_projection
+                        .detach()
+                        .to(device="cpu", dtype=trajectory_projection.dtype)
+                    },
+                    ts=self.t,
+                    mark_filled=False,
+                )
+
             if trace_request is not None:
                 trace_frames.append(
                     {

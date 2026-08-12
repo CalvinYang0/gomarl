@@ -217,6 +217,20 @@ class CleanLearner:
             raise ValueError(
                 "clean_td_weighted_parameter_likelihood_coef must be non-negative"
             )
+        self.trajectory_parameter_likelihood_active = model_type in {
+            "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
+        }
+        self.trajectory_parameter_likelihood_warmup_steps = max(
+            0,
+            int(
+                getattr(
+                    args,
+                    "clean_trajectory_parameter_likelihood_warmup_steps",
+                    getattr(args, "clean_dynamic_branch_gate_warmup_steps", 250000),
+                )
+            ),
+        )
         self.adaptive_auxiliary_ratio_active = model_type in {
             "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
             "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
@@ -238,6 +252,8 @@ class CleanLearner:
             "rpg_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
             "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
             "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
+            "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
         }
         self.adaptive_auxiliary_target_ratio = float(
             getattr(args, "clean_adaptive_auxiliary_target_ratio", 0.1)
@@ -251,8 +267,10 @@ class CleanLearner:
         self.adaptive_auxiliary_max_coef = float(
             getattr(args, "clean_adaptive_auxiliary_max_coef", 100.0)
         )
-        if not 0.0 < self.adaptive_auxiliary_target_ratio:
-            raise ValueError("clean_adaptive_auxiliary_target_ratio must be positive")
+        if not 0.0 <= self.adaptive_auxiliary_target_ratio:
+            raise ValueError(
+                "clean_adaptive_auxiliary_target_ratio must be non-negative"
+            )
         if not 0.0 <= self.adaptive_auxiliary_ema_decay < 1.0:
             raise ValueError("clean_adaptive_auxiliary_ema_decay must be in [0, 1)")
         if not 0.0 < self.adaptive_auxiliary_eps:
@@ -974,6 +992,12 @@ class CleanLearner:
         td_parameter_log_probs = (
             [] if td_weighted_parameter_likelihood_enabled else None
         )
+        trajectory_parameter_likelihood_enabled = (
+            self.trajectory_parameter_likelihood_active
+            and t_env >= self.trajectory_parameter_likelihood_warmup_steps
+        )
+        trajectory_parameter_projection_sum = None
+        trajectory_parameter_projection_count = mask.new_zeros(())
         if hasattr(self.mac, "set_td_parameter_sampling_enabled"):
             self.mac.set_td_parameter_sampling_enabled(
                 td_weighted_parameter_likelihood_enabled
@@ -1018,6 +1042,34 @@ class CleanLearner:
                         t in observation_probe_times
                     )
                 mac_out.append(self.mac.forward(batch, t=t))
+                if trajectory_parameter_likelihood_enabled and t < mask.shape[1]:
+                    current_projection = getattr(
+                        self.mac, "latest_trajectory_parameter_projection", None
+                    )
+                    if current_projection is None:
+                        raise RuntimeError(
+                            "Trajectory parameter likelihood requires a current "
+                            "generated-parameter projection."
+                        )
+                    behavior_projection = batch[
+                        "trajectory_parameter_projection"
+                    ][:, t].detach().to(dtype=current_projection.dtype)
+                    per_agent_nll = 0.5 * (
+                        current_projection - behavior_projection
+                    ).pow(2).mean(dim=-1)
+                    state_valid = (
+                        mask[:, t].reshape(batch.batch_size, 1) > 0
+                    ).expand(-1, self.args.n_agents)
+                    valid_float = state_valid.to(per_agent_nll.dtype)
+                    likelihood_sum = (per_agent_nll * valid_float).sum()
+                    trajectory_parameter_projection_sum = (
+                        likelihood_sum
+                        if trajectory_parameter_projection_sum is None
+                        else trajectory_parameter_projection_sum + likelihood_sum
+                    )
+                    trajectory_parameter_projection_count = (
+                        trajectory_parameter_projection_count + valid_float.sum()
+                    )
                 if td_parameter_log_probs is not None:
                     parameter_log_prob = getattr(
                         self.mac, "latest_generated_parameter_log_prob", None
@@ -1272,10 +1324,19 @@ class CleanLearner:
                     generated_parameter_likelihood_sum
                     / generated_parameter_likelihood_count.clamp(min=1.0)
                 )
+            trajectory_parameter_likelihood_loss = td_loss.new_zeros(())
+            if trajectory_parameter_projection_sum is not None:
+                trajectory_parameter_likelihood_loss = (
+                    trajectory_parameter_projection_sum
+                    / trajectory_parameter_projection_count.clamp(min=1.0)
+                )
             condition_gradient_consistency_coef = (
                 self.condition_gradient_consistency_coef
             )
             generated_parameter_stability_coef = (
+                self.generated_parameter_stability_coef
+            )
+            trajectory_parameter_likelihood_coef = (
                 self.generated_parameter_stability_coef
             )
             adaptive_auxiliary_enabled = False
@@ -1301,6 +1362,13 @@ class CleanLearner:
                         )
                     )
                     adaptive_auxiliary_enabled = True
+                elif trajectory_parameter_projection_sum is not None:
+                    trajectory_parameter_likelihood_coef = (
+                        self._adaptive_auxiliary_coefficient(
+                            td_loss, trajectory_parameter_likelihood_loss
+                        )
+                    )
+                    adaptive_auxiliary_enabled = True
             if not adaptive_auxiliary_enabled:
                 self.latest_adaptive_auxiliary_stats = {}
             loss = (
@@ -1316,6 +1384,8 @@ class CleanLearner:
                 * generated_parameter_stability_loss
                 + generated_parameter_stability_coef
                 * generated_parameter_likelihood_loss
+                + trajectory_parameter_likelihood_coef
+                * trajectory_parameter_likelihood_loss
                 + self.td_weighted_parameter_likelihood_coef
                 * td_weighted_parameter_likelihood_loss
             )
@@ -1642,6 +1712,32 @@ class CleanLearner:
                 self.logger.log_stat(
                     "td_weighted_parameter_likelihood_active",
                     float(td_weighted_parameter_likelihood_enabled),
+                    t_env,
+                )
+            if self.trajectory_parameter_likelihood_active:
+                weighted_trajectory_parameter_loss = (
+                    trajectory_parameter_likelihood_coef
+                    * trajectory_parameter_likelihood_loss.item()
+                )
+                self.logger.log_stat(
+                    "loss_trajectory_parameter_likelihood",
+                    trajectory_parameter_likelihood_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_trajectory_parameter_likelihood",
+                    weighted_trajectory_parameter_loss,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "trajectory_parameter_likelihood_to_td_ratio",
+                    weighted_trajectory_parameter_loss
+                    / max(td_loss.item(), self.adaptive_auxiliary_eps),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "trajectory_parameter_likelihood_active",
+                    float(trajectory_parameter_likelihood_enabled),
                     t_env,
                 )
             for stat_name, stat_value in self.latest_adaptive_auxiliary_stats.items():

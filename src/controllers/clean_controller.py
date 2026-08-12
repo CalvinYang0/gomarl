@@ -1,9 +1,62 @@
+import math
+
 import torch as th
 
 from .basic_controller import BasicMAC
 
 
 class CleanMAC(BasicMAC):
+    TRAJECTORY_PARAMETER_MODEL_SUFFIX = (
+        "dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond"
+    )
+
+    @staticmethod
+    def _fixed_parameter_projection(parameter_parts, projection_dim):
+        """Project generated parameter blocks with a frozen signed hash.
+
+        The arithmetic hash is deterministic across rollout and learner
+        processes, has no trainable state, and avoids materializing a dense
+        [projection_dim, parameter_count] matrix.
+        """
+        if not parameter_parts:
+            return None
+        projection_dim = int(projection_dim)
+        if projection_dim <= 0:
+            raise ValueError("trajectory parameter projection_dim must be positive")
+        projected = None
+        parameter_count = 0
+        leading_size = None
+        for block_index, parameter in enumerate(parameter_parts):
+            if parameter is None or parameter.dim() < 1:
+                raise RuntimeError("Invalid generated parameter block for projection")
+            flat = parameter.reshape(parameter.shape[0], -1)
+            if leading_size is None:
+                leading_size = flat.shape[0]
+                projected = flat.new_zeros(leading_size, projection_dim)
+            elif flat.shape[0] != leading_size:
+                raise RuntimeError("Generated parameter blocks have inconsistent batches")
+
+            indices = th.arange(flat.shape[1], device=flat.device, dtype=th.long)
+            seed = 104729 * (block_index + 1)
+            buckets = (indices * 1103515245 + seed) % projection_dim
+            sign_hash = (indices + seed) * 2654435761
+            sign_hash = sign_hash ^ (sign_hash >> 16)
+            sign_bits = sign_hash % 2
+            signs = sign_bits.to(flat.dtype).mul_(2.0).sub_(1.0)
+            projected.scatter_add_(
+                1,
+                buckets.unsqueeze(0).expand(flat.shape[0], -1),
+                flat * signs.unsqueeze(0),
+            )
+            parameter_count += flat.shape[1]
+
+        # Keep the projected scale comparable when GRF and SMAC generate
+        # different numbers of head parameters.
+        projected = projected / math.sqrt(
+            max(float(parameter_count) / float(projection_dim), 1.0)
+        )
+        return projected
+
     def set_dynamic_branch_gate_t_env(self, t_env):
         if hasattr(self.agent, "set_dynamic_branch_gate_t_env"):
             self.agent.set_dynamic_branch_gate_t_env(t_env)
@@ -60,6 +113,7 @@ class CleanMAC(BasicMAC):
             "rpg_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond",
             "rpg_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
             "rpg_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
+            "rpg_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
             "rpg_public_transformer_hypercond",
             "rpg_public_future_delta_token_transformer_hypercond",
             "rpg_public_future_delta_bias_transformer_hypercond",
@@ -217,6 +271,22 @@ class CleanMAC(BasicMAC):
         self.latest_generated_parameter_graph = getattr(
             self.agent, "latest_generated_parameter_graph", None
         )
+        self.latest_trajectory_parameter_projection = None
+        model_type = getattr(self.agent, "model_type", "")
+        if model_type.endswith(self.TRAJECTORY_PARAMETER_MODEL_SUFFIX):
+            projection_dim = int(
+                getattr(self.args, "clean_trajectory_parameter_projection_dim", 64)
+            )
+            flat_projection = self._fixed_parameter_projection(
+                self.latest_generated_parameter_graph, projection_dim
+            )
+            if flat_projection is None:
+                raise RuntimeError(
+                    "Trajectory parameter likelihood requires generated parameters"
+                )
+            self.latest_trajectory_parameter_projection = flat_projection.view(
+                ep_batch.batch_size, self.n_agents, projection_dim
+            )
         self.latest_generated_parameter_log_prob = getattr(
             self.agent, "latest_generated_parameter_log_prob", None
         )

@@ -151,6 +151,16 @@ def run_sequential(args, logger):
         "reward": {"vshape": (1,)},
         "terminated": {"vshape": (1,), "dtype": th.uint8},
     }
+    if str(getattr(args, "clean_model_type", "")).endswith(
+        "dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond"
+    ):
+        scheme["trajectory_parameter_projection"] = {
+            "vshape": (
+                int(getattr(args, "clean_trajectory_parameter_projection_dim", 64)),
+            ),
+            "group": "agents",
+            "dtype": th.float16,
+        }
     groups = {
         "agents": args.n_agents
     }

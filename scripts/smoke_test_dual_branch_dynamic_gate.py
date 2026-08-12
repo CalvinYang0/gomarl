@@ -25,6 +25,7 @@ from modules.agents.clean_hyper_agent import (  # noqa: E402
     RPG_DUAL_BRANCH_VARIANTS,
 )
 from learners.clean_learner import CleanLearner  # noqa: E402
+from controllers.clean_controller import CleanMAC  # noqa: E402
 
 
 def build_grf(gate_mode, gate_scope="both"):
@@ -276,6 +277,11 @@ def check_new_variant_registration():
         )
         assert td_weighted in variants
         assert modes[td_weighted] == "binary_concrete"
+        trajectory = (
+            f"{base}_trajectory_parameter_likelihood_hypercond"
+        )
+        assert trajectory in variants
+        assert modes[trajectory] == "binary_concrete"
 
     assert (
         "grf_abs_dual_branch_binary_concrete_adaptive_slot_grad_consistency_hypercond"
@@ -316,6 +322,12 @@ def check_adaptive_auxiliary_ratio_detached():
     total.backward()
     assert abs(td_source.grad.item() - 4.0) < 1e-6
     assert abs(aux_source.grad.item() - coefficient) < 1e-6
+
+    learner.adaptive_auxiliary_target_ratio = 0.0
+    zero_coefficient = learner._adaptive_auxiliary_coefficient(
+        td_loss.detach(), auxiliary_loss.detach()
+    )
+    assert zero_coefficient == 0.0
 
 
 def check_generated_parameter_conditional_nll():
@@ -363,6 +375,18 @@ def check_td_weighted_parameter_score():
     assert mean.grad.abs().sum().item() > 0.0
 
 
+def check_trajectory_parameter_projection():
+    first = th.randn(6, 4, requires_grad=True)
+    second = th.randn(6, 3, 2, requires_grad=True)
+    projected_1 = CleanMAC._fixed_parameter_projection((first, second), 64)
+    projected_2 = CleanMAC._fixed_parameter_projection((first, second), 64)
+    assert projected_1.shape == (6, 64)
+    assert th.equal(projected_1, projected_2)
+    projected_1.square().mean().backward()
+    assert first.grad is not None and first.grad.abs().sum().item() > 0.0
+    assert second.grad is not None and second.grad.abs().sum().item() > 0.0
+
+
 def main():
     th.manual_seed(17)
     check_grf("hard_st")
@@ -387,6 +411,8 @@ def main():
     print("generated_parameter_conditional_nll detached_target=ok")
     check_td_weighted_parameter_score()
     print("td_weighted_parameter_likelihood score_gradient=ok")
+    check_trajectory_parameter_projection()
+    print("trajectory_parameter_projection deterministic_gradient=ok")
 
 
 if __name__ == "__main__":

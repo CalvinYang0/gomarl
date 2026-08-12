@@ -215,6 +215,9 @@ class ParallelRunner:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, bs=envs_not_terminated, test_mode=test_mode)
                 
             cpu_actions = actions.to("cpu").numpy()
+            trajectory_projection = getattr(
+                self.mac, "latest_trajectory_parameter_projection", None
+            )
             action_by_env = {
                 env_idx: cpu_actions[action_idx]
                 for action_idx, env_idx in enumerate(envs_not_terminated)
@@ -234,6 +237,13 @@ class ParallelRunner:
             actions_chosen = {
                 "actions": actions.unsqueeze(1).to("cpu"),
             }
+            if trajectory_projection is not None and not test_mode:
+                actions_chosen["trajectory_parameter_projection"] = (
+                    trajectory_projection[envs_not_terminated]
+                    .unsqueeze(1)
+                    .detach()
+                    .to("cpu")
+                )
             if save_probs:
                 actions_chosen["probs"] = probs.unsqueeze(1).to("cpu")
             

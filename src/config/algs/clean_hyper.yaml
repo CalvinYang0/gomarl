@@ -867,6 +867,8 @@ clean_td_parameter_relative_std: 0.02
 clean_td_parameter_minimum_rms: 0.01
 clean_td_weighted_parameter_likelihood_coef: 0.01
 clean_td_weighted_parameter_likelihood_warmup_steps: 250000
+clean_trajectory_parameter_projection_dim: 64
+clean_trajectory_parameter_likelihood_warmup_steps: 250000
 # Adaptive variants target a 10% auxiliary/TD scalar-loss ratio. EMA values and
 # the derived coefficient are detached from autograd; the cap is only a guard
 # against invalid/near-zero auxiliary batches.
