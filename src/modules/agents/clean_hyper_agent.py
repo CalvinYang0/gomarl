@@ -523,6 +523,10 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
+    "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond",
+}
+GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS = {
+    "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond",
 }
 GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
@@ -590,11 +594,16 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond": "binary_concrete",
 }
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_hypercond",
 }
-GRF_DECISION_MAKER_VARIANTS |= GRF_MLP_RELATION_VARIANTS | GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS
+GRF_DECISION_MAKER_VARIANTS |= (
+    GRF_MLP_RELATION_VARIANTS
+    | GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS
+    | GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS
+)
 GRF_TWO_LAYER_HEAD_VARIANTS = {
     "grf_public_private_bias_transformer_two_layer_head_hypercond",
     "grf_abs_public_private_bias_transformer_two_layer_head_hypercond",
@@ -7806,6 +7815,10 @@ class CleanHyperAgent(nn.Module):
             self._init_grf_decision_maker_head()
         else:
             self.grf_decision_hyper = None
+            self.grf_head_self_encoder = None
+            self.grf_head_ball_encoder = None
+            self.grf_head_ally_encoder = None
+            self.grf_head_opponent_encoder = None
 
         if self.model_type in GRF_LINEAR_HEAD_VARIANTS:
             self.grf_linear_head_w = nn.Linear(self.cond_dim, self.hidden_dim * self.n_actions)
@@ -8910,27 +8923,59 @@ class CleanHyperAgent(nn.Module):
                 )
             )
 
-        # GRF actions are not target-indexed. We split them by semantic role:
-        # local control, teammate interaction (passes), and opponent/goal interaction.
+        if self.model_type in GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS:
+            # Default GRF actions grouped by what the action needs to decide:
+            # ego/ball control, teammate-conditioned passes, and opponent-conditioned slide.
+            ego_actions = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 13, 14, 15, 17, 18]
+            ally_actions = [9, 10, 11]
+            opponent_actions = [16]
+        else:
+            # Legacy decision-maker grouping kept unchanged for existing experiments.
+            ego_actions = [0, 1, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15, 17, 18]
+            ally_actions = [9, 10, 11]
+            opponent_actions = [12, 16]
+
         self.register_buffer(
             "grf_ego_action_idx",
-            th.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15, 17, 18], dtype=th.long),
+            th.tensor(ego_actions, dtype=th.long),
             persistent=False,
         )
         self.register_buffer(
             "grf_ally_action_idx",
-            th.tensor([9, 10, 11], dtype=th.long),
+            th.tensor(ally_actions, dtype=th.long),
             persistent=False,
         )
         self.register_buffer(
             "grf_opponent_action_idx",
-            th.tensor([12, 16], dtype=th.long),
+            th.tensor(opponent_actions, dtype=th.long),
             persistent=False,
         )
 
-        self.grf_ego_head_input_dim = self.hidden_dim + self.rpg_relation_dim
-        self.grf_ally_head_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
-        self.grf_opponent_head_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
+        if self.model_type in GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS:
+            def make_entity_encoder(input_dim):
+                return nn.Sequential(
+                    nn.Linear(input_dim, self.rpg_relation_dim),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(self.rpg_relation_dim, self.rpg_relation_dim),
+                )
+
+            # These encoders intentionally consume ungated raw observation fields.
+            # Ally/opponent modules are shared across entities of the same type.
+            self.grf_head_self_encoder = make_entity_encoder(4)
+            self.grf_head_ball_encoder = make_entity_encoder(6)
+            self.grf_head_ally_encoder = make_entity_encoder(4)
+            self.grf_head_opponent_encoder = make_entity_encoder(4)
+            self.grf_ego_head_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
+            self.grf_ally_head_input_dim = self.hidden_dim + 3 * self.rpg_relation_dim
+            self.grf_opponent_head_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
+        else:
+            self.grf_head_self_encoder = None
+            self.grf_head_ball_encoder = None
+            self.grf_head_ally_encoder = None
+            self.grf_head_opponent_encoder = None
+            self.grf_ego_head_input_dim = self.hidden_dim + self.rpg_relation_dim
+            self.grf_ally_head_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
+            self.grf_opponent_head_input_dim = self.hidden_dim + 2 * self.rpg_relation_dim
         self.grf_decision_hyper = nn.ModuleDict()
         for branch, input_dim, output_dim in (
             ("ego", self.grf_ego_head_input_dim, int(self.grf_ego_action_idx.numel())),
@@ -9926,29 +9971,81 @@ class CleanHyperAgent(nn.Module):
         q = th.bmm(mid, w2) + b2
         return q.view(batch_size, n_agents, output_dim)
 
-    def _apply_grf_decision_maker_head(self, hidden, condition):
-        self_token = getattr(self.rpg_relation_capturer, "latest_self_token", None)
-        ally_tokens = getattr(self.rpg_relation_capturer, "latest_ally_tokens", None)
-        opponent_tokens = getattr(self.rpg_relation_capturer, "latest_opponent_tokens", None)
-        if self_token is None or ally_tokens is None or opponent_tokens is None:
-            raise RuntimeError(
-                "{} requires GRF transformer entity tokens from the relation capturer.".format(
+    def _encode_grf_independent_head_entities(self, context):
+        if context is None or context.get("obs") is None:
+            raise ValueError(
+                "{} requires raw obs for its independent action-head encoders.".format(
                     self.model_type
                 )
             )
+        (
+            self_pos,
+            ally_pos,
+            self_dir,
+            ally_dir,
+            opponent_pos,
+            opponent_dir,
+            ball,
+        ) = self.rpg_relation_capturer._split_obs(context["obs"])
 
-        if ally_tokens.size(2) > 0:
-            ally_context = ally_tokens.mean(dim=2)
-        else:
-            ally_context = self_token.new_zeros(self_token.shape)
-        if opponent_tokens.size(2) > 0:
-            opponent_context = opponent_tokens.mean(dim=2)
-        else:
-            opponent_context = self_token.new_zeros(self_token.shape)
+        self_features = th.cat([self_pos, self_dir], dim=-1)
+        ally_features = th.cat([ally_pos, ally_dir], dim=-1)
+        opponent_features = th.cat([opponent_pos, opponent_dir], dim=-1)
 
-        ego_input = th.cat([hidden, self_token], dim=-1)
-        ally_input = th.cat([hidden, self_token, ally_context], dim=-1)
-        opponent_input = th.cat([hidden, self_token, opponent_context], dim=-1)
+        self_token = self.grf_head_self_encoder(self_features)
+        ball_token = self.grf_head_ball_encoder(ball)
+        ally_tokens = self.grf_head_ally_encoder(ally_features)
+        opponent_tokens = self.grf_head_opponent_encoder(opponent_features)
+        ally_context = (
+            ally_tokens.mean(dim=2)
+            if ally_tokens.size(2) > 0
+            else self_token.new_zeros(self_token.shape)
+        )
+        opponent_context = (
+            opponent_tokens.mean(dim=2)
+            if opponent_tokens.size(2) > 0
+            else self_token.new_zeros(self_token.shape)
+        )
+        return self_token, ball_token, ally_context, opponent_context
+
+    def _apply_grf_decision_maker_head(self, hidden, condition, context=None):
+        if self.model_type in GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS:
+            (
+                self_token,
+                ball_token,
+                ally_context,
+                opponent_context,
+            ) = self._encode_grf_independent_head_entities(context)
+            ego_input = th.cat([hidden, self_token, ball_token], dim=-1)
+            ally_input = th.cat(
+                [hidden, self_token, ball_token, ally_context], dim=-1
+            )
+            opponent_input = th.cat(
+                [hidden, self_token, opponent_context], dim=-1
+            )
+        else:
+            self_token = getattr(self.rpg_relation_capturer, "latest_self_token", None)
+            ally_tokens = getattr(self.rpg_relation_capturer, "latest_ally_tokens", None)
+            opponent_tokens = getattr(self.rpg_relation_capturer, "latest_opponent_tokens", None)
+            if self_token is None or ally_tokens is None or opponent_tokens is None:
+                raise RuntimeError(
+                    "{} requires GRF transformer entity tokens from the relation capturer.".format(
+                        self.model_type
+                    )
+                )
+
+            if ally_tokens.size(2) > 0:
+                ally_context = ally_tokens.mean(dim=2)
+            else:
+                ally_context = self_token.new_zeros(self_token.shape)
+            if opponent_tokens.size(2) > 0:
+                opponent_context = opponent_tokens.mean(dim=2)
+            else:
+                opponent_context = self_token.new_zeros(self_token.shape)
+
+            ego_input = th.cat([hidden, self_token], dim=-1)
+            ally_input = th.cat([hidden, self_token, ally_context], dim=-1)
+            opponent_input = th.cat([hidden, self_token, opponent_context], dim=-1)
 
         if self.model_type in GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS:
             linear_condition = getattr(
@@ -11104,7 +11201,9 @@ class CleanHyperAgent(nn.Module):
                     else:
                         self.latest_condition_graph = relation_condition
                 if self.model_type in GRF_DECISION_MAKER_VARIANTS:
-                    q = self._apply_grf_decision_maker_head(hidden, relation_condition)
+                    q = self._apply_grf_decision_maker_head(
+                        hidden, relation_condition, context=context
+                    )
                 elif self.model_type in GRF_LINEAR_HEAD_VARIANTS:
                     q = self._apply_grf_linear_head(hidden, relation_condition)
                 else:

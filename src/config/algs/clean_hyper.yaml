@@ -575,6 +575,14 @@ hypernet_layers: 2
 #                                      keeps the dual baseline's full-observation
 #                                      entity Transformer branch and removes the
 #                                      Linear branch, fusion layer, and gates.
+# - grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond:
+#                                      TD-only Concrete-gated dual condition.
+#                                      Its action module separately encodes raw
+#                                      self, ball, ally, and opponent fields,
+#                                      then generates ego/ball-control, pass,
+#                                      and slide heads with action partitions
+#                                      15/3/1. These raw entity encoders are
+#                                      independent of the gated Transformer.
 # - rpg_semantic_selfattn_relation_hypercond: relation-generator ablation.
 #                                             It factorizes obs into feature
 #                                             semantic fields such as health,
