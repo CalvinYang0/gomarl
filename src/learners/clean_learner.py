@@ -243,6 +243,30 @@ class CleanLearner:
         self.gradient_importance_active = model_type == (
             "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond"
         )
+        self.importance_gate_parameters = ()
+        if (
+            self.perturbed_parameter_importance_active
+            or self.gradient_importance_active
+        ):
+            relation_capturer = getattr(
+                self.mac.agent, "rpg_relation_capturer", None
+            )
+            dynamic_gate = getattr(
+                relation_capturer, "dynamic_branch_gate", None
+            )
+            if dynamic_gate is None:
+                raise RuntimeError(
+                    "Importance auxiliary variants require a dynamic branch gate"
+                )
+            self.importance_gate_parameters = tuple(
+                parameter
+                for parameter in dynamic_gate.parameters()
+                if parameter.requires_grad
+            )
+            if not self.importance_gate_parameters:
+                raise RuntimeError(
+                    "Importance auxiliary variants require trainable gate parameters"
+                )
         self.importance_auxiliary_warmup_steps = max(
             0,
             int(
@@ -375,6 +399,57 @@ class CleanLearner:
                 "adaptive_auxiliary_target_ratio": self.adaptive_auxiliary_target_ratio,
             }
         return coefficient
+
+    def _backward_main_and_gate_only_auxiliary(
+        self, main_loss, gate_only_auxiliary_loss=None
+    ):
+        """Backpropagate an auxiliary objective only into the dynamic gate.
+
+        The main loss keeps its ordinary gradient path through every trainable
+        parameter, including the gate. The separate auxiliary graph is then
+        differentiated only with respect to gate parameters, so parameter
+        stability cannot flatten the condition encoder or hypernetwork merely
+        to reduce its own loss.
+        """
+        auxiliary_active = (
+            gate_only_auxiliary_loss is not None
+            and gate_only_auxiliary_loss.requires_grad
+        )
+        if auxiliary_active and not self.importance_gate_parameters:
+            raise RuntimeError(
+                "Gate-only auxiliary backward has no trainable gate parameters"
+            )
+
+        scaled_main_loss = (
+            self.amp_scaler.scale(main_loss) if self.use_amp else main_loss
+        )
+        scaled_main_loss.backward(retain_graph=auxiliary_active)
+        if not auxiliary_active:
+            return
+
+        scaled_auxiliary_loss = (
+            self.amp_scaler.scale(gate_only_auxiliary_loss)
+            if self.use_amp
+            else gate_only_auxiliary_loss
+        )
+        auxiliary_gradients = th.autograd.grad(
+            scaled_auxiliary_loss,
+            self.importance_gate_parameters,
+            allow_unused=True,
+        )
+        if not any(gradient is not None for gradient in auxiliary_gradients):
+            raise RuntimeError(
+                "Importance auxiliary loss is disconnected from the dynamic gate"
+            )
+        for parameter, gradient in zip(
+            self.importance_gate_parameters, auxiliary_gradients
+        ):
+            if gradient is None:
+                continue
+            if parameter.grad is None:
+                parameter.grad = gradient.detach().clone()
+            else:
+                parameter.grad.add_(gradient.detach())
 
     @staticmethod
     def _semantic_router(mac):
@@ -1573,6 +1648,24 @@ class CleanLearner:
                     adaptive_auxiliary_enabled = True
             if not adaptive_auxiliary_enabled:
                 self.latest_adaptive_auxiliary_stats = {}
+            gate_only_importance_loss = None
+            if (
+                self.perturbed_parameter_importance_active
+                and perturbed_parameter_sum is not None
+                and perturbed_parameter_importance_coef > 0.0
+            ):
+                gate_only_importance_loss = (
+                    perturbed_parameter_importance_coef
+                    * perturbed_parameter_importance_loss
+                )
+            elif (
+                self.gradient_importance_active
+                and dynamic_gate_graphs is not None
+                and gradient_importance_coef > 0.0
+            ):
+                gate_only_importance_loss = (
+                    gradient_importance_coef * gradient_importance_loss
+                )
             loss = (
                 td_loss
                 + gate_auxiliary_coef * aux_loss
@@ -1590,9 +1683,6 @@ class CleanLearner:
                 * trajectory_parameter_likelihood_loss
                 + self.td_weighted_parameter_likelihood_coef
                 * td_weighted_parameter_likelihood_loss
-                + perturbed_parameter_importance_coef
-                * perturbed_parameter_importance_loss
-                + gradient_importance_coef * gradient_importance_loss
             )
 
         parameter_sensitivity_score = None
@@ -1633,7 +1723,9 @@ class CleanLearner:
             semantic_router.semantic_route_probe.grad = None
         if self.use_amp:
             semantic_gradient_scale = float(self.amp_scaler.get_scale())
-            self.amp_scaler.scale(loss).backward()
+            self._backward_main_and_gate_only_auxiliary(
+                loss, gate_only_importance_loss
+            )
             self.amp_scaler.unscale_(self.optimiser)
             semantic_gradient = (
                 None
@@ -1659,7 +1751,9 @@ class CleanLearner:
             self.amp_scaler.step(self.optimiser)
             self.amp_scaler.update()
         else:
-            loss.backward()
+            self._backward_main_and_gate_only_auxiliary(
+                loss, gate_only_importance_loss
+            )
             semantic_gradient = (
                 None
                 if (

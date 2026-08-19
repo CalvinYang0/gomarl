@@ -302,6 +302,23 @@ def check_gradient_importance_gate_loss():
     assert logits.grad is not None and logits.grad.abs().sum().item() > 0.0
 
 
+def check_importance_auxiliary_gate_only_backward():
+    learner = CleanLearner.__new__(CleanLearner)
+    learner.use_amp = False
+    gate_parameter = th.nn.Parameter(th.tensor(2.0))
+    main_parameter = th.nn.Parameter(th.tensor(3.0))
+    learner.importance_gate_parameters = (gate_parameter,)
+
+    main_loss = (gate_parameter + main_parameter).square()
+    auxiliary_loss = (2.0 * gate_parameter + 3.0 * main_parameter).square()
+    learner._backward_main_and_gate_only_auxiliary(main_loss, auxiliary_loss)
+
+    # Main loss contributes 10 to both parameters. The auxiliary contributes
+    # another 52 only to the gate; its 78-gradient must not reach the main net.
+    assert th.allclose(gate_parameter.grad, th.tensor(62.0))
+    assert th.allclose(main_parameter.grad, th.tensor(10.0))
+
+
 def check_condition_gradient_consistency():
     model_name = "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond"
     assert model_name in GRF_DUAL_BRANCH_VARIANTS
@@ -539,6 +556,8 @@ def main():
     print("sparse_gate_five_variants registration_and_aux=ok")
     check_gradient_importance_gate_loss()
     print("gradient_importance first_order_weighted_sparsity=ok")
+    check_importance_auxiliary_gate_only_backward()
+    print("importance_auxiliary gate_only_backward=ok")
     check_condition_gradient_consistency()
     print("condition_gradient_consistency second_order=ok")
     check_generated_parameter_stability()
