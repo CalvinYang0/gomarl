@@ -214,6 +214,16 @@ def check_sparse_gate_variants():
             None,
             None,
         ),
+        "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond": (
+            "binary_concrete",
+            None,
+            None,
+        ),
+        "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond": (
+            "binary_concrete",
+            None,
+            None,
+        ),
     }
     for model_name, (mode, regularizer, prior) in variants.items():
         assert model_name in GRF_DUAL_BRANCH_VARIANTS
@@ -346,6 +356,36 @@ def check_importance_auxiliary_gate_only_backward():
     # another 52 only to the gate; its 78-gradient must not reach the main net.
     assert th.allclose(gate_parameter.grad, th.tensor(62.0))
     assert th.allclose(main_parameter.grad, th.tensor(10.0))
+
+
+def check_temporal_parameter_change():
+    previous = tuple(
+        th.ones(6, width, requires_grad=True) for width in (4, 3, 5, 2)
+    )
+    current = tuple(
+        th.full((6, width), 1.1, requires_grad=True)
+        for width in (4, 3, 5, 2)
+    )
+    change, valid = CleanLearner._normalized_generated_parameter_change(
+        previous,
+        current,
+        pair_valid=th.tensor([True, False, True]),
+        batch_size=3,
+        n_agents=2,
+        scale_eps=1e-6,
+    )
+    assert change.shape == (3, 2)
+    assert valid.sum().item() == 4.0
+    assert th.allclose(
+        change,
+        th.full_like(change, 0.1 / 1.05),
+        atol=1e-6,
+    )
+    small_change = (change < 0.1 / 2.0).detach()
+    loss = th.where(small_change, change.square(), th.zeros_like(change)).mean()
+    assert loss.item() == 0.0
+    change.mean().backward()
+    assert all(parameter.grad is not None for parameter in current)
 
 
 def check_importance_alternating_training():
@@ -656,6 +696,8 @@ def main():
     print("gradient_importance first_order_weighted_sparsity=ok")
     check_importance_auxiliary_gate_only_backward()
     print("importance_auxiliary gate_only_backward=ok")
+    check_temporal_parameter_change()
+    print("temporal_parameter normalized_change_and_cutoff=ok")
     check_importance_alternating_training()
     print("importance_auxiliary alternating_80k_20k=ok")
     check_test_slot_probability_summary()

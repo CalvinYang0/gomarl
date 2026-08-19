@@ -247,10 +247,23 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_"
             "perturbed_head_td_quality_hypercond"
         )
+        self.temporal_param_stability_active = model_type == (
+            "grf_abs_dual_branch_binary_concrete_"
+            "temporal_param_stability_hypercond"
+        )
+        self.temporal_param_small_change_active = model_type == (
+            "grf_abs_dual_branch_binary_concrete_"
+            "temporal_param_small_change_hypercond"
+        )
+        self.temporal_param_auxiliary_active = (
+            self.temporal_param_stability_active
+            or self.temporal_param_small_change_active
+        )
         self.importance_auxiliary_active = (
             self.perturbed_parameter_importance_active
             or self.gradient_importance_active
             or self.perturbed_head_td_quality_active
+            or self.temporal_param_auxiliary_active
         )
         self.importance_gate_parameters = ()
         if self.importance_auxiliary_active:
@@ -312,6 +325,16 @@ class CleanLearner:
             raise ValueError("clean_perturbed_head_relative_std must be positive")
         if self.perturbed_head_minimum_rms <= 0.0:
             raise ValueError("clean_perturbed_head_minimum_rms must be positive")
+        self.temporal_param_switch_margin = float(
+            getattr(args, "clean_temporal_param_switch_margin", 0.1)
+        )
+        self.temporal_param_scale_eps = float(
+            getattr(args, "clean_temporal_param_scale_eps", 1e-6)
+        )
+        if self.temporal_param_switch_margin <= 0.0:
+            raise ValueError("clean_temporal_param_switch_margin must be positive")
+        if self.temporal_param_scale_eps <= 0.0:
+            raise ValueError("clean_temporal_param_scale_eps must be positive")
         self.importance_alternating_training = bool(
             getattr(args, "clean_importance_alternating_training", False)
         )
@@ -357,6 +380,8 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond",
             "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond",
             "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
         }
         self.adaptive_auxiliary_target_ratio = float(
             getattr(args, "clean_adaptive_auxiliary_target_ratio", 0.1)
@@ -687,6 +712,46 @@ class CleanLearner:
         valid = pair_valid.reshape(batch_size, 1).expand(-1, n_agents)
         valid_float = valid.to(per_agent_mean.dtype)
         return (per_agent_mean * valid_float).sum(), valid_float.sum()
+
+    @staticmethod
+    def _normalized_generated_parameter_change(
+        previous_parameters,
+        current_parameters,
+        pair_valid,
+        batch_size,
+        n_agents,
+        scale_eps,
+    ):
+        """Return equal-block relative L1 change for every agent and pair.
+
+        Each generated parameter block is normalized independently so the two
+        weight matrices cannot dominate the two bias vectors merely because
+        they contain more elements. The scale is detached to prevent the
+        auxiliary objective from gaming its denominator.
+        """
+        if len(previous_parameters) != len(current_parameters):
+            raise RuntimeError("Generated parameter structures do not match.")
+        relative_changes = []
+        for previous, current in zip(previous_parameters, current_parameters):
+            if previous.shape != current.shape:
+                raise RuntimeError("Adjacent generated parameter shapes do not match.")
+            previous_flat = previous.reshape(batch_size, n_agents, -1)
+            current_flat = current.reshape(batch_size, n_agents, -1)
+            absolute_change = (current_flat - previous_flat).abs().mean(dim=-1)
+            previous_rms = previous_flat.detach().pow(2).mean(dim=-1).sqrt()
+            current_rms = current_flat.detach().pow(2).mean(dim=-1).sqrt()
+            scale = (0.5 * (previous_rms + current_rms)).clamp(
+                min=float(scale_eps)
+            )
+            relative_changes.append(absolute_change / scale)
+        if not relative_changes:
+            zero = pair_valid.new_zeros(
+                (batch_size, n_agents), dtype=th.float32
+            )
+            return zero, zero
+        per_agent_change = th.stack(relative_changes, dim=0).mean(dim=0)
+        valid = pair_valid.reshape(batch_size, 1).expand(-1, n_agents)
+        return per_agent_change, valid.to(per_agent_change.dtype)
 
     def _gradient_importance_gate_loss(self, td_loss, gate_graphs):
         """Penalize keeping slots whose sampled gates have low TD sensitivity.
@@ -1250,6 +1315,15 @@ class CleanLearner:
                 or importance_training_phase == "gate_td_aux"
             )
         )
+        temporal_param_auxiliary_enabled = (
+            self.temporal_param_auxiliary_active
+            and importance_auxiliary_enabled
+        )
+        previous_temporal_parameters = None
+        temporal_param_loss_sum = None
+        temporal_param_change_sum = mask.new_zeros(())
+        temporal_param_small_count = mask.new_zeros(())
+        temporal_param_valid_count = mask.new_zeros(())
         perturbed_parameter_sum = None
         perturbed_parameter_count = mask.new_zeros(())
         perturb_probe_times = (
@@ -1477,6 +1551,59 @@ class CleanLearner:
                             generated_parameter_stability_count + pair_count
                         )
                     previous_generated_parameters = current_generated_parameters
+                if temporal_param_auxiliary_enabled and t < mask.shape[1]:
+                    current_temporal_parameters = getattr(
+                        self.mac, "latest_generated_parameter_graph", None
+                    )
+                    if current_temporal_parameters is None:
+                        raise RuntimeError(
+                            "Temporal parameter auxiliary requires exact "
+                            "differentiable hypernetwork outputs"
+                        )
+                    if previous_temporal_parameters is not None:
+                        pair_valid = (
+                            mask[:, t].reshape(batch.batch_size) > 0
+                        ) & (mask[:, t - 1].reshape(batch.batch_size) > 0)
+                        change, valid_float = (
+                            self._normalized_generated_parameter_change(
+                                previous_temporal_parameters,
+                                current_temporal_parameters,
+                                pair_valid,
+                                batch.batch_size,
+                                self.args.n_agents,
+                                self.temporal_param_scale_eps,
+                            )
+                        )
+                        if self.temporal_param_stability_active:
+                            pair_penalty = change
+                        else:
+                            small_change = (
+                                change
+                                < 0.5 * self.temporal_param_switch_margin
+                            ).detach()
+                            pair_penalty = th.where(
+                                small_change,
+                                change.pow(2),
+                                th.zeros_like(change),
+                            )
+                            temporal_param_small_count = (
+                                temporal_param_small_count
+                                + (small_change.to(change.dtype) * valid_float).sum()
+                            )
+                        pair_loss_sum = (pair_penalty * valid_float).sum()
+                        temporal_param_loss_sum = (
+                            pair_loss_sum
+                            if temporal_param_loss_sum is None
+                            else temporal_param_loss_sum + pair_loss_sum
+                        )
+                        temporal_param_change_sum = (
+                            temporal_param_change_sum
+                            + (change.detach() * valid_float).sum()
+                        )
+                        temporal_param_valid_count = (
+                            temporal_param_valid_count + valid_float.sum()
+                        )
+                    previous_temporal_parameters = current_temporal_parameters
                 if t in perturb_probe_times:
                     base_parameters = getattr(
                         self.mac, "latest_generated_parameter_graph", None
@@ -1748,6 +1875,12 @@ class CleanLearner:
                     perturbed_parameter_sum
                     / perturbed_parameter_count.clamp(min=1.0)
                 )
+            temporal_param_auxiliary_loss = td_loss.new_zeros(())
+            if temporal_param_loss_sum is not None:
+                temporal_param_auxiliary_loss = (
+                    temporal_param_loss_sum
+                    / temporal_param_valid_count.clamp(min=1.0)
+                )
             condition_gradient_consistency_coef = (
                 self.condition_gradient_consistency_coef
             )
@@ -1761,6 +1894,7 @@ class CleanLearner:
             perturbed_parameter_importance_coef = 0.0
             gradient_importance_coef = 0.0
             perturbed_head_td_quality_coef = 0.0
+            temporal_param_auxiliary_coef = 0.0
             adaptive_auxiliary_enabled = False
             if self.adaptive_auxiliary_ratio_active:
                 if self.gate_regularization_active and aux_losses:
@@ -1786,6 +1920,13 @@ class CleanLearner:
                     perturbed_head_td_quality_coef = (
                         self._adaptive_auxiliary_coefficient(
                             td_loss, perturbed_head_td_quality_loss
+                        )
+                    )
+                    adaptive_auxiliary_enabled = True
+                elif self.temporal_param_auxiliary_active:
+                    temporal_param_auxiliary_coef = (
+                        self._adaptive_auxiliary_coefficient(
+                            td_loss, temporal_param_auxiliary_loss
                         )
                     )
                     adaptive_auxiliary_enabled = True
@@ -1845,6 +1986,15 @@ class CleanLearner:
                 gate_only_importance_loss = (
                     perturbed_head_td_quality_coef
                     * perturbed_head_td_quality_loss
+                )
+            elif (
+                self.temporal_param_auxiliary_active
+                and temporal_param_loss_sum is not None
+                and temporal_param_auxiliary_coef > 0.0
+            ):
+                gate_only_importance_loss = (
+                    temporal_param_auxiliary_coef
+                    * temporal_param_auxiliary_loss
                 )
             loss = (
                 td_loss
@@ -2167,6 +2317,43 @@ class CleanLearner:
                     / max(td_loss.item(), self.adaptive_auxiliary_eps),
                     t_env,
                 )
+            if self.temporal_param_auxiliary_active:
+                valid_temporal_pairs = temporal_param_valid_count.clamp(min=1.0)
+                weighted_temporal_loss = (
+                    temporal_param_auxiliary_coef
+                    * temporal_param_auxiliary_loss.item()
+                )
+                self.logger.log_stat(
+                    "loss_temporal_parameter",
+                    temporal_param_auxiliary_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "temporal_parameter_change_mean",
+                    (
+                        temporal_param_change_sum / valid_temporal_pairs
+                    ).item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_temporal_parameter",
+                    weighted_temporal_loss,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "temporal_parameter_to_td_ratio",
+                    weighted_temporal_loss
+                    / max(td_loss.item(), self.adaptive_auxiliary_eps),
+                    t_env,
+                )
+                if self.temporal_param_small_change_active:
+                    self.logger.log_stat(
+                        "temporal_parameter_small_change_fraction",
+                        (
+                            temporal_param_small_count / valid_temporal_pairs
+                        ).item(),
+                        t_env,
+                    )
             for stat_name, values in aux_stat_values.items():
                 if values:
                     self.logger.log_stat(stat_name, th.stack(values).mean().item(), t_env)

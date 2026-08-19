@@ -880,6 +880,11 @@ clean_parameter_perturbation_probe_timesteps: 2
 # the auxiliary simply by shrinking the scale estimator itself.
 clean_perturbed_head_relative_std: 0.05
 clean_perturbed_head_minimum_rms: 0.001
+# Relative generated-parameter change margin. The small-change variant only
+# suppresses changes below half this margin; larger changes receive zero
+# auxiliary gradient and are judged solely by TD loss.
+clean_temporal_param_switch_margin: 0.1
+clean_temporal_param_scale_eps: 0.000001
 # Optional decoupled importance training. After the ordinary gate warm-up,
 # alternate 80k environment steps of TD-only non-gate updates with 20k steps
 # where only the gate receives TD plus its importance auxiliary.

@@ -531,6 +531,8 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond",
     "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond",
     "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
+    "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
 }
 GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond",
@@ -581,7 +583,9 @@ GRF_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS = (
     | GRF_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS
     | GRF_DUAL_BRANCH_TRAJECTORY_PARAMETER_LIKELIHOOD_VARIANTS
     | {
-        "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond"
+        "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
+        "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond",
+        "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
     }
 )
 GRF_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
@@ -616,6 +620,8 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond": "binary_concrete",
 }
 GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": (
