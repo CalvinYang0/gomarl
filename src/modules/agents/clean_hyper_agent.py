@@ -530,6 +530,7 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_hard_concrete_l0_hypercond",
     "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond",
     "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond",
+    "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
 }
 GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond",
@@ -579,6 +580,9 @@ GRF_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS = (
     GRF_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
     | GRF_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS
     | GRF_DUAL_BRANCH_TRAJECTORY_PARAMETER_LIKELIHOOD_VARIANTS
+    | {
+        "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond"
+    }
 )
 GRF_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
     "grf_abs_dual_branch_td_benefit_drop_hypercond": "td_benefit",
@@ -611,6 +615,7 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_hard_concrete_l0_hypercond": "hard_concrete",
     "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond": "binary_concrete",
 }
 GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": (
@@ -10178,9 +10183,42 @@ class CleanHyperAgent(nn.Module):
         ).view(batch_size, self.n_agents)
         return sample
 
-    def _apply_dynamic_head(self, hidden, condition):
+    def _apply_generated_dynamic_head(self, hidden, generated_parameters):
+        """Apply an already generated two-layer action head to policy hidden states."""
         batch_size, n_agents, _ = hidden.shape
         flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
+        bottleneck_w, bottleneck_b, out_w, out_b = generated_parameters
+        mid = F.elu(th.bmm(flat_hidden, bottleneck_w) + bottleneck_b)
+        q = th.bmm(mid, out_w) + out_b
+        return q.view(batch_size, n_agents, self.n_actions)
+
+    def perturbed_q_from_generated_parameters(
+        self,
+        hidden,
+        generated_parameters,
+        relative_std,
+        minimum_rms=1e-3,
+    ):
+        """Re-evaluate a generated head after one detached-scale perturbation.
+
+        The perturbation scale cannot be reduced by gradient descent because it
+        is computed from detached parameters. Gradients through the additive
+        perturbation still reach the gate via the original generated tensors.
+        """
+        perturbed_parameters = []
+        for parameter in generated_parameters:
+            reduce_dims = tuple(range(1, parameter.dim()))
+            rms = parameter.detach().pow(2).mean(
+                dim=reduce_dims, keepdim=True
+            ).sqrt().clamp(min=float(minimum_rms))
+            noise = th.randn_like(parameter) * rms * float(relative_std)
+            perturbed_parameters.append(parameter + noise)
+        return self._apply_generated_dynamic_head(
+            hidden, tuple(perturbed_parameters)
+        )
+
+    def _apply_dynamic_head(self, hidden, condition):
+        batch_size, n_agents, _ = hidden.shape
         flat_condition = condition.reshape(batch_size * n_agents, -1)
 
         bottleneck_w = self.hyper_bottleneck_w(flat_condition).view(
@@ -10209,6 +10247,7 @@ class CleanHyperAgent(nn.Module):
                 out_w,
                 out_b,
             )
+            self.latest_policy_hidden_graph = hidden
 
         semantic_router = getattr(self, "rpg_relation_capturer", None)
         if (
@@ -10233,9 +10272,9 @@ class CleanHyperAgent(nn.Module):
                 batch_size, n_agents, -1
             )
 
-        mid = F.elu(th.bmm(flat_hidden, bottleneck_w) + bottleneck_b)
-        q = th.bmm(mid, out_w) + out_b
-        return q.view(batch_size, n_agents, self.n_actions)
+        return self._apply_generated_dynamic_head(
+            hidden, (bottleneck_w, bottleneck_b, out_w, out_b)
+        )
 
     def _apply_grf_linear_head(self, hidden, condition):
         batch_size, n_agents, _ = hidden.shape
@@ -11537,6 +11576,7 @@ class CleanHyperAgent(nn.Module):
         self.latest_condition = None
         self.latest_condition_graph = None
         self.latest_generated_parameter_graph = None
+        self.latest_policy_hidden_graph = None
         self.latest_generated_parameter_log_prob = None
         self.latest_dynamic_branch_gates_graph = None
         self.latest_dynamic_branch_probabilities_graph = None

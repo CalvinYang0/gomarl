@@ -875,6 +875,11 @@ clean_dynamic_branch_gate_warmup_steps: 250000
 clean_importance_auxiliary_warmup_steps: 250000
 clean_parameter_perturbation_relative_std: 0.05
 clean_parameter_perturbation_probe_timesteps: 2
+# Per-timestep generated-head robustness objective. The noise scale is the
+# detached RMS of each generated parameter block, so the model cannot reduce
+# the auxiliary simply by shrinking the scale estimator itself.
+clean_perturbed_head_relative_std: 0.05
+clean_perturbed_head_minimum_rms: 0.001
 # Optional decoupled importance training. After the ordinary gate warm-up,
 # alternate 80k environment steps of TD-only non-gate updates with 20k steps
 # where only the gate receives TD plus its importance auxiliary.

@@ -243,11 +243,17 @@ class CleanLearner:
         self.gradient_importance_active = model_type == (
             "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond"
         )
-        self.importance_gate_parameters = ()
-        if (
+        self.perturbed_head_td_quality_active = model_type == (
+            "grf_abs_dual_branch_binary_concrete_"
+            "perturbed_head_td_quality_hypercond"
+        )
+        self.importance_auxiliary_active = (
             self.perturbed_parameter_importance_active
             or self.gradient_importance_active
-        ):
+            or self.perturbed_head_td_quality_active
+        )
+        self.importance_gate_parameters = ()
+        if self.importance_auxiliary_active:
             relation_capturer = getattr(
                 self.mac.agent, "rpg_relation_capturer", None
             )
@@ -296,6 +302,16 @@ class CleanLearner:
             raise ValueError(
                 "clean_parameter_perturbation_relative_std must be positive"
             )
+        self.perturbed_head_relative_std = float(
+            getattr(args, "clean_perturbed_head_relative_std", 0.05)
+        )
+        self.perturbed_head_minimum_rms = float(
+            getattr(args, "clean_perturbed_head_minimum_rms", 1e-3)
+        )
+        if self.perturbed_head_relative_std <= 0.0:
+            raise ValueError("clean_perturbed_head_relative_std must be positive")
+        if self.perturbed_head_minimum_rms <= 0.0:
+            raise ValueError("clean_perturbed_head_minimum_rms must be positive")
         self.importance_alternating_training = bool(
             getattr(args, "clean_importance_alternating_training", False)
         )
@@ -307,10 +323,7 @@ class CleanLearner:
             1,
             int(getattr(args, "clean_importance_gate_phase_steps", 20000)),
         )
-        if self.importance_alternating_training and not (
-            self.perturbed_parameter_importance_active
-            or self.gradient_importance_active
-        ):
+        if self.importance_alternating_training and not self.importance_auxiliary_active:
             raise ValueError(
                 "Alternating importance training requires an importance variant"
             )
@@ -343,6 +356,7 @@ class CleanLearner:
             "grf_abs_dual_branch_hard_concrete_l0_hypercond",
             "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond",
             "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond",
+            "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
         }
         self.adaptive_auxiliary_target_ratio = float(
             getattr(args, "clean_adaptive_auxiliary_target_ratio", 0.1)
@@ -1252,6 +1266,15 @@ class CleanLearner:
             if self.gradient_importance_active and importance_auxiliary_enabled
             else None
         )
+        perturbed_head_parameter_graphs = (
+            []
+            if self.perturbed_head_td_quality_active
+            and importance_auxiliary_enabled
+            else None
+        )
+        perturbed_head_hidden_graphs = (
+            [] if perturbed_head_parameter_graphs is not None else None
+        )
         if hasattr(self.mac, "set_td_parameter_sampling_enabled"):
             self.mac.set_td_parameter_sampling_enabled(
                 td_weighted_parameter_likelihood_enabled
@@ -1297,6 +1320,23 @@ class CleanLearner:
                         t in observation_probe_times
                     )
                 mac_out.append(self.mac.forward(batch, t=t))
+                if (
+                    perturbed_head_parameter_graphs is not None
+                    and t < mask.shape[1]
+                ):
+                    generated_parameters = getattr(
+                        self.mac, "latest_generated_parameter_graph", None
+                    )
+                    policy_hidden = getattr(
+                        self.mac, "latest_policy_hidden_graph", None
+                    )
+                    if generated_parameters is None or policy_hidden is None:
+                        raise RuntimeError(
+                            "Perturbed-head TD quality requires differentiable "
+                            "generated parameters and policy hidden states"
+                        )
+                    perturbed_head_parameter_graphs.append(generated_parameters)
+                    perturbed_head_hidden_graphs.append(policy_hidden)
                 if dynamic_gate_graphs is not None and t < mask.shape[1]:
                     gate_probability_graph = getattr(
                         self.mac,
@@ -1588,6 +1628,51 @@ class CleanLearner:
             td_mask = mask.expand_as(td_error)
             masked_td_error = td_error * td_mask
             td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
+            perturbed_head_td_quality_loss = td_loss.new_zeros(())
+            if perturbed_head_parameter_graphs is not None:
+                time_steps = len(perturbed_head_parameter_graphs)
+                if time_steps != mask.shape[1]:
+                    raise RuntimeError(
+                        "Perturbed-head TD quality did not capture every train timestep"
+                    )
+                # Reuse each timestep's existing hidden state and generated
+                # tensors directly. Avoid stacking the much larger parameter
+                # blocks, which would create an unnecessary full trajectory
+                # copy before the perturbed head is even evaluated.
+                perturbed_mac_out = th.stack(
+                    [
+                        self.mac.agent.perturbed_q_from_generated_parameters(
+                            hidden,
+                            parameters,
+                            self.perturbed_head_relative_std,
+                            self.perturbed_head_minimum_rms,
+                        )
+                        for hidden, parameters in zip(
+                            perturbed_head_hidden_graphs,
+                            perturbed_head_parameter_graphs,
+                        )
+                    ],
+                    dim=1,
+                )
+                perturbed_chosen_qvals = th.gather(
+                    perturbed_mac_out, dim=3, index=actions
+                ).squeeze(3)
+                if self.mixer is not None:
+                    if self.relation_mixer_gate is not None:
+                        perturbed_chosen_qvals = self._apply_relation_gate(
+                            perturbed_chosen_qvals,
+                            relation_conditions[:, :-1],
+                            target=False,
+                        )
+                    perturbed_chosen_qvals = self.mixer(
+                        perturbed_chosen_qvals, batch["state"][:, :-1]
+                    )
+                perturbed_td_error = (
+                    perturbed_chosen_qvals - targets.detach()
+                )
+                perturbed_head_td_quality_loss = (
+                    perturbed_td_error.pow(2) * td_mask
+                ).sum() / td_mask.sum().clamp(min=1.0)
             td_weighted_parameter_likelihood_loss = td_loss.new_zeros(())
             td_parameter_quality_advantage_std = td_loss.new_zeros(())
             td_parameter_mean_log_prob = td_loss.new_zeros(())
@@ -1675,6 +1760,7 @@ class CleanLearner:
             gate_auxiliary_coef = 1.0
             perturbed_parameter_importance_coef = 0.0
             gradient_importance_coef = 0.0
+            perturbed_head_td_quality_coef = 0.0
             adaptive_auxiliary_enabled = False
             if self.adaptive_auxiliary_ratio_active:
                 if self.gate_regularization_active and aux_losses:
@@ -1693,6 +1779,13 @@ class CleanLearner:
                     gradient_importance_coef = (
                         self._adaptive_auxiliary_coefficient(
                             td_loss, gradient_importance_loss
+                        )
+                    )
+                    adaptive_auxiliary_enabled = True
+                elif self.perturbed_head_td_quality_active:
+                    perturbed_head_td_quality_coef = (
+                        self._adaptive_auxiliary_coefficient(
+                            td_loss, perturbed_head_td_quality_loss
                         )
                     )
                     adaptive_auxiliary_enabled = True
@@ -1743,6 +1836,15 @@ class CleanLearner:
             ):
                 gate_only_importance_loss = (
                     gradient_importance_coef * gradient_importance_loss
+                )
+            elif (
+                self.perturbed_head_td_quality_active
+                and perturbed_head_parameter_graphs is not None
+                and perturbed_head_td_quality_coef > 0.0
+            ):
+                gate_only_importance_loss = (
+                    perturbed_head_td_quality_coef
+                    * perturbed_head_td_quality_loss
                 )
             loss = (
                 td_loss
@@ -2044,6 +2146,27 @@ class CleanLearner:
                 )
                 for stat_name, stat_value in gradient_importance_stats.items():
                     self.logger.log_stat(stat_name, stat_value.item(), t_env)
+            if self.perturbed_head_td_quality_active:
+                weighted_perturbed_head_td = (
+                    perturbed_head_td_quality_coef
+                    * perturbed_head_td_quality_loss.item()
+                )
+                self.logger.log_stat(
+                    "loss_perturbed_head_td_quality",
+                    perturbed_head_td_quality_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_perturbed_head_td_quality",
+                    weighted_perturbed_head_td,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "perturbed_head_td_quality_to_td_ratio",
+                    weighted_perturbed_head_td
+                    / max(td_loss.item(), self.adaptive_auxiliary_eps),
+                    t_env,
+                )
             for stat_name, values in aux_stat_values.items():
                 if values:
                     self.logger.log_stat(stat_name, th.stack(values).mean().item(), t_env)

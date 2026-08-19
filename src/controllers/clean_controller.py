@@ -363,6 +363,9 @@ class CleanMAC(BasicMAC):
         self.latest_generated_parameter_graph = getattr(
             self.agent, "latest_generated_parameter_graph", None
         )
+        self.latest_policy_hidden_graph = getattr(
+            self.agent, "latest_policy_hidden_graph", None
+        )
         self.latest_trajectory_parameter_projection = None
         model_type = getattr(self.agent, "model_type", "")
         if model_type.endswith(self.TRAJECTORY_PARAMETER_MODEL_SUFFIX):

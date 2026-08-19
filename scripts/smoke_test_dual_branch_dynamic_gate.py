@@ -209,6 +209,11 @@ def check_sparse_gate_variants():
             None,
             None,
         ),
+        "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond": (
+            "binary_concrete",
+            None,
+            None,
+        ),
     }
     for model_name, (mode, regularizer, prior) in variants.items():
         assert model_name in GRF_DUAL_BRANCH_VARIANTS
@@ -265,6 +270,30 @@ def check_sparse_gate_variants():
         assert hidden_out.shape == (2, 4, 32)
         assert agent.latest_dynamic_branch_gates_graph is not None
         assert agent.latest_dynamic_branch_probabilities_graph is not None
+        if "perturbed_head_td_quality" in model_name:
+            assert agent.latest_generated_parameter_graph is not None
+            assert agent.latest_policy_hidden_graph is not None
+            unperturbed_q = agent._apply_generated_dynamic_head(
+                agent.latest_policy_hidden_graph,
+                agent.latest_generated_parameter_graph,
+            )
+            zero_noise_q = agent.perturbed_q_from_generated_parameters(
+                agent.latest_policy_hidden_graph,
+                agent.latest_generated_parameter_graph,
+                relative_std=0.0,
+            )
+            assert th.allclose(unperturbed_q, zero_noise_q)
+            perturbed_q = agent.perturbed_q_from_generated_parameters(
+                agent.latest_policy_hidden_graph,
+                agent.latest_generated_parameter_graph,
+                relative_std=0.05,
+            )
+            assert perturbed_q.shape == q.shape
+            perturbed_q.mean().backward()
+            gate_parameter = (
+                agent.rpg_relation_capturer.dynamic_branch_gate.gate_network[-1].weight
+            )
+            assert gate_parameter.grad is not None
         if "perturb_param_importance" in model_name:
             assert agent.latest_generated_parameter_graph is not None
             base_parameters = agent.latest_generated_parameter_graph
