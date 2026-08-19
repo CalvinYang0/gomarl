@@ -583,6 +583,15 @@ hypernet_layers: 2
 #                                      and slide heads with action partitions
 #                                      15/3/1. These raw entity encoders are
 #                                      independent of the gated Transformer.
+# - grf_abs_dual_branch_binary_concrete_td_only_ball_interaction_two_head_hypercond:
+#                                      TD-only Concrete-gated dual condition with
+#                                      a shared 19-action Q head. Independent raw
+#                                      entity encoders feed zero-initialized
+#                                      self-control (0-8,13-15) and direct ball-
+#                                      interaction (9-12,16-18) residual heads.
+#                                      Both semantic inputs are projected to the
+#                                      same LayerNorm-ed dimension; the residuals
+#                                      are exactly zero at initialization.
 # - rpg_semantic_selfattn_relation_hypercond: relation-generator ablation.
 #                                             It factorizes obs into feature
 #                                             semantic fields such as health,

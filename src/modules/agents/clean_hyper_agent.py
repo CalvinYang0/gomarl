@@ -524,6 +524,7 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
     "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond",
+    "grf_abs_dual_branch_binary_concrete_td_only_ball_interaction_two_head_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond",
     "grf_abs_dual_branch_hard_concrete_l0_hypercond",
@@ -532,6 +533,9 @@ GRF_DUAL_BRANCH_VARIANTS = {
 }
 GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond",
+}
+GRF_BALL_INTERACTION_TWO_HEAD_VARIANTS = {
+    "grf_abs_dual_branch_binary_concrete_td_only_ball_interaction_two_head_hypercond",
 }
 GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_grad_consistency_hypercond",
@@ -601,6 +605,7 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_td_only_ball_interaction_two_head_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond": "binary_concrete",
     "grf_abs_dual_branch_hard_concrete_l0_hypercond": "hard_concrete",
@@ -625,6 +630,7 @@ GRF_DECISION_MAKER_VARIANTS |= (
     GRF_MLP_RELATION_VARIANTS
     | GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS
     | GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS
+    | GRF_BALL_INTERACTION_TWO_HEAD_VARIANTS
 )
 GRF_TWO_LAYER_HEAD_VARIANTS = {
     "grf_public_private_bias_transformer_two_layer_head_hypercond",
@@ -9119,6 +9125,10 @@ class CleanHyperAgent(nn.Module):
                 )
             )
 
+        if self.model_type in GRF_BALL_INTERACTION_TWO_HEAD_VARIANTS:
+            self._init_grf_ball_interaction_two_head()
+            return
+
         if self.model_type in GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS:
             # Default GRF actions grouped by what the action needs to decide:
             # ego/ball control, teammate-conditioned passes, and opponent-conditioned slide.
@@ -9186,6 +9196,87 @@ class CleanHyperAgent(nn.Module):
                 self.cond_dim, self.hidden_dim * output_dim
             )
             self.grf_decision_hyper[f"{branch}_b2"] = nn.Linear(self.cond_dim, output_dim)
+
+    def _init_grf_ball_interaction_two_head(self):
+        """Shared 19-action Q head plus two zero-initialized semantic residuals."""
+        self.register_buffer(
+            "grf_self_control_action_idx",
+            th.tensor(
+                [0, 1, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15],
+                dtype=th.long,
+            ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "grf_ball_interaction_action_idx",
+            th.tensor([9, 10, 11, 12, 16, 17, 18], dtype=th.long),
+            persistent=False,
+        )
+
+        def make_entity_encoder(input_dim):
+            return nn.Sequential(
+                nn.Linear(input_dim, self.rpg_relation_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.rpg_relation_dim, self.rpg_relation_dim),
+            )
+
+        # Keep the action-side entity path independent from the gated condition
+        # path, matching the three-head control while changing only the output
+        # parameterization.
+        self.grf_head_self_encoder = make_entity_encoder(4)
+        self.grf_head_ball_encoder = make_entity_encoder(6)
+        self.grf_head_ally_encoder = make_entity_encoder(4)
+        self.grf_head_opponent_encoder = make_entity_encoder(4)
+        query_input_dim = 2 * self.rpg_relation_dim
+        self.grf_two_head_ally_query = nn.Linear(
+            query_input_dim, self.rpg_relation_dim
+        )
+        self.grf_two_head_opponent_query = nn.Linear(
+            query_input_dim, self.rpg_relation_dim
+        )
+
+        self.grf_two_head_input_projectors = nn.ModuleDict(
+            {
+                "self_control": nn.Sequential(
+                    nn.Linear(
+                        self.hidden_dim + 2 * self.rpg_relation_dim,
+                        self.hidden_dim,
+                    ),
+                    nn.LayerNorm(self.hidden_dim),
+                    nn.ELU(inplace=True),
+                ),
+                "ball_interaction": nn.Sequential(
+                    nn.Linear(
+                        self.hidden_dim + 4 * self.rpg_relation_dim,
+                        self.hidden_dim,
+                    ),
+                    nn.LayerNorm(self.hidden_dim),
+                    nn.ELU(inplace=True),
+                ),
+            }
+        )
+        self.grf_two_head_residual_hyper = nn.ModuleDict()
+        for branch, output_dim in (
+            ("self_control", int(self.grf_self_control_action_idx.numel())),
+            (
+                "ball_interaction",
+                int(self.grf_ball_interaction_action_idx.numel()),
+            ),
+        ):
+            weight_generator = nn.Linear(
+                self.cond_dim, self.hidden_dim * output_dim
+            )
+            bias_generator = nn.Linear(self.cond_dim, output_dim)
+            # At initialization the model is exactly the shared 19-action
+            # baseline. The semantic heads learn TD-driven corrections only.
+            nn.init.zeros_(weight_generator.weight)
+            nn.init.zeros_(weight_generator.bias)
+            nn.init.zeros_(bias_generator.weight)
+            nn.init.zeros_(bias_generator.bias)
+            self.grf_two_head_residual_hyper[f"{branch}_w"] = weight_generator
+            self.grf_two_head_residual_hyper[f"{branch}_b"] = bias_generator
+
+        self.grf_decision_hyper = None
 
     def _init_rpg_relation_capturer(self):
         self.rpg_obs_layout = self._build_rpg_obs_layout()
@@ -10167,6 +10258,133 @@ class CleanHyperAgent(nn.Module):
         q = th.bmm(mid, w2) + b2
         return q.view(batch_size, n_agents, output_dim)
 
+    def _grf_two_head_attention_pool(self, query, entity_tokens):
+        if entity_tokens.size(2) == 0:
+            return query.new_zeros(query.shape)
+        scores = (
+            entity_tokens * query.unsqueeze(2)
+        ).sum(dim=-1) / math.sqrt(float(self.rpg_relation_dim))
+        weights = F.softmax(scores, dim=2)
+        return (weights.unsqueeze(-1) * entity_tokens).sum(dim=2)
+
+    def _encode_grf_two_head_entities(self, context):
+        if context is None or context.get("obs") is None:
+            raise ValueError(
+                "{} requires raw obs for its independent action-head encoders.".format(
+                    self.model_type
+                )
+            )
+        (
+            self_pos,
+            ally_pos,
+            self_dir,
+            ally_dir,
+            opponent_pos,
+            opponent_dir,
+            ball,
+        ) = self.rpg_relation_capturer._split_obs(context["obs"])
+
+        self_token = self.grf_head_self_encoder(th.cat([self_pos, self_dir], dim=-1))
+        ball_token = self.grf_head_ball_encoder(ball)
+        ally_tokens = self.grf_head_ally_encoder(
+            th.cat([ally_pos, ally_dir], dim=-1)
+        )
+        opponent_tokens = self.grf_head_opponent_encoder(
+            th.cat([opponent_pos, opponent_dir], dim=-1)
+        )
+        query_source = th.cat([self_token, ball_token], dim=-1)
+        ally_query = self.grf_two_head_ally_query(query_source)
+        opponent_query = self.grf_two_head_opponent_query(query_source)
+        ally_context = self._grf_two_head_attention_pool(ally_query, ally_tokens)
+        opponent_context = self._grf_two_head_attention_pool(
+            opponent_query, opponent_tokens
+        )
+        return self_token, ball_token, ally_context, opponent_context
+
+    def _apply_grf_two_head_residual(
+        self, branch, branch_features, condition, output_dim
+    ):
+        batch_size, n_agents, _ = branch_features.shape
+        projected = self.grf_two_head_input_projectors[branch](branch_features)
+        flat_projected = projected.reshape(
+            batch_size * n_agents, 1, self.hidden_dim
+        )
+        flat_condition = condition.reshape(batch_size * n_agents, -1)
+        residual_w = self.grf_two_head_residual_hyper[f"{branch}_w"](
+            flat_condition
+        ).view(batch_size * n_agents, self.hidden_dim, output_dim)
+        residual_b = self.grf_two_head_residual_hyper[f"{branch}_b"](
+            flat_condition
+        ).view(batch_size * n_agents, 1, output_dim)
+        residual = th.bmm(flat_projected, residual_w) + residual_b
+        return residual.view(batch_size, n_agents, output_dim)
+
+    def _apply_grf_ball_interaction_two_head(
+        self, hidden, condition, context=None
+    ):
+        # The shared head keeps all 19 actions on one common Q scale.
+        q = self._apply_dynamic_head(hidden, condition)
+        (
+            self_token,
+            ball_token,
+            ally_context,
+            opponent_context,
+        ) = self._encode_grf_two_head_entities(context)
+        self_features = th.cat([hidden, self_token, ball_token], dim=-1)
+        ball_features = th.cat(
+            [
+                hidden,
+                self_token,
+                ball_token,
+                ally_context,
+                opponent_context,
+            ],
+            dim=-1,
+        )
+        self_residual = self._apply_grf_two_head_residual(
+            "self_control",
+            self_features,
+            condition,
+            int(self.grf_self_control_action_idx.numel()),
+        )
+        ball_residual = self._apply_grf_two_head_residual(
+            "ball_interaction",
+            ball_features,
+            condition,
+            int(self.grf_ball_interaction_action_idx.numel()),
+        )
+
+        residual = th.zeros_like(q)
+        residual[:, :, self.grf_self_control_action_idx] = self_residual
+        residual[:, :, self.grf_ball_interaction_action_idx] = ball_residual
+        output_q = q + residual
+        if th.is_grad_enabled():
+            self.latest_aux_stats["grf_self_control_residual_abs_mean"] = (
+                self_residual.abs().mean().detach()
+            )
+            self.latest_aux_stats["grf_ball_interaction_residual_abs_mean"] = (
+                ball_residual.abs().mean().detach()
+            )
+            self.latest_aux_stats["grf_self_control_q_abs_mean"] = (
+                output_q[:, :, self.grf_self_control_action_idx]
+                .abs()
+                .mean()
+                .detach()
+            )
+            self.latest_aux_stats["grf_ball_interaction_q_abs_mean"] = (
+                output_q[:, :, self.grf_ball_interaction_action_idx]
+                .abs()
+                .mean()
+                .detach()
+            )
+            self.latest_aux_stats["grf_self_control_q_max"] = (
+                output_q[:, :, self.grf_self_control_action_idx].max().detach()
+            )
+            self.latest_aux_stats["grf_ball_interaction_q_max"] = (
+                output_q[:, :, self.grf_ball_interaction_action_idx].max().detach()
+            )
+        return output_q
+
     def _encode_grf_independent_head_entities(self, context):
         if context is None or context.get("obs") is None:
             raise ValueError(
@@ -10205,6 +10423,10 @@ class CleanHyperAgent(nn.Module):
         return self_token, ball_token, ally_context, opponent_context
 
     def _apply_grf_decision_maker_head(self, hidden, condition, context=None):
+        if self.model_type in GRF_BALL_INTERACTION_TWO_HEAD_VARIANTS:
+            return self._apply_grf_ball_interaction_two_head(
+                hidden, condition, context=context
+            )
         if self.model_type in GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS:
             (
                 self_token,
