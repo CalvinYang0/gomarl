@@ -3,6 +3,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch as th
 
@@ -12,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from modules.agents.clean_hyper_agent import (  # noqa: E402
     GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL,
+    GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL,
     GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS,
     GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS,
     GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS,
@@ -28,7 +30,7 @@ from learners.clean_learner import CleanLearner  # noqa: E402
 from controllers.clean_controller import CleanMAC  # noqa: E402
 
 
-def build_grf(gate_mode, gate_scope="both"):
+def build_grf(gate_mode, gate_scope="both", **kwargs):
     return GRFPublicPrivateBiasTransformerCapturer(
         n_agents=4,
         relation_dim=16,
@@ -41,6 +43,7 @@ def build_grf(gate_mode, gate_scope="both"):
         dynamic_branch_gate_hidden_dim=16,
         dynamic_branch_gate_warmup_steps=250000,
         dynamic_branch_gate_scope=gate_scope,
+        **kwargs,
     )
 
 
@@ -162,6 +165,126 @@ def check_shared_slot_gate():
     assert next_hidden.shape == (2, 4, 16)
     (condition.mean() + next_hidden.mean()).backward()
     assert model.dynamic_branch_gate.gate_network[-1].weight.grad is not None
+
+
+def check_sparse_gate_variants():
+    variants = {
+        "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": (
+            "binary_concrete",
+            "bernoulli_kl",
+            0.20,
+        ),
+        "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond": (
+            "binary_concrete",
+            "bernoulli_kl",
+            0.80,
+        ),
+        "grf_abs_dual_branch_hard_concrete_l0_hypercond": (
+            "hard_concrete",
+            "l0",
+            0.0,
+        ),
+        "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond": (
+            "binary_concrete",
+            None,
+            None,
+        ),
+        "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond": (
+            "binary_concrete",
+            None,
+            None,
+        ),
+    }
+    for model_name, (mode, regularizer, prior) in variants.items():
+        assert model_name in GRF_DUAL_BRANCH_VARIANTS
+        assert GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[model_name] == mode
+        if regularizer is not None:
+            assert GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL[model_name] == (
+                regularizer,
+                prior,
+            )
+
+    obs = th.randn(2, 4, 30)
+    hidden = th.zeros(2, 4, 16)
+    for regularizer, prior, mode in (
+        ("bernoulli_kl", 0.20, "binary_concrete"),
+        ("bernoulli_kl", 0.80, "binary_concrete"),
+        ("l0", 0.0, "hard_concrete"),
+    ):
+        model = build_grf(
+            mode,
+            dynamic_branch_gate_regularizer=regularizer,
+            dynamic_branch_gate_prior_keep=prior,
+        )
+        model.set_dynamic_branch_gate_t_env(250000)
+        condition, _ = model(obs, hidden)
+        assert model.latest_aux_loss is not None
+        assert th.isfinite(model.latest_aux_loss)
+        model.latest_aux_loss.backward()
+        assert model.dynamic_branch_gate.gate_network[-1].weight.grad is not None
+        if mode == "hard_concrete":
+            assert "dynamic_gate_expected_l0" in model.latest_aux_stats
+        else:
+            assert "dynamic_gate_bernoulli_kl" in model.latest_aux_stats
+
+    for model_name in variants:
+        args = SimpleNamespace(
+            clean_model_type=model_name,
+            env="academy_counterattack_easy",
+            n_agents=4,
+            n_actions=19,
+            rnn_hidden_dim=16,
+            hypernet_embed=16,
+            obs_last_action=False,
+            obs_agent_id=False,
+            clean_hard_gate_initial_keep_probability=0.95,
+        )
+        agent = CleanHyperAgent(input_shape=30, args=args)
+        agent.set_dynamic_branch_gate_t_env(250000)
+        context = {
+            "obs": obs,
+            "prev_action": th.zeros(2, 4, 19),
+        }
+        q, hidden_out = agent(obs, None, context=context)
+        assert q.shape == (2, 4, 19)
+        assert hidden_out.shape == (2, 4, 32)
+        assert agent.latest_dynamic_branch_gates_graph is not None
+        assert agent.latest_dynamic_branch_probabilities_graph is not None
+        if "perturb_param_importance" in model_name:
+            assert agent.latest_generated_parameter_graph is not None
+            base_parameters = agent.latest_generated_parameter_graph
+            base_gates = agent.latest_dynamic_branch_gates_graph
+            agent.set_dynamic_branch_gate_override(base_gates)
+            perturbed_context = dict(context)
+            perturbed_context["obs"] = obs + 0.05 * th.randn_like(obs)
+            agent(obs, None, context=perturbed_context)
+            agent.set_dynamic_branch_gate_override(None)
+            perturbed_parameters = agent.latest_generated_parameter_graph
+            total, count = CleanLearner._generated_parameter_stability_pair(
+                base_parameters,
+                perturbed_parameters,
+                th.ones(2, dtype=th.bool),
+                2,
+                4,
+            )
+            perturb_loss = total / count.clamp(min=1.0)
+            assert th.isfinite(perturb_loss) and perturb_loss.item() > 0.0
+
+
+def check_gradient_importance_gate_loss():
+    learner = CleanLearner.__new__(CleanLearner)
+    learner.adaptive_auxiliary_eps = 1e-8
+    logits = th.randn(2, 3, 5, requires_grad=True)
+    probability = th.sigmoid(logits)
+    sampled_gate = probability
+    td_loss = (sampled_gate * th.linspace(0.1, 2.0, 5)).sum().square()
+    loss, stats = learner._gradient_importance_gate_loss(
+        td_loss, [(probability, sampled_gate)]
+    )
+    assert th.isfinite(loss)
+    assert stats["dynamic_gate_gradient_importance_max"].item() > 0.0
+    loss.backward()
+    assert logits.grad is not None and logits.grad.abs().sum().item() > 0.0
 
 
 def check_condition_gradient_consistency():
@@ -397,6 +520,10 @@ def main():
     print("single_transformer_branch forward_backward=ok")
     check_shared_slot_gate()
     print("shared_slot_binary_concrete forward_backward=ok")
+    check_sparse_gate_variants()
+    print("sparse_gate_five_variants registration_and_aux=ok")
+    check_gradient_importance_gate_loss()
+    print("gradient_importance first_order_weighted_sparsity=ok")
     check_condition_gradient_consistency()
     print("condition_gradient_consistency second_order=ok")
     check_generated_parameter_stability()

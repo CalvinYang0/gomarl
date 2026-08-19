@@ -65,6 +65,10 @@ class CleanMAC(BasicMAC):
         if hasattr(self.agent, "set_dynamic_branch_gate_force_open"):
             self.agent.set_dynamic_branch_gate_force_open(enabled)
 
+    def set_dynamic_branch_gate_override(self, gates):
+        if hasattr(self.agent, "set_dynamic_branch_gate_override"):
+            self.agent.set_dynamic_branch_gate_override(gates)
+
     def set_td_parameter_sampling_enabled(self, enabled):
         if hasattr(self.agent, "set_td_parameter_sampling_enabled"):
             self.agent.set_td_parameter_sampling_enabled(enabled)
@@ -290,6 +294,15 @@ class CleanMAC(BasicMAC):
         self.latest_generated_parameter_log_prob = getattr(
             self.agent, "latest_generated_parameter_log_prob", None
         )
+        self.latest_dynamic_branch_gates_graph = getattr(
+            self.agent, "latest_dynamic_branch_gates_graph", None
+        )
+        self.latest_dynamic_branch_probabilities_graph = getattr(
+            self.agent, "latest_dynamic_branch_probabilities_graph", None
+        )
+        self.latest_dynamic_branch_logits_graph = getattr(
+            self.agent, "latest_dynamic_branch_logits_graph", None
+        )
         self.latest_aux_loss = getattr(self.agent, "latest_aux_loss", None)
         self.latest_aux_stats = getattr(self.agent, "latest_aux_stats", {})
         self.latest_teacher_q = getattr(self.agent, "latest_teacher_q", None)
@@ -300,3 +313,43 @@ class CleanMAC(BasicMAC):
         self.latest_relation_ally_attn = getattr(self.agent, "latest_relation_ally_attn", None)
         self.latest_relation_enemy_attn = getattr(self.agent, "latest_relation_enemy_attn", None)
         return agent_outs.view(ep_batch.batch_size, self.n_agents, -1)
+
+    def generated_parameters_with_observation_perturbation(
+        self,
+        ep_batch,
+        t,
+        hidden_state_before,
+        gate_override,
+        relative_std,
+    ):
+        """Re-run one state with perturbed condition obs and identical gates.
+
+        The policy-GRU input and its incoming hidden state are unchanged. This
+        isolates the auxiliary signal to the observation-conditioned gate /
+        condition / hypernetwork path instead of measuring recurrent-state
+        noise. The method never advances ``self.hidden_states``.
+        """
+        agent_inputs = self._build_inputs(ep_batch, t)
+        model_context = self._build_model_context(ep_batch, t)
+        observation = model_context["obs"]
+        feature_rms = observation.detach().pow(2).mean(
+            dim=(0, 1), keepdim=True
+        ).sqrt().clamp(min=1e-3)
+        perturbation = th.randn_like(observation) * feature_rms * float(
+            relative_std
+        )
+        model_context["obs"] = observation + perturbation
+        self.set_dynamic_branch_gate_override(gate_override)
+        try:
+            self.agent(
+                agent_inputs,
+                hidden_state_before,
+                context=model_context,
+                test_mode=False,
+            )
+            parameter_graph = getattr(
+                self.agent, "latest_generated_parameter_graph", None
+            )
+        finally:
+            self.set_dynamic_branch_gate_override(None)
+        return parameter_graph

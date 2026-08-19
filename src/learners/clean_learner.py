@@ -231,6 +231,39 @@ class CleanLearner:
                 )
             ),
         )
+        self.gate_regularization_active = model_type in {
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond",
+            "grf_abs_dual_branch_hard_concrete_l0_hypercond",
+        }
+        self.perturbed_parameter_importance_active = model_type == (
+            "grf_abs_dual_branch_binary_concrete_"
+            "perturb_param_importance_hypercond"
+        )
+        self.gradient_importance_active = model_type == (
+            "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond"
+        )
+        self.importance_auxiliary_warmup_steps = max(
+            0,
+            int(
+                getattr(
+                    args,
+                    "clean_importance_auxiliary_warmup_steps",
+                    getattr(args, "clean_dynamic_branch_gate_warmup_steps", 250000),
+                )
+            ),
+        )
+        self.parameter_perturbation_relative_std = float(
+            getattr(args, "clean_parameter_perturbation_relative_std", 0.05)
+        )
+        self.parameter_perturbation_probe_timesteps = max(
+            1,
+            int(getattr(args, "clean_parameter_perturbation_probe_timesteps", 2)),
+        )
+        if self.parameter_perturbation_relative_std <= 0.0:
+            raise ValueError(
+                "clean_parameter_perturbation_relative_std must be positive"
+            )
         self.adaptive_auxiliary_ratio_active = model_type in {
             "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
             "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
@@ -254,6 +287,11 @@ class CleanLearner:
             "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
             "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
             "rpg_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond",
+            "grf_abs_dual_branch_hard_concrete_l0_hypercond",
+            "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond",
+            "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond",
         }
         self.adaptive_auxiliary_target_ratio = float(
             getattr(args, "clean_adaptive_auxiliary_target_ratio", 0.1)
@@ -498,6 +536,50 @@ class CleanLearner:
         valid = pair_valid.reshape(batch_size, 1).expand(-1, n_agents)
         valid_float = valid.to(per_agent_mean.dtype)
         return (per_agent_mean * valid_float).sum(), valid_float.sum()
+
+    def _gradient_importance_gate_loss(self, td_loss, gate_graphs):
+        """Penalize keeping slots whose sampled gates have low TD sensitivity.
+
+        The importance weights are detached, so this is first-order training:
+        task gradients decide which slots are protected while the auxiliary
+        gradient only pushes low-importance keep probabilities downward.
+        """
+        zero = td_loss.new_zeros(())
+        if not gate_graphs:
+            return zero, {
+                "dynamic_gate_gradient_importance_mean": zero,
+                "dynamic_gate_gradient_importance_max": zero,
+            }
+        sampled_gates = [item[1] for item in gate_graphs]
+        gradients = th.autograd.grad(
+            td_loss,
+            sampled_gates,
+            retain_graph=True,
+            create_graph=False,
+            allow_unused=True,
+        )
+        penalties = []
+        importance_values = []
+        for (probability, _), gradient in zip(gate_graphs, gradients):
+            if gradient is None:
+                continue
+            importance = gradient.detach().abs()
+            normalized = importance / importance.mean(
+                dim=-1, keepdim=True
+            ).clamp(min=self.adaptive_auxiliary_eps)
+            low_importance_weight = th.exp(-normalized).detach()
+            penalties.append((probability * low_importance_weight).mean())
+            importance_values.append(importance)
+        if not penalties:
+            return zero, {
+                "dynamic_gate_gradient_importance_mean": zero,
+                "dynamic_gate_gradient_importance_max": zero,
+            }
+        flattened = th.cat([value.reshape(-1) for value in importance_values])
+        return th.stack(penalties).mean(), {
+            "dynamic_gate_gradient_importance_mean": flattened.mean(),
+            "dynamic_gate_gradient_importance_max": flattened.max(),
+        }
 
     def _generated_parameter_conditional_nll(
         self,
@@ -998,6 +1080,25 @@ class CleanLearner:
         )
         trajectory_parameter_projection_sum = None
         trajectory_parameter_projection_count = mask.new_zeros(())
+        importance_auxiliary_enabled = (
+            t_env >= self.importance_auxiliary_warmup_steps
+        )
+        perturbed_parameter_sum = None
+        perturbed_parameter_count = mask.new_zeros(())
+        perturb_probe_times = (
+            self._uniform_probe_times(
+                max(1, mask.shape[1]),
+                self.parameter_perturbation_probe_timesteps,
+            )
+            if self.perturbed_parameter_importance_active
+            and importance_auxiliary_enabled
+            else set()
+        )
+        dynamic_gate_graphs = (
+            []
+            if self.gradient_importance_active and importance_auxiliary_enabled
+            else None
+        )
         if hasattr(self.mac, "set_td_parameter_sampling_enabled"):
             self.mac.set_td_parameter_sampling_enabled(
                 td_weighted_parameter_likelihood_enabled
@@ -1034,6 +1135,7 @@ class CleanLearner:
             aux_stat_values = {}
             self.mac.init_hidden(batch.batch_size)
             for t in range(batch.max_seq_length):
+                hidden_state_before = self.mac.hidden_states
                 self.mac.agent.capture_semantic_parameter_graph = (
                     t in parameter_probe_times
                 )
@@ -1042,6 +1144,26 @@ class CleanLearner:
                         t in observation_probe_times
                     )
                 mac_out.append(self.mac.forward(batch, t=t))
+                if dynamic_gate_graphs is not None and t < mask.shape[1]:
+                    gate_probability_graph = getattr(
+                        self.mac,
+                        "latest_dynamic_branch_probabilities_graph",
+                        None,
+                    )
+                    if gate_probability_graph is None:
+                        raise RuntimeError(
+                            "Gradient importance requires differentiable gate probabilities"
+                        )
+                    sampled_gate_graph = getattr(
+                        self.mac, "latest_dynamic_branch_gates_graph", None
+                    )
+                    if sampled_gate_graph is None:
+                        raise RuntimeError(
+                            "Gradient importance requires differentiable sampled gates"
+                        )
+                    dynamic_gate_graphs.append(
+                        (gate_probability_graph, sampled_gate_graph)
+                    )
                 if trajectory_parameter_likelihood_enabled and t < mask.shape[1]:
                     current_projection = getattr(
                         self.mac, "latest_trajectory_parameter_projection", None
@@ -1162,6 +1284,49 @@ class CleanLearner:
                             generated_parameter_stability_count + pair_count
                         )
                     previous_generated_parameters = current_generated_parameters
+                if t in perturb_probe_times:
+                    base_parameters = getattr(
+                        self.mac, "latest_generated_parameter_graph", None
+                    )
+                    base_gates = getattr(
+                        self.mac, "latest_dynamic_branch_gates_graph", None
+                    )
+                    if base_parameters is None or base_gates is None:
+                        raise RuntimeError(
+                            "Perturbed parameter importance requires generated "
+                            "parameters and current dynamic gates"
+                        )
+                    perturbed_parameters = (
+                        self.mac.generated_parameters_with_observation_perturbation(
+                            batch,
+                            t,
+                            hidden_state_before,
+                            base_gates,
+                            self.parameter_perturbation_relative_std,
+                        )
+                    )
+                    if perturbed_parameters is None:
+                        raise RuntimeError(
+                            "Perturbed forward did not expose generated parameters"
+                        )
+                    state_valid = mask[:, t].reshape(batch.batch_size) > 0
+                    perturb_sum, perturb_count = (
+                        self._generated_parameter_stability_pair(
+                            base_parameters,
+                            perturbed_parameters,
+                            state_valid,
+                            batch.batch_size,
+                            self.args.n_agents,
+                        )
+                    )
+                    perturbed_parameter_sum = (
+                        perturb_sum
+                        if perturbed_parameter_sum is None
+                        else perturbed_parameter_sum + perturb_sum
+                    )
+                    perturbed_parameter_count = (
+                        perturbed_parameter_count + perturb_count
+                    )
                 if condition_graphs is not None:
                     condition_graph = getattr(
                         self.mac, "latest_condition_graph", None
@@ -1295,6 +1460,15 @@ class CleanLearner:
                     parameter_log_prob.detach() * state_mask
                 ).sum() / valid_count
             aux_loss = th.stack(aux_losses).mean() if aux_losses else td_loss.new_zeros(())
+            gradient_importance_loss = td_loss.new_zeros(())
+            gradient_importance_stats = {}
+            if dynamic_gate_graphs is not None:
+                (
+                    gradient_importance_loss,
+                    gradient_importance_stats,
+                ) = self._gradient_importance_gate_loss(
+                    td_loss, dynamic_gate_graphs
+                )
             teacher_td_loss = td_loss.new_zeros(())
             if teacher_mac_out is not None:
                 teacher_chosen_qvals = th.gather(teacher_mac_out[:, :-1], dim=3, index=actions).squeeze(3)
@@ -1330,6 +1504,12 @@ class CleanLearner:
                     trajectory_parameter_projection_sum
                     / trajectory_parameter_projection_count.clamp(min=1.0)
                 )
+            perturbed_parameter_importance_loss = td_loss.new_zeros(())
+            if perturbed_parameter_sum is not None:
+                perturbed_parameter_importance_loss = (
+                    perturbed_parameter_sum
+                    / perturbed_parameter_count.clamp(min=1.0)
+                )
             condition_gradient_consistency_coef = (
                 self.condition_gradient_consistency_coef
             )
@@ -1339,9 +1519,31 @@ class CleanLearner:
             trajectory_parameter_likelihood_coef = (
                 self.generated_parameter_stability_coef
             )
+            gate_auxiliary_coef = 1.0
+            perturbed_parameter_importance_coef = 0.0
+            gradient_importance_coef = 0.0
             adaptive_auxiliary_enabled = False
             if self.adaptive_auxiliary_ratio_active:
-                if condition_graphs is not None:
+                if self.gate_regularization_active and aux_losses:
+                    gate_auxiliary_coef = self._adaptive_auxiliary_coefficient(
+                        td_loss, aux_loss
+                    )
+                    adaptive_auxiliary_enabled = True
+                elif self.perturbed_parameter_importance_active:
+                    perturbed_parameter_importance_coef = (
+                        self._adaptive_auxiliary_coefficient(
+                            td_loss, perturbed_parameter_importance_loss
+                        )
+                    )
+                    adaptive_auxiliary_enabled = True
+                elif self.gradient_importance_active:
+                    gradient_importance_coef = (
+                        self._adaptive_auxiliary_coefficient(
+                            td_loss, gradient_importance_loss
+                        )
+                    )
+                    adaptive_auxiliary_enabled = True
+                elif condition_graphs is not None:
                     condition_gradient_consistency_coef = (
                         self._adaptive_auxiliary_coefficient(
                             td_loss, condition_gradient_consistency_loss
@@ -1373,7 +1575,7 @@ class CleanLearner:
                 self.latest_adaptive_auxiliary_stats = {}
             loss = (
                 td_loss
-                + aux_loss
+                + gate_auxiliary_coef * aux_loss
                 + float(
                     getattr(self.args, "clean_relation_teacher_td_coef", 0.0)
                 )
@@ -1388,6 +1590,9 @@ class CleanLearner:
                 * trajectory_parameter_likelihood_loss
                 + self.td_weighted_parameter_likelihood_coef
                 * td_weighted_parameter_likelihood_loss
+                + perturbed_parameter_importance_coef
+                * perturbed_parameter_importance_loss
+                + gradient_importance_coef * gradient_importance_loss
             )
 
         parameter_sensitivity_score = None
@@ -1571,6 +1776,62 @@ class CleanLearner:
             self.logger.log_stat("loss_td", td_loss.item(), t_env)
             if aux_losses:
                 self.logger.log_stat("loss_aux", aux_loss.item(), t_env)
+            if self.gate_regularization_active:
+                weighted_gate_auxiliary = gate_auxiliary_coef * aux_loss.item()
+                self.logger.log_stat(
+                    "weighted_loss_dynamic_gate_regularizer",
+                    weighted_gate_auxiliary,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "dynamic_gate_regularizer_to_td_ratio",
+                    weighted_gate_auxiliary
+                    / max(td_loss.item(), self.adaptive_auxiliary_eps),
+                    t_env,
+                )
+            if self.perturbed_parameter_importance_active:
+                weighted_perturbed_parameter = (
+                    perturbed_parameter_importance_coef
+                    * perturbed_parameter_importance_loss.item()
+                )
+                self.logger.log_stat(
+                    "loss_perturbed_generated_parameter_l1",
+                    perturbed_parameter_importance_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_perturbed_generated_parameter_l1",
+                    weighted_perturbed_parameter,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "perturbed_generated_parameter_to_td_ratio",
+                    weighted_perturbed_parameter
+                    / max(td_loss.item(), self.adaptive_auxiliary_eps),
+                    t_env,
+                )
+            if self.gradient_importance_active:
+                weighted_gradient_importance = (
+                    gradient_importance_coef * gradient_importance_loss.item()
+                )
+                self.logger.log_stat(
+                    "loss_dynamic_gate_gradient_importance",
+                    gradient_importance_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_dynamic_gate_gradient_importance",
+                    weighted_gradient_importance,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "dynamic_gate_gradient_importance_to_td_ratio",
+                    weighted_gradient_importance
+                    / max(td_loss.item(), self.adaptive_auxiliary_eps),
+                    t_env,
+                )
+                for stat_name, stat_value in gradient_importance_stats.items():
+                    self.logger.log_stat(stat_name, stat_value.item(), t_env)
             for stat_name, values in aux_stat_values.items():
                 if values:
                     self.logger.log_stat(stat_name, th.stack(values).mean().item(), t_env)

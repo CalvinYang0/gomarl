@@ -524,6 +524,11 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
     "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond",
+    "grf_abs_dual_branch_hard_concrete_l0_hypercond",
+    "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond",
+    "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond",
 }
 GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond",
@@ -554,6 +559,7 @@ GRF_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS = {
     "grf_abs_dual_branch_hard_gate_adaptive_param_stability_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_param_stability_hypercond",
     "grf_abs_dual_branch_binary_concrete_adaptive_attention_only_param_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond",
 }
 GRF_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_adaptive_parameter_likelihood_hypercond",
@@ -595,6 +601,22 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_hard_concrete_l0_hypercond": "hard_concrete",
+    "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond": "binary_concrete",
+}
+GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL = {
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": (
+        "bernoulli_kl",
+        0.20,
+    ),
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond": (
+        "bernoulli_kl",
+        0.80,
+    ),
+    "grf_abs_dual_branch_hard_concrete_l0_hypercond": ("l0", 0.0),
 }
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_hypercond",
@@ -935,12 +957,20 @@ class ObservationConditionedBranchGate(nn.Module):
         hard_threshold=0.5,
         initial_keep_probability=0.55,
         gate_scope="both",
+        hard_concrete_gamma=-0.1,
+        hard_concrete_zeta=1.1,
     ):
         super().__init__()
-        if mode not in {"cstg", "bayesg", "hard_st", "binary_concrete"}:
+        if mode not in {
+            "cstg",
+            "bayesg",
+            "hard_st",
+            "binary_concrete",
+            "hard_concrete",
+        }:
             raise ValueError(
                 "dynamic branch gate mode must be cstg, bayesg, hard_st, "
-                "or binary_concrete"
+                "binary_concrete, or hard_concrete"
             )
         if cstg_sigma < 0.0:
             raise ValueError("cstg_sigma must be non-negative")
@@ -967,6 +997,10 @@ class ObservationConditionedBranchGate(nn.Module):
         self.binary_concrete_temperature = float(binary_concrete_temperature)
         self.bayesg_eval_threshold = float(bayesg_eval_threshold)
         self.hard_threshold = float(hard_threshold)
+        self.hard_concrete_gamma = float(hard_concrete_gamma)
+        self.hard_concrete_zeta = float(hard_concrete_zeta)
+        if not self.hard_concrete_gamma < 0.0 < self.hard_concrete_zeta:
+            raise ValueError("hard_concrete_gamma/zeta must straddle zero")
         hidden_dim = int(hidden_dim)
         output_dim = self.obs_dim if self.gate_scope == "shared" else 2 * self.obs_dim
         if hidden_dim > 0:
@@ -978,7 +1012,7 @@ class ObservationConditionedBranchGate(nn.Module):
         else:
             self.gate_network = nn.Linear(self.obs_dim, output_dim)
 
-        if self.mode in {"hard_st", "binary_concrete"}:
+        if self.mode in {"hard_st", "binary_concrete", "hard_concrete"}:
             final_layer = (
                 self.gate_network[-1]
                 if isinstance(self.gate_network, nn.Sequential)
@@ -989,6 +1023,10 @@ class ObservationConditionedBranchGate(nn.Module):
             )
             nn.init.zeros_(final_layer.weight)
             nn.init.constant_(final_layer.bias, initial_logit)
+        self.latest_logits = None
+        self.latest_probability = None
+        self.latest_expected_l0 = None
+
     def forward(self, obs, sample=True, deterministic_soft=False):
         logits = self.gate_network(obs)
         if self.gate_scope == "shared":
@@ -998,6 +1036,7 @@ class ObservationConditionedBranchGate(nn.Module):
         else:
             logits = logits.view(*obs.shape[:-1], 2, self.obs_dim)
         probability = th.sigmoid(logits)
+        expected_l0 = None
 
         if self.mode == "cstg":
             if sample and self.cstg_sigma > 0.0:
@@ -1035,15 +1074,45 @@ class ObservationConditionedBranchGate(nn.Module):
             else:
                 # Evaluation remains an exact scalar mask.
                 gate = (probability > self.hard_threshold).to(obs.dtype)
+        elif self.mode == "hard_concrete":
+            expected_l0 = th.sigmoid(
+                logits
+                - self.binary_concrete_temperature
+                * math.log(-self.hard_concrete_gamma / self.hard_concrete_zeta)
+            )
+            if deterministic_soft:
+                concrete = probability
+            elif sample:
+                uniform = th.rand_like(logits).clamp_(1e-8, 1.0 - 1e-8)
+                logistic_noise = th.log(uniform) - th.log1p(-uniform)
+                concrete = th.sigmoid(
+                    (logits + logistic_noise)
+                    / self.binary_concrete_temperature
+                )
+            else:
+                concrete = probability
+            stretched = (
+                concrete
+                * (self.hard_concrete_zeta - self.hard_concrete_gamma)
+                + self.hard_concrete_gamma
+            )
+            gate = stretched.clamp(0.0, 1.0)
         else:
             # Exact 0/1 observations in the forward pass, with the sigmoid
             # probability supplying a straight-through gradient in backward.
             hard_gate = (probability > self.hard_threshold).to(obs.dtype)
             gate = hard_gate.detach() - probability.detach() + probability
 
+        self.latest_logits = logits.movedim(-2, 0)
+        self.latest_probability = probability.movedim(-2, 0)
+        self.latest_expected_l0 = (
+            None if expected_l0 is None else expected_l0.movedim(-2, 0)
+        )
+
         # Put the two branches first so the dual encoder can index them while
         # preserving arbitrary leading batch/timestep/agent dimensions.
-        return gate.movedim(-2, 0), probability.movedim(-2, 0)
+        reported_probability = probability if expected_l0 is None else expected_l0
+        return gate.movedim(-2, 0), reported_probability.movedim(-2, 0)
 
 
 class MLPHyperParameterGenerator(nn.Module):
@@ -1635,6 +1704,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         hard_gate_initial_keep_probability=0.55,
         dynamic_branch_gate_warmup_steps=250000,
         dynamic_branch_gate_scope="both",
+        dynamic_branch_gate_regularizer="none",
+        dynamic_branch_gate_prior_keep=0.5,
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -1760,10 +1831,11 @@ class PublicTransformerRelationCapturer(nn.Module):
             "bayesg",
             "hard_st",
             "binary_concrete",
+            "hard_concrete",
         }:
             raise ValueError(
                 "dynamic_branch_gate_mode must be cstg, bayesg, hard_st, "
-                "binary_concrete, or None"
+                "binary_concrete, hard_concrete, or None"
             )
         if self.dynamic_branch_gate_mode is not None and self.branch_drop_mode is not None:
             raise ValueError(
@@ -1786,9 +1858,32 @@ class PublicTransformerRelationCapturer(nn.Module):
             raise ValueError(
                 "dynamic_branch_gate_scope must be both, attention_only, or shared"
             )
+        self.dynamic_branch_gate_regularizer = str(
+            dynamic_branch_gate_regularizer
+        )
+        if self.dynamic_branch_gate_regularizer not in {
+            "none",
+            "bernoulli_kl",
+            "l0",
+        }:
+            raise ValueError(
+                "dynamic_branch_gate_regularizer must be none, bernoulli_kl, or l0"
+            )
+        self.dynamic_branch_gate_prior_keep = float(
+            dynamic_branch_gate_prior_keep
+        )
+        if not 0.0 < self.dynamic_branch_gate_prior_keep < 1.0:
+            if self.dynamic_branch_gate_regularizer != "l0":
+                raise ValueError(
+                    "dynamic_branch_gate_prior_keep must be in (0, 1)"
+                )
         self._dynamic_branch_gate_t_env = 0
         self._dynamic_branch_gate_target_mode = False
         self._dynamic_branch_gate_force_open = False
+        self._dynamic_branch_gate_override = None
+        self.latest_dynamic_branch_gates_graph = None
+        self.latest_dynamic_branch_probabilities_graph = None
+        self.latest_dynamic_branch_logits_graph = None
         self._branch_audit_branch = None
         self._branch_audit_group = None
         self._branch_audit_keep = None
@@ -2501,6 +2596,15 @@ class PublicTransformerRelationCapturer(nn.Module):
                 sample=not self._semantic_test_mode,
                 deterministic_soft=self._dynamic_branch_gate_target_mode,
             )
+            if self._dynamic_branch_gate_override is not None:
+                override = self._dynamic_branch_gate_override
+                if override.shape != gates.shape:
+                    raise ValueError(
+                        "Dynamic branch gate override has shape {}; expected {}".format(
+                            tuple(override.shape), tuple(gates.shape)
+                        )
+                    )
+                gates = override.to(device=gates.device, dtype=gates.dtype)
             if self._dynamic_branch_gate_force_open:
                 gates = th.ones_like(gates)
                 probabilities = th.ones_like(probabilities)
@@ -2512,7 +2616,8 @@ class PublicTransformerRelationCapturer(nn.Module):
                     [th.ones_like(probabilities[0]), probabilities[1]], dim=0
                 )
             warmup_active = (
-                self.dynamic_branch_gate_mode in {"hard_st", "binary_concrete"}
+                self.dynamic_branch_gate_mode
+                in {"hard_st", "binary_concrete", "hard_concrete"}
                 and self._dynamic_branch_gate_t_env
                 < self.dynamic_branch_gate_warmup_steps
             )
@@ -2520,6 +2625,58 @@ class PublicTransformerRelationCapturer(nn.Module):
                 # Establish the full-observation Q/hypernetwork before the
                 # discontinuous gate decisions are allowed to affect it.
                 gates = th.ones_like(gates)
+            self.latest_dynamic_branch_gates_graph = gates
+            raw_probabilities = getattr(
+                self.dynamic_branch_gate,
+                "latest_probability",
+                probabilities,
+            )
+            self.latest_dynamic_branch_probabilities_graph = raw_probabilities
+            self.latest_dynamic_branch_logits_graph = getattr(
+                self.dynamic_branch_gate, "latest_logits", None
+            )
+
+            regularizer = None
+            if not warmup_active and not self._dynamic_branch_gate_force_open:
+                if self.dynamic_branch_gate_regularizer == "bernoulli_kl":
+                    eps = 1e-6
+                    probability = raw_probabilities.clamp(eps, 1.0 - eps)
+                    prior = probability.new_tensor(
+                        self.dynamic_branch_gate_prior_keep
+                    ).clamp(eps, 1.0 - eps)
+                    regularizer = (
+                        probability * (probability.log() - prior.log())
+                        + (1.0 - probability)
+                        * (
+                            (1.0 - probability).log()
+                            - (1.0 - prior).log()
+                        )
+                    ).mean()
+                    self.latest_aux_stats.update(
+                        {
+                            "dynamic_gate_bernoulli_kl": regularizer.detach(),
+                            "dynamic_gate_prior_keep": prior.detach(),
+                        }
+                    )
+                elif self.dynamic_branch_gate_regularizer == "l0":
+                    expected_l0 = getattr(
+                        self.dynamic_branch_gate, "latest_expected_l0", None
+                    )
+                    if expected_l0 is None:
+                        raise RuntimeError(
+                            "L0 gate regularization requires hard-concrete gates"
+                        )
+                    regularizer = expected_l0.mean()
+                    self.latest_aux_stats.update(
+                        {
+                            "dynamic_gate_expected_l0": regularizer.detach(),
+                            "dynamic_gate_exact_zero_fraction": (
+                                gates <= 0.0
+                            ).float().mean().detach(),
+                        }
+                    )
+            if regularizer is not None and regularizer.requires_grad:
+                self.latest_aux_loss = regularizer
             self.latest_aux_stats.update(
                 {
                     "dynamic_gate_linear_mean": gates[0].mean().detach(),
@@ -2826,6 +2983,9 @@ class PublicTransformerRelationCapturer(nn.Module):
 
     def set_dynamic_branch_gate_force_open(self, enabled):
         self._dynamic_branch_gate_force_open = bool(enabled)
+
+    def set_dynamic_branch_gate_override(self, gates):
+        self._dynamic_branch_gate_override = gates
 
     def semantic_router_needs_binary_audit(self):
         return (
@@ -4511,6 +4671,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         hard_gate_initial_keep_probability=0.55,
         dynamic_branch_gate_warmup_steps=250000,
         dynamic_branch_gate_scope="both",
+        dynamic_branch_gate_regularizer="none",
+        dynamic_branch_gate_prior_keep=0.5,
     ):
         nn.Module.__init__(self)
         self.n_agents = n_agents
@@ -4628,10 +4790,11 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             "bayesg",
             "hard_st",
             "binary_concrete",
+            "hard_concrete",
         }:
             raise ValueError(
                 "dynamic_branch_gate_mode must be cstg, bayesg, hard_st, "
-                "binary_concrete, or None"
+                "binary_concrete, hard_concrete, or None"
             )
         if self.dynamic_branch_gate_mode is not None and self.branch_drop_mode is not None:
             raise ValueError(
@@ -4654,9 +4817,32 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             raise ValueError(
                 "dynamic_branch_gate_scope must be both, attention_only, or shared"
             )
+        self.dynamic_branch_gate_regularizer = str(
+            dynamic_branch_gate_regularizer
+        )
+        if self.dynamic_branch_gate_regularizer not in {
+            "none",
+            "bernoulli_kl",
+            "l0",
+        }:
+            raise ValueError(
+                "dynamic_branch_gate_regularizer must be none, bernoulli_kl, or l0"
+            )
+        self.dynamic_branch_gate_prior_keep = float(
+            dynamic_branch_gate_prior_keep
+        )
+        if not 0.0 < self.dynamic_branch_gate_prior_keep < 1.0:
+            if self.dynamic_branch_gate_regularizer != "l0":
+                raise ValueError(
+                    "dynamic_branch_gate_prior_keep must be in (0, 1)"
+                )
         self._dynamic_branch_gate_t_env = 0
         self._dynamic_branch_gate_target_mode = False
         self._dynamic_branch_gate_force_open = False
+        self._dynamic_branch_gate_override = None
+        self.latest_dynamic_branch_gates_graph = None
+        self.latest_dynamic_branch_probabilities_graph = None
+        self.latest_dynamic_branch_logits_graph = None
         self._branch_audit_branch = None
         self._branch_audit_group = None
         self._branch_audit_keep = None
@@ -8913,6 +9099,16 @@ class CleanHyperAgent(nn.Module):
                 if self.model_type in GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS
                 else "both"
             ),
+            dynamic_branch_gate_regularizer=(
+                GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL.get(
+                    self.model_type, ("none", 0.5)
+                )[0]
+            ),
+            dynamic_branch_gate_prior_keep=(
+                GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL.get(
+                    self.model_type, ("none", 0.5)
+                )[1]
+            ),
         )
 
     def _init_grf_decision_maker_head(self):
@@ -11054,6 +11250,13 @@ class CleanHyperAgent(nn.Module):
         ):
             relation_capturer.set_dynamic_branch_gate_force_open(enabled)
 
+    def set_dynamic_branch_gate_override(self, gates):
+        relation_capturer = getattr(self, "rpg_relation_capturer", None)
+        if relation_capturer is not None and hasattr(
+            relation_capturer, "set_dynamic_branch_gate_override"
+        ):
+            relation_capturer.set_dynamic_branch_gate_override(gates)
+
     def set_td_parameter_sampling_enabled(self, enabled):
         self._td_parameter_sampling_enabled = bool(enabled)
 
@@ -11072,6 +11275,9 @@ class CleanHyperAgent(nn.Module):
         self.latest_condition_graph = None
         self.latest_generated_parameter_graph = None
         self.latest_generated_parameter_log_prob = None
+        self.latest_dynamic_branch_gates_graph = None
+        self.latest_dynamic_branch_probabilities_graph = None
+        self.latest_dynamic_branch_logits_graph = None
         self._generated_parameter_log_prob_sum = None
         self._generated_parameter_log_prob_count = 0
         self.latest_aux_loss = None
@@ -11172,6 +11378,21 @@ class CleanHyperAgent(nn.Module):
                     getattr(
                         self.rpg_relation_capturer, "latest_aux_stats", {}
                     )
+                )
+                self.latest_dynamic_branch_gates_graph = getattr(
+                    self.rpg_relation_capturer,
+                    "latest_dynamic_branch_gates_graph",
+                    None,
+                )
+                self.latest_dynamic_branch_probabilities_graph = getattr(
+                    self.rpg_relation_capturer,
+                    "latest_dynamic_branch_probabilities_graph",
+                    None,
+                )
+                self.latest_dynamic_branch_logits_graph = getattr(
+                    self.rpg_relation_capturer,
+                    "latest_dynamic_branch_logits_graph",
+                    None,
                 )
                 self.latest_condition = relation_condition.detach()
                 if (

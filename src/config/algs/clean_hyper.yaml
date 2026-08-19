@@ -848,8 +848,9 @@ clean_branch_drop_parameter_threshold: 0.01
 clean_branch_drop_ema: 0.9
 clean_branch_drop_warmup_steps: 250000
 clean_branch_drop_freeze_steps: 5000000
-# Observation-conditioned dual gates have no sparsity/KL/parameter auxiliary
-# loss. Both variants use the same MLP and differ only in gate sampling.
+# Observation-conditioned dual-gate defaults. Individual sparse variants add
+# Bernoulli-KL, hard-concrete L0, perturbation, or TD-gradient objectives while
+# preserving the same gate MLP and warm-up.
 clean_dynamic_branch_gate_hidden_dim: 64
 clean_cstg_gate_sigma: 0.5
 clean_bayesg_gate_temperature: 0.5
@@ -862,6 +863,9 @@ clean_bayesg_gate_eval_threshold: 0.08
 clean_hard_gate_threshold: 0.5
 clean_hard_gate_initial_keep_probability: 0.55
 clean_dynamic_branch_gate_warmup_steps: 250000
+clean_importance_auxiliary_warmup_steps: 250000
+clean_parameter_perturbation_relative_std: 0.05
+clean_parameter_perturbation_probe_timesteps: 2
 # Counter-only condition-gradient auxiliary. It is deliberately conservative:
 # two adjacent pairs per learner update, enabled only after gate warmup.
 clean_condition_gradient_consistency_coef: 0.1
