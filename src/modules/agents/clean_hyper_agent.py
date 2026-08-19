@@ -7979,7 +7979,10 @@ class CleanHyperAgent(nn.Module):
             "rpg_relation_coarse_fine_four_layer_head",
             "rpg_relation_coarse_q_fine_gate_head",
             "rpg_relation_prototype_single_head",
-            *GRF_DECISION_MAKER_VARIANTS,
+            *(
+                GRF_DECISION_MAKER_VARIANTS
+                - GRF_BALL_INTERACTION_TWO_HEAD_VARIANTS
+            ),
             *GRF_LINEAR_HEAD_VARIANTS,
         }:
             self.hyper_bottleneck_w = nn.Linear(self.cond_dim, self.hidden_dim * self.hidden_dim)
