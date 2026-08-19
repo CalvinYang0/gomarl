@@ -124,6 +124,21 @@ def check_grf(gate_mode):
     )
     assert "dynamic_gate_attention_mean" in model.latest_aux_stats
     assert model.latest_aux_stats["dynamic_gate_warmup_active"].item() == 0.0
+    for branch in ("linear", "attention"):
+        slot_values = []
+        for slot_name in model.semantic_names:
+            key = "dynamic_gate_{}_probability_slot_{}".format(
+                branch, slot_name
+            )
+            assert key in model.latest_aux_stats
+            value = model.latest_aux_stats[key]
+            assert value.ndim == 0 and th.isfinite(value)
+            slot_values.append(value)
+        expected_std = th.stack(slot_values).std(unbiased=False)
+        recorded_std = model.latest_aux_stats[
+            "dynamic_gate_{}_probability_slot_std".format(branch)
+        ]
+        assert th.allclose(recorded_std, expected_std)
 
     model.zero_grad(set_to_none=True)
     model.set_dynamic_branch_gate_t_env(249999)

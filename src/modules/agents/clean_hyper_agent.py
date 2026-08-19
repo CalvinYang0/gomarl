@@ -2706,6 +2706,44 @@ class PublicTransformerRelationCapturer(nn.Module):
                     ),
                 }
             )
+            # Keep the observation-conditioned probabilities inspectable. A
+            # branch mean cannot distinguish selective masking (some slots near
+            # zero, others near one) from uniform stochastic dropout. These
+            # values are averaged only over the current batch/agent dimensions;
+            # the learner then averages them over sampled timesteps before
+            # writing one scalar curve per semantic slot.
+            slot_probability_means = probabilities.reshape(
+                2, -1, probabilities.size(-1)
+            ).mean(dim=1)
+            self.latest_aux_stats.update(
+                {
+                    "dynamic_gate_linear_probability_slot_std": (
+                        slot_probability_means[0].std(unbiased=False).detach()
+                    ),
+                    "dynamic_gate_attention_probability_slot_std": (
+                        slot_probability_means[1].std(unbiased=False).detach()
+                    ),
+                    "dynamic_gate_linear_probability_slot_min": (
+                        slot_probability_means[0].min().detach()
+                    ),
+                    "dynamic_gate_linear_probability_slot_max": (
+                        slot_probability_means[0].max().detach()
+                    ),
+                    "dynamic_gate_attention_probability_slot_min": (
+                        slot_probability_means[1].min().detach()
+                    ),
+                    "dynamic_gate_attention_probability_slot_max": (
+                        slot_probability_means[1].max().detach()
+                    ),
+                }
+            )
+            for slot_index, slot_name in enumerate(self.semantic_names):
+                self.latest_aux_stats[
+                    "dynamic_gate_linear_probability_slot_{}".format(slot_name)
+                ] = slot_probability_means[0, slot_index].detach()
+                self.latest_aux_stats[
+                    "dynamic_gate_attention_probability_slot_{}".format(slot_name)
+                ] = slot_probability_means[1, slot_index].detach()
             return gates
 
         gates = self.branch_keep_mask.to(device=reference.device, dtype=reference.dtype).clone()
