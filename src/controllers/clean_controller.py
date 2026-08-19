@@ -10,6 +10,11 @@ class CleanMAC(BasicMAC):
         "dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond"
     )
 
+    def __init__(self, scheme, groups, args):
+        super().__init__(scheme, groups, args)
+        self._test_gate_probability_sum = None
+        self._test_gate_probability_count = 0
+
     @staticmethod
     def _fixed_parameter_projection(parameter_parts, projection_dim):
         """Project generated parameter blocks with a frozen signed hash.
@@ -75,9 +80,92 @@ class CleanMAC(BasicMAC):
 
     def select_actions(self, ep_batch, t_ep, t_env, bs=slice(None), test_mode=False):
         self.set_dynamic_branch_gate_t_env(t_env)
-        return super().select_actions(
+        selected_actions = super().select_actions(
             ep_batch, t_ep, t_env, bs=bs, test_mode=test_mode
         )
+        if test_mode and bool(
+            getattr(self.args, "clean_print_test_slot_probabilities", True)
+        ):
+            self._accumulate_test_gate_probabilities(
+                bs, ep_batch.batch_size
+            )
+        return selected_actions
+
+    def _accumulate_test_gate_probabilities(
+        self, batch_selection, batch_size
+    ):
+        probabilities = getattr(
+            self, "latest_dynamic_branch_probabilities_graph", None
+        )
+        if probabilities is None or probabilities.dim() < 3:
+            return
+        probabilities = probabilities.detach()
+        slot_count = probabilities.size(-1)
+        if probabilities.dim() == 3:
+            expected = int(batch_size) * int(self.n_agents)
+            if probabilities.size(1) != expected:
+                raise RuntimeError(
+                    "Dynamic gate probability batch-agent dimension is {}; expected {}"
+                    .format(probabilities.size(1), expected)
+                )
+            probabilities = probabilities.reshape(
+                2, int(batch_size), int(self.n_agents), slot_count
+            )
+        elif probabilities.dim() != 4:
+            raise RuntimeError(
+                "Dynamic gate probabilities have unsupported shape {}".format(
+                    tuple(probabilities.shape)
+                )
+            )
+        selected = probabilities[:, batch_selection]
+        flattened = selected.reshape(2, -1, slot_count)
+        probability_sum = flattened.double().sum(dim=1).cpu()
+        probability_count = int(flattened.size(1))
+        if probability_count <= 0:
+            return
+        if self._test_gate_probability_sum is None:
+            self._test_gate_probability_sum = probability_sum
+        else:
+            if self._test_gate_probability_sum.shape != probability_sum.shape:
+                raise RuntimeError(
+                    "Dynamic gate test probability shape changed from {} to {}".format(
+                        tuple(self._test_gate_probability_sum.shape),
+                        tuple(probability_sum.shape),
+                    )
+                )
+            self._test_gate_probability_sum += probability_sum
+        self._test_gate_probability_count += probability_count
+
+    def pop_test_gate_probability_summary(self):
+        if (
+            self._test_gate_probability_sum is None
+            or self._test_gate_probability_count <= 0
+        ):
+            return None
+        probability_mean = (
+            self._test_gate_probability_sum
+            / float(self._test_gate_probability_count)
+        )
+        relation_capturer = getattr(
+            self.agent, "rpg_relation_capturer", None
+        )
+        slot_names = list(
+            getattr(relation_capturer, "semantic_names", ())
+        )
+        if len(slot_names) != probability_mean.size(-1):
+            slot_names = [
+                "slot_{}".format(index)
+                for index in range(probability_mean.size(-1))
+            ]
+        summary = {
+            "slot_names": slot_names,
+            "linear": probability_mean[0].tolist(),
+            "attention": probability_mean[1].tolist(),
+            "sample_count": self._test_gate_probability_count,
+        }
+        self._test_gate_probability_sum = None
+        self._test_gate_probability_count = 0
+        return summary
 
     def _exclude_agent_id_from_trunk(self):
         model_type = getattr(self.args, "clean_model_type", "baseline").replace("-", "_")

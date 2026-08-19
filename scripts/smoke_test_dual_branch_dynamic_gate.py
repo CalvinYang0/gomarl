@@ -319,6 +319,75 @@ def check_importance_auxiliary_gate_only_backward():
     assert th.allclose(main_parameter.grad, th.tensor(10.0))
 
 
+def check_importance_alternating_training():
+    learner = CleanLearner.__new__(CleanLearner)
+    learner.importance_alternating_training = True
+    learner.importance_auxiliary_warmup_steps = 250000
+    learner.importance_non_gate_phase_steps = 80000
+    learner.importance_gate_phase_steps = 20000
+
+    assert learner._importance_training_phase(249999) == "non_gate_td"
+    assert learner._importance_training_phase(250000) == "non_gate_td"
+    assert learner._importance_training_phase(329999) == "non_gate_td"
+    assert learner._importance_training_phase(330000) == "gate_td_aux"
+    assert learner._importance_training_phase(349999) == "gate_td_aux"
+    assert learner._importance_training_phase(350000) == "non_gate_td"
+
+    learner.importance_auxiliary_warmup_steps = 0
+    assert learner._importance_training_phase(0) == "non_gate_td"
+    assert learner._importance_training_phase(79999) == "non_gate_td"
+    assert learner._importance_training_phase(80000) == "gate_td_aux"
+    assert learner._importance_training_phase(99999) == "gate_td_aux"
+    assert learner._importance_training_phase(100000) == "non_gate_td"
+
+    gate_parameter = th.nn.Parameter(th.tensor(2.0))
+    main_parameter = th.nn.Parameter(th.tensor(3.0))
+    learner.use_amp = False
+
+    gate_phase_loss = (
+        (gate_parameter + main_parameter).square()
+        + (2.0 * gate_parameter + 3.0 * main_parameter).square()
+    )
+    learner._backward_parameters_only(gate_phase_loss, (gate_parameter,))
+    assert gate_parameter.grad is not None
+    assert main_parameter.grad is None
+
+    gate_parameter.grad = None
+    main_phase_loss = (gate_parameter + main_parameter).square()
+    learner._backward_parameters_only(main_phase_loss, (main_parameter,))
+    assert gate_parameter.grad is None
+    assert th.allclose(main_parameter.grad, th.tensor(10.0))
+
+
+def check_test_slot_probability_summary():
+    mac = CleanMAC.__new__(CleanMAC)
+    mac._test_gate_probability_sum = None
+    mac._test_gate_probability_count = 0
+    mac.n_agents = 1
+    mac.agent = SimpleNamespace(
+        rpg_relation_capturer=SimpleNamespace(semantic_names=("slot_x", "slot_y"))
+    )
+    mac.latest_dynamic_branch_probabilities_graph = th.tensor(
+        [
+            [[[0.2, 0.4]], [[0.6, 0.8]]],
+            [[[0.1, 0.3]], [[0.5, 0.7]]],
+        ]
+    )
+    # The live agent stores [branch, batch * agent, slot], so this also
+    # verifies that the controller restores the environment/agent axes before
+    # applying the active-environment selection.
+    mac.latest_dynamic_branch_probabilities_graph = (
+        mac.latest_dynamic_branch_probabilities_graph.reshape(2, 2, 2)
+    )
+    mac._accumulate_test_gate_probabilities([0, 1], batch_size=2)
+    summary = mac.pop_test_gate_probability_summary()
+    assert summary["slot_names"] == ["slot_x", "slot_y"]
+    assert summary["sample_count"] == 2
+    assert th.allclose(th.tensor(summary["linear"]), th.tensor([0.4, 0.6]))
+    assert th.allclose(th.tensor(summary["attention"]), th.tensor([0.3, 0.5]))
+    assert mac.pop_test_gate_probability_summary() is None
+
+
 def check_condition_gradient_consistency():
     model_name = "grf_abs_dual_branch_hard_gate_grad_consistency_hypercond"
     assert model_name in GRF_DUAL_BRANCH_VARIANTS
@@ -558,6 +627,10 @@ def main():
     print("gradient_importance first_order_weighted_sparsity=ok")
     check_importance_auxiliary_gate_only_backward()
     print("importance_auxiliary gate_only_backward=ok")
+    check_importance_alternating_training()
+    print("importance_auxiliary alternating_80k_20k=ok")
+    check_test_slot_probability_summary()
+    print("dynamic_gate test_slot_probability_summary=ok")
     check_condition_gradient_consistency()
     print("condition_gradient_consistency second_order=ok")
     check_generated_parameter_stability()

@@ -875,6 +875,14 @@ clean_dynamic_branch_gate_warmup_steps: 250000
 clean_importance_auxiliary_warmup_steps: 250000
 clean_parameter_perturbation_relative_std: 0.05
 clean_parameter_perturbation_probe_timesteps: 2
+# Optional decoupled importance training. After the ordinary gate warm-up,
+# alternate 80k environment steps of TD-only non-gate updates with 20k steps
+# where only the gate receives TD plus its importance auxiliary.
+clean_importance_alternating_training: false
+clean_importance_non_gate_phase_steps: 80000
+clean_importance_gate_phase_steps: 20000
+# Print one test-set mean probability per raw slot to the server log.
+clean_print_test_slot_probabilities: true
 # Counter-only condition-gradient auxiliary. It is deliberately conservative:
 # two adjacent pairs per learner update, enabled only after gate warmup.
 clean_condition_gradient_consistency_coef: 0.1

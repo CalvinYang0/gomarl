@@ -353,6 +353,26 @@ class ParallelRunner:
         return self.batch
 
     def _log(self, returns, stats, prefix):
+        if prefix == "test_" and hasattr(
+            self.mac, "pop_test_gate_probability_summary"
+        ):
+            summary = self.mac.pop_test_gate_probability_summary()
+            if summary is not None:
+                for branch_name in ("linear", "attention"):
+                    values = ", ".join(
+                        "{}={:.4f}".format(slot_name, probability)
+                        for slot_name, probability in zip(
+                            summary["slot_names"], summary[branch_name]
+                        )
+                    )
+                    self.logger.console_logger.info(
+                        "Dynamic gate TEST {} slot probabilities | t_env={} | n={} | {}".format(
+                            branch_name.upper(),
+                            self.t_env,
+                            summary["sample_count"],
+                            values,
+                        )
+                    )
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)
         self.logger.log_stat(prefix + "return_std", np.std(returns), self.t_env)
         returns.clear()

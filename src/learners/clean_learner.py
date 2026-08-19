@@ -267,6 +267,14 @@ class CleanLearner:
                 raise RuntimeError(
                     "Importance auxiliary variants require trainable gate parameters"
                 )
+        gate_parameter_ids = {
+            id(parameter) for parameter in self.importance_gate_parameters
+        }
+        self.importance_non_gate_parameters = tuple(
+            parameter
+            for parameter in self.params
+            if id(parameter) not in gate_parameter_ids
+        )
         self.importance_auxiliary_warmup_steps = max(
             0,
             int(
@@ -288,6 +296,25 @@ class CleanLearner:
             raise ValueError(
                 "clean_parameter_perturbation_relative_std must be positive"
             )
+        self.importance_alternating_training = bool(
+            getattr(args, "clean_importance_alternating_training", False)
+        )
+        self.importance_non_gate_phase_steps = max(
+            1,
+            int(getattr(args, "clean_importance_non_gate_phase_steps", 80000)),
+        )
+        self.importance_gate_phase_steps = max(
+            1,
+            int(getattr(args, "clean_importance_gate_phase_steps", 20000)),
+        )
+        if self.importance_alternating_training and not (
+            self.perturbed_parameter_importance_active
+            or self.gradient_importance_active
+        ):
+            raise ValueError(
+                "Alternating importance training requires an importance variant"
+            )
+        self.last_importance_training_phase = None
         self.adaptive_auxiliary_ratio_active = model_type in {
             "grf_abs_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
             "rpg_dual_branch_hard_gate_adaptive_grad_consistency_hypercond",
@@ -450,6 +477,41 @@ class CleanLearner:
                 parameter.grad = gradient.detach().clone()
             else:
                 parameter.grad.add_(gradient.detach())
+
+    def _backward_parameters_only(self, loss, parameters):
+        """Differentiate one loss only with respect to the selected parameters."""
+        parameters = tuple(parameters)
+        if not parameters:
+            raise RuntimeError("Parameter-only backward received no parameters")
+        scaled_loss = self.amp_scaler.scale(loss) if self.use_amp else loss
+        gradients = th.autograd.grad(
+            scaled_loss,
+            parameters,
+            allow_unused=True,
+        )
+        if not any(gradient is not None for gradient in gradients):
+            raise RuntimeError("Selected parameters are disconnected from the loss")
+        for parameter, gradient in zip(parameters, gradients):
+            if gradient is None:
+                continue
+            parameter.grad = gradient.detach().clone()
+
+    def _importance_training_phase(self, t_env):
+        """Return the current phase of optional environment-step alternation."""
+        if not self.importance_alternating_training:
+            return "joint"
+        if t_env < self.importance_auxiliary_warmup_steps:
+            return "non_gate_td"
+        cycle_steps = (
+            self.importance_non_gate_phase_steps
+            + self.importance_gate_phase_steps
+        )
+        cycle_position = (
+            int(t_env) - self.importance_auxiliary_warmup_steps
+        ) % cycle_steps
+        if cycle_position < self.importance_non_gate_phase_steps:
+            return "non_gate_td"
+        return "gate_td_aux"
 
     @staticmethod
     def _semantic_router(mac):
@@ -1104,6 +1166,18 @@ class CleanLearner:
             self.mac.set_dynamic_branch_gate_t_env(t_env)
         if hasattr(self.target_mac, "set_dynamic_branch_gate_t_env"):
             self.target_mac.set_dynamic_branch_gate_t_env(t_env)
+        importance_training_phase = self._importance_training_phase(t_env)
+        if (
+            self.importance_alternating_training
+            and importance_training_phase
+            != self.last_importance_training_phase
+        ):
+            self.logger.console_logger.info(
+                "Importance alternating phase | t_env={} | {}".format(
+                    t_env, importance_training_phase
+                )
+            )
+            self.last_importance_training_phase = importance_training_phase
         rewards = batch["reward"][:, :-1]
         actions = batch["actions"][:, :-1]
         terminated = batch["terminated"][:, :-1].float()
@@ -1157,6 +1231,10 @@ class CleanLearner:
         trajectory_parameter_projection_count = mask.new_zeros(())
         importance_auxiliary_enabled = (
             t_env >= self.importance_auxiliary_warmup_steps
+            and (
+                not self.importance_alternating_training
+                or importance_training_phase == "gate_td_aux"
+            )
         )
         perturbed_parameter_sum = None
         perturbed_parameter_count = mask.new_zeros(())
@@ -1717,15 +1795,35 @@ class CleanLearner:
         semantic_critical_score = None
         semantic_gradient_scale = 1.0
         self.optimiser.zero_grad()
+        if self.importance_alternating_training:
+            # Optimizers with momentum can still move a parameter whose
+            # gradient is a zero tensor.  None is required so the inactive
+            # parameter group is skipped completely in this phase.
+            for parameter in self.params:
+                parameter.grad = None
         if semantic_router is not None and semantic_router.semantic_probe_scale is not None:
             semantic_router.semantic_probe_scale.grad = None
         if semantic_router is not None and semantic_router.semantic_route_probe is not None:
             semantic_router.semantic_route_probe.grad = None
         if self.use_amp:
             semantic_gradient_scale = float(self.amp_scaler.get_scale())
-            self._backward_main_and_gate_only_auxiliary(
-                loss, gate_only_importance_loss
-            )
+            if importance_training_phase == "non_gate_td":
+                self._backward_parameters_only(
+                    td_loss, self.importance_non_gate_parameters
+                )
+            elif importance_training_phase == "gate_td_aux":
+                gate_phase_loss = td_loss
+                if gate_only_importance_loss is not None:
+                    gate_phase_loss = (
+                        gate_phase_loss + gate_only_importance_loss
+                    )
+                self._backward_parameters_only(
+                    gate_phase_loss, self.importance_gate_parameters
+                )
+            else:
+                self._backward_main_and_gate_only_auxiliary(
+                    loss, gate_only_importance_loss
+                )
             self.amp_scaler.unscale_(self.optimiser)
             semantic_gradient = (
                 None
@@ -1751,9 +1849,23 @@ class CleanLearner:
             self.amp_scaler.step(self.optimiser)
             self.amp_scaler.update()
         else:
-            self._backward_main_and_gate_only_auxiliary(
-                loss, gate_only_importance_loss
-            )
+            if importance_training_phase == "non_gate_td":
+                self._backward_parameters_only(
+                    td_loss, self.importance_non_gate_parameters
+                )
+            elif importance_training_phase == "gate_td_aux":
+                gate_phase_loss = td_loss
+                if gate_only_importance_loss is not None:
+                    gate_phase_loss = (
+                        gate_phase_loss + gate_only_importance_loss
+                    )
+                self._backward_parameters_only(
+                    gate_phase_loss, self.importance_gate_parameters
+                )
+            else:
+                self._backward_main_and_gate_only_auxiliary(
+                    loss, gate_only_importance_loss
+                )
             semantic_gradient = (
                 None
                 if (
@@ -1868,6 +1980,12 @@ class CleanLearner:
 
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
             self.logger.log_stat("loss_td", td_loss.item(), t_env)
+            if self.importance_alternating_training:
+                self.logger.log_stat(
+                    "importance_alternating_gate_phase",
+                    float(importance_training_phase == "gate_td_aux"),
+                    t_env,
+                )
             if aux_losses:
                 self.logger.log_stat("loss_aux", aux_loss.item(), t_env)
             if self.gate_regularization_active:
