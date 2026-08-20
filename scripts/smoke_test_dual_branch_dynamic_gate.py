@@ -712,6 +712,43 @@ def check_trajectory_parameter_projection():
     assert second.grad is not None and second.grad.abs().sum().item() > 0.0
 
 
+def check_structured_perturbed_head_replay():
+    batch_size, n_agents = 2, 3
+    hidden_dim, n_ego_actions, n_enemies = 4, 5, 2
+    flat_size = batch_size * n_agents
+    hidden = th.randn(batch_size, n_agents, hidden_dim)
+    parameters = (
+        th.randn(flat_size, hidden_dim, hidden_dim),
+        th.randn(flat_size, 1, hidden_dim),
+        th.randn(flat_size, hidden_dim, n_ego_actions),
+        th.randn(flat_size, 1, n_ego_actions),
+        th.randn(flat_size, hidden_dim + 3, 1),
+        th.randn(flat_size, 1, 1),
+    )
+    interaction_input = th.randn(flat_size, n_enemies, hidden_dim + 3)
+    enemy_mask = th.tensor(
+        [
+            [[True, False], [True, True], [False, True]],
+            [[True, True], [False, False], [True, False]],
+        ]
+    )
+    dummy_agent = SimpleNamespace(hidden_dim=hidden_dim)
+    q = CleanHyperAgent.perturbed_q_from_generated_parameters(
+        dummy_agent,
+        hidden,
+        parameters,
+        relative_std=0.0,
+        interaction_input=interaction_input,
+        enemy_mask=enemy_mask,
+    )
+    assert q.shape == (
+        batch_size,
+        n_agents,
+        n_ego_actions + n_enemies,
+    )
+    assert th.all(q[..., n_ego_actions:].masked_select(~enemy_mask) == 0.0)
+
+
 def main():
     th.manual_seed(17)
     check_grf("hard_st")
@@ -750,6 +787,8 @@ def main():
     print("td_weighted_parameter_likelihood score_gradient=ok")
     check_trajectory_parameter_projection()
     print("trajectory_parameter_projection deterministic_gradient=ok")
+    check_structured_perturbed_head_replay()
+    print("corridor_structured_perturbed_head replay_and_mask=ok")
 
 
 if __name__ == "__main__":
