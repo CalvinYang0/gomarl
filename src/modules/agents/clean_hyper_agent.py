@@ -261,6 +261,9 @@ RPG_DUAL_BRANCH_VARIANTS = {
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond",
     "rpg_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond",
     "rpg_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
+    "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
+    "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond",
+    "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
 }
 RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
     "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
@@ -300,6 +303,11 @@ RPG_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS = (
     RPG_DUAL_BRANCH_PARAMETER_STABILITY_VARIANTS
     | RPG_DUAL_BRANCH_PARAMETER_LIKELIHOOD_VARIANTS
     | RPG_DUAL_BRANCH_TRAJECTORY_PARAMETER_LIKELIHOOD_VARIANTS
+    | {
+        "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
+        "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond",
+        "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
+    }
 )
 RPG_DUAL_BRANCH_GRAD_CONSISTENCY_VARIANTS = {
     "rpg_dual_branch_hard_gate_grad_consistency_hypercond",
@@ -340,6 +348,9 @@ RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "rpg_dual_branch_binary_concrete_adaptive_attention_only_parameter_likelihood_hypercond": "binary_concrete",
     "rpg_dual_branch_binary_concrete_adaptive_td_weighted_param_likelihood_hypercond": "binary_concrete",
     "rpg_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond": "binary_concrete",
 }
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",
@@ -8858,6 +8869,9 @@ class CleanHyperAgent(nn.Module):
         self.latest_condition = None
         self.latest_condition_graph = None
         self.latest_generated_parameter_graph = None
+        self.latest_policy_hidden_graph = None
+        self.latest_policy_interaction_input_graph = None
+        self.latest_policy_enemy_mask_graph = None
         self.latest_generated_parameter_log_prob = None
         self._generated_parameter_log_prob_sum = None
         self._generated_parameter_log_prob_count = 0
@@ -10329,6 +10343,8 @@ class CleanHyperAgent(nn.Module):
         generated_parameters,
         relative_std,
         minimum_rms=1e-3,
+        interaction_input=None,
+        enemy_mask=None,
     ):
         """Re-evaluate a generated head after one detached-scale perturbation.
 
@@ -10344,9 +10360,34 @@ class CleanHyperAgent(nn.Module):
             ).sqrt().clamp(min=float(minimum_rms))
             noise = th.randn_like(parameter) * rms * float(relative_std)
             perturbed_parameters.append(parameter + noise)
-        return self._apply_generated_dynamic_head(
-            hidden, tuple(perturbed_parameters)
+        perturbed_parameters = tuple(perturbed_parameters)
+        if len(perturbed_parameters) == 4:
+            return self._apply_generated_dynamic_head(hidden, perturbed_parameters)
+        if len(perturbed_parameters) != 6 or interaction_input is None:
+            raise RuntimeError(
+                "Structured perturbed-head evaluation requires six generated "
+                "parameter blocks and the corresponding interaction input"
+            )
+
+        batch_size, n_agents, _ = hidden.shape
+        flat_hidden = hidden.reshape(batch_size * n_agents, 1, self.hidden_dim)
+        ego_bottleneck_w, ego_bottleneck_b, ego_out_w, ego_out_b = (
+            perturbed_parameters[:4]
         )
+        ego_mid = F.elu(
+            th.bmm(flat_hidden, ego_bottleneck_w) + ego_bottleneck_b
+        )
+        q_ego = (th.bmm(ego_mid, ego_out_w) + ego_out_b).view(
+            batch_size, n_agents, -1
+        )
+
+        interaction_out_w, interaction_out_b = perturbed_parameters[4:]
+        q_attack = (
+            th.bmm(interaction_input, interaction_out_w) + interaction_out_b
+        ).view(batch_size, n_agents, -1)
+        if enemy_mask is not None:
+            q_attack = q_attack.masked_fill(~enemy_mask.bool(), 0.0)
+        return th.cat([q_ego, q_attack], dim=-1)
 
     def _apply_dynamic_head(self, hidden, condition):
         batch_size, n_agents, _ = hidden.shape
@@ -10997,6 +11038,7 @@ class CleanHyperAgent(nn.Module):
                 interaction_out_w,
                 interaction_out_b,
             )
+            self.latest_policy_interaction_input_graph = flat_interaction_input
         capture_parameter_graph = (
             (
                 SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
@@ -11402,6 +11444,7 @@ class CleanHyperAgent(nn.Module):
                     ego_out_w,
                     ego_out_b,
                 )
+                self.latest_policy_hidden_graph = hidden
             if (
                 (
                     SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
@@ -11643,6 +11686,8 @@ class CleanHyperAgent(nn.Module):
             interaction_input = th.cat([hidden_rep, cond_rep, enemy_tokens], dim=-1)
             q_attack = self.rpg_interaction_scorer(interaction_input).squeeze(-1)
         q_attack = q_attack.masked_fill(~enemy_mask.bool(), 0.0)
+        if self.model_type in RPG_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS:
+            self.latest_policy_enemy_mask_graph = enemy_mask
         if (
             (
                 SEMANTIC_ROUTER_MODE_BY_MODEL.get(self.model_type)
@@ -11708,6 +11753,8 @@ class CleanHyperAgent(nn.Module):
         self.latest_condition_graph = None
         self.latest_generated_parameter_graph = None
         self.latest_policy_hidden_graph = None
+        self.latest_policy_interaction_input_graph = None
+        self.latest_policy_enemy_mask_graph = None
         self.latest_generated_parameter_log_prob = None
         self.latest_dynamic_branch_gates_graph = None
         self.latest_dynamic_branch_probabilities_graph = None

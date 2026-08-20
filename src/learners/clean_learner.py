@@ -246,18 +246,18 @@ class CleanLearner:
         self.gradient_importance_active = model_type == (
             "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond"
         )
-        self.perturbed_head_td_quality_active = model_type == (
-            "grf_abs_dual_branch_binary_concrete_"
-            "perturbed_head_td_quality_hypercond"
-        )
-        self.temporal_param_stability_active = model_type == (
-            "grf_abs_dual_branch_binary_concrete_"
-            "temporal_param_stability_hypercond"
-        )
-        self.temporal_param_small_change_active = model_type == (
-            "grf_abs_dual_branch_binary_concrete_"
-            "temporal_param_small_change_hypercond"
-        )
+        self.perturbed_head_td_quality_active = model_type in {
+            "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
+            "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
+        }
+        self.temporal_param_stability_active = model_type in {
+            "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond",
+            "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond",
+        }
+        self.temporal_param_small_change_active = model_type in {
+            "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
+            "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
+        }
         self.temporal_param_auxiliary_active = (
             self.temporal_param_stability_active
             or self.temporal_param_small_change_active
@@ -388,6 +388,9 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
             "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond",
             "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
+            "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
+            "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond",
+            "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
         }
         self.adaptive_auxiliary_target_ratio = float(
             getattr(args, "clean_adaptive_auxiliary_target_ratio", 0.1)
@@ -1355,6 +1358,12 @@ class CleanLearner:
         perturbed_head_hidden_graphs = (
             [] if perturbed_head_parameter_graphs is not None else None
         )
+        perturbed_head_interaction_graphs = (
+            [] if perturbed_head_parameter_graphs is not None else None
+        )
+        perturbed_head_enemy_masks = (
+            [] if perturbed_head_parameter_graphs is not None else None
+        )
         if hasattr(self.mac, "set_td_parameter_sampling_enabled"):
             self.mac.set_td_parameter_sampling_enabled(
                 td_weighted_parameter_likelihood_enabled
@@ -1417,6 +1426,20 @@ class CleanLearner:
                         )
                     perturbed_head_parameter_graphs.append(generated_parameters)
                     perturbed_head_hidden_graphs.append(policy_hidden)
+                    perturbed_head_interaction_graphs.append(
+                        getattr(
+                            self.mac.agent,
+                            "latest_policy_interaction_input_graph",
+                            None,
+                        )
+                    )
+                    perturbed_head_enemy_masks.append(
+                        getattr(
+                            self.mac.agent,
+                            "latest_policy_enemy_mask_graph",
+                            None,
+                        )
+                    )
                 if dynamic_gate_graphs is not None and t < mask.shape[1]:
                     gate_probability_graph = getattr(
                         self.mac,
@@ -1779,10 +1802,14 @@ class CleanLearner:
                             parameters,
                             self.perturbed_head_relative_std,
                             self.perturbed_head_minimum_rms,
+                            interaction_input=interaction_input,
+                            enemy_mask=enemy_mask,
                         )
-                        for hidden, parameters in zip(
+                        for hidden, parameters, interaction_input, enemy_mask in zip(
                             perturbed_head_hidden_graphs,
                             perturbed_head_parameter_graphs,
+                            perturbed_head_interaction_graphs,
+                            perturbed_head_enemy_masks,
                         )
                     ],
                     dim=1,

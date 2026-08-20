@@ -252,6 +252,16 @@ def check_sparse_gate_variants():
         if model_name in GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL:
             assert 0.0 < GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL[model_name] < 1.0
 
+    for model_name in (
+        "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
+        "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond",
+        "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
+    ):
+        assert model_name in RPG_DUAL_BRANCH_VARIANTS
+        assert RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[model_name] == (
+            "binary_concrete"
+        )
+
     obs = th.randn(2, 4, 30)
     hidden = th.zeros(2, 4, 16)
     for regularizer, prior, mode in (
