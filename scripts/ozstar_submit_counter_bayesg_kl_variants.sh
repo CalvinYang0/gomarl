@@ -1,7 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Counter ablation: three BayesG-style KL gate variants only.
+# Counter ablation: three BayesG-style KL gate variants, alongside the three
+# already-running temporal/perturbed-head controls.  The six jobs below are
+# the complete whitelist when CANCEL_PREVIOUS=1.
 #
 #   bayesg_kl80_keep       train with Bernoulli-KL prior keep=0.80
 #   bayesg_kl80_threshold70 same training prior, eval hard threshold=0.70
@@ -9,6 +11,9 @@ set -euo pipefail
 #
 # The threshold variants are selected by MODEL_TYPE in clean_hyper_agent.py;
 # no threshold is passed through an unrelated auxiliary objective here.
+# Existing controls intentionally remain active:
+#   perturbed_head_td_quality, temporal_param_stability,
+#   temporal_param_small_change.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
@@ -47,7 +52,7 @@ fi
 "$PYTHON_BIN" scripts/smoke_test_dual_branch_dynamic_gate.py
 
 if [[ "$CANCEL_PREVIOUS" == "1" ]]; then
-  echo "== Cancel active jobs from this repository except the three KL jobs =="
+  echo "== Cancel active jobs from this repository except the six requested jobs =="
   while IFS='|' read -r job_id job_name; do
     [[ -n "$job_id" ]] || continue
     job_record=$(scontrol show job -o "$job_id")
@@ -57,6 +62,12 @@ if [[ "$CANCEL_PREVIOUS" == "1" ]]; then
       continue
     fi
     case "$job_name" in
+      grf_counter_perturbed_head_td_quality_s[0-9]*)
+        echo "keep job=$job_id name=$job_name" ;;
+      grf_counter_temporal_param_stability_s[0-9]*)
+        echo "keep job=$job_id name=$job_name" ;;
+      grf_counter_temporal_param_small_change_s[0-9]*)
+        echo "keep job=$job_id name=$job_name" ;;
       grf_counter_bayesg_kl80_keep_s[0-9]*)
         echo "keep job=$job_id name=$job_name" ;;
       grf_counter_bayesg_kl80_threshold70_s[0-9]*)
@@ -127,4 +138,3 @@ for spec in "${specs[@]}"; do
 done
 
 echo "processed total: $processed"
-
