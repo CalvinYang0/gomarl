@@ -204,8 +204,31 @@ class Academy_Counterattack_Easy(MultiAgentEnv):
 
         return obs, self.get_global_state()
 
-    def render(self):
-        pass
+    def render(self, mode="human"):
+        """Forward GRF rendering to the underlying Football environment."""
+        return self.env.render(mode=mode)
+
+    def get_render_frame(self):
+        """Return one headless RGB frame for an optional test trace video."""
+        try:
+            rendered = self.env.render(mode="rgb_array")
+        except TypeError:
+            rendered = self.env.render()
+        try:
+            raw_observation = self.env.unwrapped.observation()[0]
+        except Exception:
+            raw_observation = None
+        frame = (
+            raw_observation.get("frame")
+            if isinstance(raw_observation, dict)
+            else None
+        )
+        if frame is None:
+            frame = rendered
+        if frame is None:
+            return None
+        frame = np.asarray(frame)
+        return frame if frame.ndim >= 2 else None
 
     def close(self):
         self.env.close()

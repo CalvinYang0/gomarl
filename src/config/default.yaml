@@ -35,8 +35,9 @@ wandb_project: "gomarl" # W&B project name
 wandb_mode: "offline" # W&B mode: "offline" or "online"
 wandb_run_name: null # Optional explicit W&B run name (defaults to `name` when null)
 wandb_save_model: False # Save checkpoints into W&B run directory
-# Upload only performance, losses, gate probability summaries, and the test
-# gate trajectory image; local/TensorBoard/Sacred logs remain unchanged.
+# Upload only performance, losses, gate probability summaries, the test gate
+# trajectory image, and the optional test video; local/TensorBoard/Sacred logs
+# remain unchanged.
 wandb_minimal_logging: True
 save_model: False # Save the models to disk
 save_model_interval: 2000000 # Save models after this many timesteps
@@ -55,6 +56,9 @@ battle_trace_make_video: True # Try to render mp4/gif in addition to PNG summari
 battle_trace_frame_stride: 1 # Render every Nth environment frame into video
 battle_trace_fps: 6 # Video playback FPS
 battle_trace_similarity_sample_size: 256 # Max agent-time samples for similarity heatmaps
+# GRF can render RGB frames headlessly. Capture one test trajectory after the
+# first battle_trace_interval and upload its video to W&B.
+wandb_test_trajectory_video: True
 
 # --- RL hyperparameters ---
 gamma: 0.99

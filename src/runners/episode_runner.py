@@ -66,6 +66,7 @@ class EpisodeRunner:
         episode_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
         snapshot_fn = getattr(self.env, "get_battle_snapshot", None)
+        render_frame_fn = getattr(self.env, "get_render_frame", None)
 
         def safe_battle_snapshot():
             if snapshot_fn is None:
@@ -75,10 +76,24 @@ class EpisodeRunner:
             except Exception:
                 return None
 
-        trace_request = self.battle_trace_request if test_mode and snapshot_fn is not None else None
+        trace_request = (
+            self.battle_trace_request
+            if test_mode and (snapshot_fn is not None or render_frame_fn is not None)
+            else None
+        )
         self.battle_trace_request = None
         trace_frames = []
         snapshot = safe_battle_snapshot() if trace_request is not None else None
+
+        def safe_render_frame():
+            if render_frame_fn is None:
+                return None
+            try:
+                return render_frame_fn()
+            except Exception:
+                return None
+
+        render_frame = safe_render_frame() if trace_request is not None else None
 
         while not terminated:
 
@@ -113,6 +128,7 @@ class EpisodeRunner:
                         "t": int(self.t),
                         "t_env": int(trace_request["t_env"]),
                         "snapshot": snapshot,
+                        "render_frame": render_frame,
                         "actions": cpu_actions[0].astype(int).tolist(),
                         "diagnostics": model_diagnostics(self.mac, batch_index=0),
                     }
@@ -122,6 +138,7 @@ class EpisodeRunner:
             episode_return += reward
             if trace_request is not None:
                 snapshot = safe_battle_snapshot()
+                render_frame = safe_render_frame()
 
             post_transition_data = {
                 "actions": cpu_actions,
@@ -154,6 +171,7 @@ class EpisodeRunner:
                     "t": int(self.t),
                     "t_env": int(trace_request["t_env"]),
                     "snapshot": snapshot,
+                    "render_frame": render_frame,
                     "actions": None,
                     "diagnostics": model_diagnostics(self.mac, batch_index=0),
                 }

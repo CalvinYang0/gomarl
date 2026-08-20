@@ -232,7 +232,20 @@ class Logger:
             )
 
     def log_battle_trace_media(self, paths, t, fps=6):
-        if not self.use_wandb or self.wandb_minimal_logging:
+        if not self.use_wandb:
+            return
+
+        if self.wandb_minimal_logging:
+            video_path = paths.get("video")
+            if video_path:
+                video_format = "gif" if video_path.endswith(".gif") else "mp4"
+                self._update_wandb_buffer(
+                    "test_trajectory_video",
+                    self.wandb_module.Video(
+                        video_path, fps=fps, format=video_format
+                    ),
+                    t,
+                )
             return
 
         if "battle_overview" in paths:

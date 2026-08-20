@@ -37,8 +37,16 @@ def model_diagnostics(mac, batch_index=0):
 def save_battle_trace(trace, output_dir, prefix):
     os.makedirs(output_dir, exist_ok=True)
     trace_path = os.path.join(output_dir, "{}_trace.json".format(prefix))
+    # RGB frames are kept in memory for video rendering but are intentionally
+    # omitted from the JSON trace so a single test video does not explode the
+    # text artifact size.
+    serializable_trace = dict(trace)
+    serializable_trace["frames"] = [
+        {key: value for key, value in frame.items() if key != "render_frame"}
+        for frame in trace.get("frames", [])
+    ]
     with open(trace_path, "w") as f:
-        json.dump(trace, f)
+        json.dump(serializable_trace, f)
     return trace_path
 
 
@@ -78,7 +86,22 @@ def render_battle_trace(
         paths["alignment"] = alignment_path
 
     if make_video:
-        video_path = _render_battle_intent_video(frames, output_dir, prefix, plt, frame_stride=frame_stride, fps=fps)
+        video_path = _render_native_video(
+            frames,
+            output_dir,
+            prefix,
+            frame_stride=frame_stride,
+            fps=fps,
+        )
+        if video_path is None:
+            video_path = _render_battle_intent_video(
+                frames,
+                output_dir,
+                prefix,
+                plt,
+                frame_stride=frame_stride,
+                fps=fps,
+            )
         if video_path is not None:
             paths["video"] = video_path
         relation_video_path = _render_relation_dynamics_video(
@@ -94,6 +117,49 @@ def render_battle_trace(
             paths["relation_dynamics_video"] = relation_video_path
 
     return paths
+
+
+def _render_native_video(frames, output_dir, prefix, frame_stride=1, fps=6):
+    """Encode native RGB frames returned by GRF's headless renderer."""
+    render_frames = [
+        frame.get("render_frame")
+        for frame in frames
+        if frame.get("render_frame") is not None
+    ]
+    if len(render_frames) < 2:
+        return None
+    try:
+        import imageio.v2 as imageio
+    except ImportError:
+        return None
+
+    selected = render_frames[:: max(1, int(frame_stride))]
+    if selected[-1] is not render_frames[-1]:
+        selected.append(render_frames[-1])
+    images = []
+    for frame in selected:
+        image = np.asarray(frame)
+        if image.ndim == 2:
+            image = np.repeat(image[..., None], 3, axis=-1)
+        if image.ndim != 3 or image.shape[-1] not in (3, 4):
+            return None
+        if image.shape[-1] == 4:
+            image = image[..., :3]
+        if image.dtype != np.uint8:
+            image = np.clip(image, 0, 255).astype(np.uint8)
+        images.append(image)
+
+    mp4_path = os.path.join(output_dir, "{}_grf_render.mp4".format(prefix))
+    try:
+        imageio.mimsave(mp4_path, images, fps=fps)
+        return mp4_path
+    except Exception:
+        gif_path = os.path.join(output_dir, "{}_grf_render.gif".format(prefix))
+        try:
+            imageio.mimsave(gif_path, images, fps=fps)
+            return gif_path
+        except Exception:
+            return None
 
 
 def _plot_battle_overview(frames, output_path, plt):

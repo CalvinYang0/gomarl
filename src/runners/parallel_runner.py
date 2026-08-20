@@ -70,6 +70,7 @@ class ParallelRunner:
         self.battle_trace_request = None
         self.last_battle_trace = None
         self.latest_snapshots = [None for _ in range(self.batch_size)]
+        self.latest_render_frames = [None for _ in range(self.batch_size)]
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -183,6 +184,7 @@ class ParallelRunner:
             pre_transition_data["avail_actions"].append(data["avail_actions"])
             pre_transition_data["obs"].append(data["obs"])
             self.latest_snapshots[env_idx] = data.get("snapshot")
+            self.latest_render_frames[env_idx] = None
 
         self._initial_reset = False
 
@@ -207,6 +209,13 @@ class ParallelRunner:
         self.battle_trace_request = None
         trace_env_idx = 0
         trace_frames = []
+
+        if trace_request is not None:
+            self._send_worker(trace_env_idx, "render_trace", None)
+            render_data = self._recv_worker(trace_env_idx, "render_trace")
+            self.latest_render_frames[trace_env_idx] = render_data.get(
+                "render_frame"
+            )
 
         envs_not_terminated = [b_idx for b_idx, termed in enumerate(terminated) if not termed]
         final_env_infos = []
@@ -233,6 +242,7 @@ class ParallelRunner:
                         "t": int(self.t),
                         "t_env": int(trace_request["t_env"]),
                         "snapshot": self.latest_snapshots[trace_env_idx],
+                        "render_frame": self.latest_render_frames[trace_env_idx],
                         "actions": action_by_env[trace_env_idx].astype(int).tolist(),
                         "diagnostics": model_diagnostics(self.mac, batch_index=trace_env_idx),
                     }
@@ -283,6 +293,8 @@ class ParallelRunner:
                     post_transition_data["reward"].append((data["reward"],))
                     if "snapshot" in data:
                         self.latest_snapshots[idx] = data["snapshot"]
+                    if "render_frame" in data:
+                        self.latest_render_frames[idx] = data["render_frame"]
 
                     episode_returns[idx] += data["reward"]
                     episode_lengths[idx] += 1
@@ -320,6 +332,7 @@ class ParallelRunner:
                     "t": int(self.t),
                     "t_env": int(trace_request["t_env"]),
                     "snapshot": self.latest_snapshots[trace_env_idx],
+                    "render_frame": self.latest_render_frames[trace_env_idx],
                     "actions": None,
                     "diagnostics": None,
                 }
@@ -444,6 +457,15 @@ def env_worker(remote, env_fn, reset_retries=0, reset_retry_delay=1.0):
         except Exception:
             return None
 
+    def safe_render_frame():
+        render_fn = getattr(env, "get_render_frame", None)
+        if render_fn is None:
+            return None
+        try:
+            return render_fn()
+        except Exception:
+            return None
+
     try:
         create_env()
         while True:
@@ -471,7 +493,12 @@ def env_worker(remote, env_fn, reset_retries=0, reset_retry_delay=1.0):
                         snapshot = safe_battle_snapshot()
                         if snapshot is not None:
                             response["snapshot"] = snapshot
+                        render_frame = safe_render_frame()
+                        if render_frame is not None:
+                            response["render_frame"] = render_frame
                     remote.send(response)
+                elif cmd == "render_trace":
+                    remote.send({"render_frame": safe_render_frame()})
                 elif cmd == "reset":
                     reset_with_retry()
                     response = {

@@ -49,6 +49,10 @@ def _write_battle_trace_outputs(args, logger, trace):
     )
 
     logger.console_logger.info("Battle trace saved to {}".format(trace_path))
+    if "video" in paths:
+        logger.console_logger.info("Rendered trajectory video saved to {}".format(paths["video"]))
+    elif bool(getattr(args, "battle_trace_make_video", True)):
+        logger.console_logger.warning("No rendered trajectory video was produced for this trace.")
     if bool(getattr(args, "battle_trace_upload_wandb", True)):
         logger.log_battle_trace_media(paths, int(trace.get("t_env", 0)), fps=int(getattr(args, "battle_trace_fps", 6)))
 
@@ -222,6 +226,7 @@ def run_sequential(args, logger):
     last_log_T = 0
     model_save_time = 0
     last_battle_trace_T = 0
+    test_video_written = False
 
     start_time = time.time()
     last_time = start_time
@@ -276,10 +281,19 @@ def run_sequential(args, logger):
 
             last_test_T = runner.t_env
             trace_interval = int(getattr(args, "battle_trace_interval", 1000000))
-            should_trace = (
-                bool(getattr(args, "save_battle_trace", False))
-                and trace_interval > 0
+            trace_due = (
+                trace_interval > 0
                 and runner.t_env - last_battle_trace_T >= trace_interval
+            )
+            save_periodic_trace = bool(getattr(args, "save_battle_trace", False))
+            save_one_test_video = (
+                bool(getattr(args, "wandb_test_trajectory_video", False))
+                and bool(getattr(args, "use_wandb", False))
+                and not test_video_written
+            )
+            should_trace = (
+                trace_due
+                and (save_periodic_trace or save_one_test_video)
                 and hasattr(runner, "request_battle_trace")
             )
             trace_prefix = None
@@ -295,6 +309,8 @@ def run_sequential(args, logger):
                 if should_trace and test_run_idx == 0:
                     _write_battle_trace_outputs(args, logger, runner.pop_battle_trace())
                     last_battle_trace_T = runner.t_env
+                    if save_one_test_video:
+                        test_video_written = True
 
         if args.save_model and (runner.t_env - model_save_time >= args.save_model_interval or model_save_time == 0):
             model_save_time = runner.t_env
