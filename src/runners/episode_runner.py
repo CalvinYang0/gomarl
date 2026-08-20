@@ -57,6 +57,10 @@ class EpisodeRunner:
 
     def run(self, test_mode=False):
         self.reset(test_mode=test_mode)
+        if test_mode and hasattr(
+            self.mac, "reset_test_gate_probability_trajectory"
+        ):
+            self.mac.reset_test_gate_probability_trajectory()
 
         terminated = False
         episode_return = 0
@@ -129,6 +133,11 @@ class EpisodeRunner:
 
             self.t += 1
 
+        if test_mode and hasattr(
+            self.mac, "finalize_test_gate_probability_trajectory"
+        ):
+            self.mac.finalize_test_gate_probability_trajectory()
+
         last_data = {
             "state": [self.env.get_state()],
             "avail_actions": [self.env.get_avail_actions()],
@@ -199,6 +208,14 @@ class EpisodeRunner:
                             values,
                         )
                     )
+        if prefix == "test_" and hasattr(
+            self.mac, "pop_test_gate_probability_trajectory"
+        ):
+            trajectory = self.mac.pop_test_gate_probability_trajectory()
+            if trajectory is not None:
+                self.logger.log_test_gate_probability_trajectory(
+                    trajectory, self.t_env
+                )
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)
         self.logger.log_stat(prefix + "return_std", np.std(returns), self.t_env)
         returns.clear()

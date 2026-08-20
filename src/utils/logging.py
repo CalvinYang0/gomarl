@@ -15,6 +15,32 @@ class Logger:
         self.use_hdf = False
 
         self.stats = defaultdict(lambda: [])
+        # Keep local/TensorBoard/Sacred logging unchanged, but make W&B runs
+        # compact by default: only the requested performance, loss, and gate
+        # probability summaries are uploaded.
+        self.wandb_minimal_logging = True
+
+    @staticmethod
+    def _wandb_metric_allowed(key):
+        key = str(key)
+        if key in {
+            "game_win_mean",
+            "test_game_win_mean",
+            "battle_won_mean",
+            "test_battle_won_mean",
+            "ep_length_mean",
+            "test_ep_length_mean",
+            "dynamic_gate_probability_min",
+            "dynamic_gate_probability_max",
+            "dynamic_gate_linear_probability_mean",
+            "dynamic_gate_attention_probability_mean",
+        }:
+            return True
+        return (
+            key.startswith("loss")
+            or key.startswith("weighted_loss")
+            or key.endswith("_to_td_ratio")
+        )
 
     def _update_wandb_buffer(self, key, value, t):
         if not self.use_wandb:
@@ -47,6 +73,9 @@ class Logger:
 
         self.use_wandb = True
         self.wandb_module = wandb
+        self.wandb_minimal_logging = bool(
+            config.get("wandb_minimal_logging", True)
+        )
 
         alg_name = config.get("name", "unknown_alg")
         run_name = config.get("wandb_run_name", None)
@@ -100,7 +129,11 @@ class Logger:
 
         if self.use_wandb:
             wb_value = value.item() if hasattr(value, "item") else value
-            self._update_wandb_buffer(key, wb_value, t)
+            if (
+                not self.wandb_minimal_logging
+                or self._wandb_metric_allowed(key)
+            ):
+                self._update_wandb_buffer(key, wb_value, t)
 
         if self.use_sacred and to_sacred:
             if key in self.sacred_info:
@@ -112,7 +145,10 @@ class Logger:
             self._run_obj.log_scalar(key, value, t)
 
     def log_misc(self, key, value, t, to_sacred=True):
-        if self.use_wandb:
+        if self.use_wandb and (
+            not self.wandb_minimal_logging
+            or self._wandb_metric_allowed(key)
+        ):
             self._update_wandb_buffer(key, value, t)
 
         if self.use_sacred and to_sacred:
@@ -123,8 +159,80 @@ class Logger:
                 self.sacred_info["{}_T".format(key)] = [t]
                 self.sacred_info[key] = [value]
 
+    def log_test_gate_probability_trajectory(self, trajectory, t):
+        """Log one test trajectory as a compact W&B image.
+
+        The y-axis is drop probability (one minus keep probability).  The
+        dashed horizontal line is the deterministic test threshold converted
+        to drop space; slots above it are dropped by the test gate.
+        """
+        if not self.use_wandb or trajectory is None:
+            return
+        try:
+            import matplotlib.pyplot as plt
+
+            timesteps = trajectory["timesteps"]
+            slot_names = trajectory["slot_names"]
+            threshold = float(trajectory["threshold"])
+            branches = trajectory["branches"]
+            fig, axes = plt.subplots(
+                1,
+                len(branches),
+                figsize=(max(8.0, 3.8 * len(branches)), 4.2),
+                squeeze=False,
+                sharex=True,
+                sharey=True,
+            )
+            axes = axes[0]
+            for axis, (branch_name, values) in zip(axes, branches.items()):
+                values = np.asarray(values, dtype=float)
+                for slot_index, slot_name in enumerate(slot_names):
+                    axis.plot(
+                        timesteps,
+                        1.0 - values[:, slot_index],
+                        linewidth=1.2,
+                        label=str(slot_name),
+                    )
+                axis.axhline(
+                    1.0 - threshold,
+                    color="black",
+                    linestyle="--",
+                    linewidth=1.0,
+                    label="drop threshold",
+                )
+                axis.set_title(str(branch_name).capitalize())
+                axis.set_xlabel("timestep")
+                axis.set_ylabel("drop probability")
+                axis.set_ylim(0.0, 1.0)
+                axis.grid(alpha=0.25)
+            handles, labels = axes[-1].get_legend_handles_labels()
+            fig.legend(
+                handles,
+                labels,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.02),
+                ncol=min(4, max(1, len(labels))),
+                fontsize=7,
+            )
+            fig.suptitle(
+                "Test dynamic-gate trajectory "
+                "(dashed: drop threshold={:.2f})".format(threshold),
+                y=1.08,
+            )
+            fig.tight_layout()
+            self._update_wandb_buffer(
+                "test_dynamic_gate_trajectory",
+                self.wandb_module.Image(fig),
+                t,
+            )
+            plt.close(fig)
+        except Exception as exc:  # pragma: no cover - diagnostics must not stop training
+            self.console_logger.warning(
+                "Failed to create test dynamic-gate trajectory: %s", exc
+            )
+
     def log_battle_trace_media(self, paths, t, fps=6):
-        if not self.use_wandb:
+        if not self.use_wandb or self.wandb_minimal_logging:
             return
 
         if "battle_overview" in paths:

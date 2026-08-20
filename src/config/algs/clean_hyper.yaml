@@ -866,11 +866,19 @@ clean_bayesg_gate_temperature: 0.5
 clean_binary_concrete_temperature: 0.5
 # This intentionally matches BayesG's GraphMaskGenerator implementation.
 clean_bayesg_gate_eval_threshold: 0.08
+# Sparse binary-concrete experiments: KL80 can be evaluated with a 0.7 hard
+# threshold, KL70 with a 0.5 threshold, and bimodal_budget80 keeps the mean
+# probability near 0.8 while minimizing per-slot Bernoulli entropy.
+clean_dynamic_gate_entropy_coef: 1.0
+clean_dynamic_gate_budget_coef: 10.0
 # Corrected dynamic-gate baseline. It starts as a full-observation model and
 # enables independent deterministic scalar decisions only after the dual
 # condition has warmed up.
 clean_hard_gate_threshold: 0.5
 clean_hard_gate_initial_keep_probability: 0.55
+# Number of timesteps captured from the first deterministic test trajectory
+# for the W&B slot-wise drop-probability plot.
+clean_test_gate_trajectory_max_steps: 256
 clean_dynamic_branch_gate_warmup_steps: 250000
 clean_importance_auxiliary_warmup_steps: 250000
 clean_parameter_perturbation_relative_std: 0.05

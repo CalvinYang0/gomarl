@@ -527,6 +527,14 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_td_only_ball_interaction_two_head_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond",
+    # BayesG-style keep priors with explicit evaluation thresholds.  The
+    # threshold only affects deterministic test-time hard decisions; training
+    # still uses the same binary-concrete probabilities.
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_hypercond",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl70_hypercond",
+    # Keep probability near 0.8 while encouraging per-slot probabilities to
+    # become bimodal (near zero or one), instead of uniform 0.8 dropout.
+    "grf_abs_dual_branch_binary_concrete_bimodal_budget80_hypercond",
     "grf_abs_dual_branch_hard_concrete_l0_hypercond",
     "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond",
     "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond",
@@ -616,6 +624,9 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_td_only_ball_interaction_two_head_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl70_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_bimodal_budget80_hypercond": "binary_concrete",
     "grf_abs_dual_branch_hard_concrete_l0_hypercond": "hard_concrete",
     "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond": "binary_concrete",
@@ -632,7 +643,26 @@ GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL = {
         "bernoulli_kl",
         0.80,
     ),
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_hypercond": (
+        "bernoulli_kl",
+        0.80,
+    ),
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl70_hypercond": (
+        "bernoulli_kl",
+        0.70,
+    ),
+    "grf_abs_dual_branch_binary_concrete_bimodal_budget80_hypercond": (
+        "bimodal_budget",
+        0.80,
+    ),
     "grf_abs_dual_branch_hard_concrete_l0_hypercond": ("l0", 0.0),
+}
+GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL = {
+    # Deterministic evaluation policy for the requested threshold ablations.
+    # Training continues to use the differentiable binary-concrete gate.
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_hypercond": 0.70,
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl70_hypercond": 0.50,
+    "grf_abs_dual_branch_binary_concrete_bimodal_budget80_hypercond": 0.50,
 }
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_hypercond",
@@ -1723,6 +1753,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         dynamic_branch_gate_scope="both",
         dynamic_branch_gate_regularizer="none",
         dynamic_branch_gate_prior_keep=0.5,
+        dynamic_branch_gate_entropy_coef=1.0,
+        dynamic_branch_gate_budget_coef=10.0,
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -1882,9 +1914,11 @@ class PublicTransformerRelationCapturer(nn.Module):
             "none",
             "bernoulli_kl",
             "l0",
+            "bimodal_budget",
         }:
             raise ValueError(
-                "dynamic_branch_gate_regularizer must be none, bernoulli_kl, or l0"
+                "dynamic_branch_gate_regularizer must be none, bernoulli_kl, l0, "
+                "or bimodal_budget"
             )
         self.dynamic_branch_gate_prior_keep = float(
             dynamic_branch_gate_prior_keep
@@ -1894,6 +1928,20 @@ class PublicTransformerRelationCapturer(nn.Module):
                 raise ValueError(
                     "dynamic_branch_gate_prior_keep must be in (0, 1)"
                 )
+        self.dynamic_branch_gate_entropy_coef = float(
+            dynamic_branch_gate_entropy_coef
+        )
+        self.dynamic_branch_gate_budget_coef = float(
+            dynamic_branch_gate_budget_coef
+        )
+        if self.dynamic_branch_gate_entropy_coef < 0.0:
+            raise ValueError(
+                "dynamic_branch_gate_entropy_coef must be non-negative"
+            )
+        if self.dynamic_branch_gate_budget_coef < 0.0:
+            raise ValueError(
+                "dynamic_branch_gate_budget_coef must be non-negative"
+            )
         self._dynamic_branch_gate_t_env = 0
         self._dynamic_branch_gate_target_mode = False
         self._dynamic_branch_gate_force_open = False
@@ -2690,6 +2738,40 @@ class PublicTransformerRelationCapturer(nn.Module):
                             "dynamic_gate_exact_zero_fraction": (
                                 gates <= 0.0
                             ).float().mean().detach(),
+                        }
+                    )
+                elif self.dynamic_branch_gate_regularizer == "bimodal_budget":
+                    # Encourage each scalar gate probability to become
+                    # decisive (low Bernoulli entropy), while keeping the
+                    # mean keep probability close to the requested budget.
+                    # This is deliberately a single auxiliary scalar: the TD
+                    # objective remains the only signal for which individual
+                    # slots are useful.
+                    eps = 1e-6
+                    probability = raw_probabilities.clamp(eps, 1.0 - eps)
+                    entropy = -(
+                        probability * probability.log()
+                        + (1.0 - probability)
+                        * (1.0 - probability).log()
+                    ).mean()
+                    prior = probability.new_tensor(
+                        self.dynamic_branch_gate_prior_keep
+                    )
+                    flat_probability = probability.reshape(
+                        probability.shape[0], -1
+                    )
+                    branch_mean = flat_probability.mean(dim=1)
+                    budget_error = (branch_mean - prior).square().mean()
+                    regularizer = (
+                        self.dynamic_branch_gate_entropy_coef * entropy
+                        + self.dynamic_branch_gate_budget_coef * budget_error
+                    )
+                    self.latest_aux_stats.update(
+                        {
+                            "dynamic_gate_bimodal_entropy": entropy.detach(),
+                            "dynamic_gate_bimodal_budget_error": budget_error.detach(),
+                            "dynamic_gate_bimodal_mean_keep": branch_mean.mean().detach(),
+                            "dynamic_gate_bimodal_target_keep": prior.detach(),
                         }
                     )
             if regularizer is not None and regularizer.requires_grad:
@@ -4728,6 +4810,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         dynamic_branch_gate_scope="both",
         dynamic_branch_gate_regularizer="none",
         dynamic_branch_gate_prior_keep=0.5,
+        dynamic_branch_gate_entropy_coef=1.0,
+        dynamic_branch_gate_budget_coef=10.0,
     ):
         nn.Module.__init__(self)
         self.n_agents = n_agents
@@ -4879,9 +4963,11 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             "none",
             "bernoulli_kl",
             "l0",
+            "bimodal_budget",
         }:
             raise ValueError(
-                "dynamic_branch_gate_regularizer must be none, bernoulli_kl, or l0"
+                "dynamic_branch_gate_regularizer must be none, bernoulli_kl, l0, "
+                "or bimodal_budget"
             )
         self.dynamic_branch_gate_prior_keep = float(
             dynamic_branch_gate_prior_keep
@@ -4891,6 +4977,20 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
                 raise ValueError(
                     "dynamic_branch_gate_prior_keep must be in (0, 1)"
                 )
+        self.dynamic_branch_gate_entropy_coef = float(
+            dynamic_branch_gate_entropy_coef
+        )
+        self.dynamic_branch_gate_budget_coef = float(
+            dynamic_branch_gate_budget_coef
+        )
+        if self.dynamic_branch_gate_entropy_coef < 0.0:
+            raise ValueError(
+                "dynamic_branch_gate_entropy_coef must be non-negative"
+            )
+        if self.dynamic_branch_gate_budget_coef < 0.0:
+            raise ValueError(
+                "dynamic_branch_gate_budget_coef must be non-negative"
+            )
         self._dynamic_branch_gate_t_env = 0
         self._dynamic_branch_gate_target_mode = False
         self._dynamic_branch_gate_force_open = False
@@ -7800,12 +7900,31 @@ class CleanHyperAgent(nn.Module):
         self.bayesg_gate_eval_threshold = float(
             getattr(args, "clean_bayesg_gate_eval_threshold", 0.08)
         )
+        configured_hard_gate_threshold = getattr(
+            args, "clean_hard_gate_threshold", 0.5
+        )
         self.hard_gate_threshold = float(
-            getattr(args, "clean_hard_gate_threshold", 0.5)
+            GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL.get(
+                self.model_type, configured_hard_gate_threshold
+            )
         )
         self.hard_gate_initial_keep_probability = float(
             getattr(args, "clean_hard_gate_initial_keep_probability", 0.55)
         )
+        self.dynamic_branch_gate_entropy_coef = float(
+            getattr(args, "clean_dynamic_gate_entropy_coef", 1.0)
+        )
+        self.dynamic_branch_gate_budget_coef = float(
+            getattr(args, "clean_dynamic_gate_budget_coef", 10.0)
+        )
+        if self.dynamic_branch_gate_entropy_coef < 0.0:
+            raise ValueError(
+                "clean_dynamic_gate_entropy_coef must be non-negative"
+            )
+        if self.dynamic_branch_gate_budget_coef < 0.0:
+            raise ValueError(
+                "clean_dynamic_gate_budget_coef must be non-negative"
+            )
         self.dynamic_branch_gate_warmup_steps = int(
             getattr(args, "clean_dynamic_branch_gate_warmup_steps", 250000)
         )
@@ -9166,6 +9285,12 @@ class CleanHyperAgent(nn.Module):
                 GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL.get(
                     self.model_type, ("none", 0.5)
                 )[1]
+            ),
+            dynamic_branch_gate_entropy_coef=(
+                self.dynamic_branch_gate_entropy_coef
+            ),
+            dynamic_branch_gate_budget_coef=(
+                self.dynamic_branch_gate_budget_coef
             ),
         )
 

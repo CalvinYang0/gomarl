@@ -35,6 +35,9 @@ wandb_project: "gomarl" # W&B project name
 wandb_mode: "offline" # W&B mode: "offline" or "online"
 wandb_run_name: null # Optional explicit W&B run name (defaults to `name` when null)
 wandb_save_model: False # Save checkpoints into W&B run directory
+# Upload only performance, losses, gate probability summaries, and the test
+# gate trajectory image; local/TensorBoard/Sacred logs remain unchanged.
+wandb_minimal_logging: True
 save_model: False # Save the models to disk
 save_model_interval: 2000000 # Save models after this many timesteps
 save_model_at_end: False # Save one final checkpoint at the end of training

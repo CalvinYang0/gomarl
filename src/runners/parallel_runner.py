@@ -193,6 +193,10 @@ class ParallelRunner:
 
     def run(self, test_mode=False):
         self.reset(test_mode=test_mode)
+        if test_mode and hasattr(
+            self.mac, "reset_test_gate_probability_trajectory"
+        ):
+            self.mac.reset_test_gate_probability_trajectory()
 
         all_terminated = False
         episode_returns = [0 for _ in range(self.batch_size)]
@@ -303,6 +307,11 @@ class ParallelRunner:
 
             self.batch.update(pre_transition_data, bs=envs_not_terminated, ts=self.t, mark_filled=True)
 
+        if test_mode and hasattr(
+            self.mac, "finalize_test_gate_probability_trajectory"
+        ):
+            self.mac.finalize_test_gate_probability_trajectory()
+
         if not test_mode:
             self.t_env += self.env_steps_this_run
         elif trace_request is not None:
@@ -373,6 +382,14 @@ class ParallelRunner:
                             values,
                         )
                     )
+        if prefix == "test_" and hasattr(
+            self.mac, "pop_test_gate_probability_trajectory"
+        ):
+            trajectory = self.mac.pop_test_gate_probability_trajectory()
+            if trajectory is not None:
+                self.logger.log_test_gate_probability_trajectory(
+                    trajectory, self.t_env
+                )
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)
         self.logger.log_stat(prefix + "return_std", np.std(returns), self.t_env)
         returns.clear()

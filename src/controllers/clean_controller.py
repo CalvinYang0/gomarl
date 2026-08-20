@@ -14,6 +14,13 @@ class CleanMAC(BasicMAC):
         super().__init__(scheme, groups, args)
         self._test_gate_probability_sum = None
         self._test_gate_probability_count = 0
+        self._test_gate_trajectory_rows = []
+        self._test_gate_trajectory_active = False
+        self._test_gate_trajectory_last_t_ep = None
+        self._test_gate_trajectory_max_steps = max(
+            1,
+            int(getattr(args, "clean_test_gate_trajectory_max_steps", 256)),
+        )
 
     @staticmethod
     def _fixed_parameter_projection(parameter_parts, projection_dim):
@@ -83,13 +90,124 @@ class CleanMAC(BasicMAC):
         selected_actions = super().select_actions(
             ep_batch, t_ep, t_env, bs=bs, test_mode=test_mode
         )
-        if test_mode and bool(
-            getattr(self.args, "clean_print_test_slot_probabilities", True)
-        ):
-            self._accumulate_test_gate_probabilities(
-                bs, ep_batch.batch_size
+        if test_mode:
+            if bool(
+                getattr(self.args, "clean_print_test_slot_probabilities", True)
+            ):
+                self._accumulate_test_gate_probabilities(
+                    bs, ep_batch.batch_size
+                )
+            self._record_test_gate_probability_trajectory(
+                bs, ep_batch.batch_size, t_ep
             )
         return selected_actions
+
+    def reset_test_gate_probability_trajectory(self):
+        """Start capturing one deterministic test trajectory."""
+        if self._test_gate_trajectory_rows:
+            # Preserve the first trajectory until the runner logs it. This is
+            # important for EpisodeRunner, which executes several test
+            # episodes before emitting one aggregate test statistic.
+            return
+        self._test_gate_trajectory_rows = []
+        self._test_gate_trajectory_active = True
+        self._test_gate_trajectory_last_t_ep = None
+
+    def finalize_test_gate_probability_trajectory(self):
+        self._test_gate_trajectory_active = False
+
+    def _record_test_gate_probability_trajectory(
+        self, batch_selection, batch_size, t_ep
+    ):
+        if not self._test_gate_trajectory_active:
+            return
+        timestep = int(t_ep)
+        # A reset of t_ep marks the next episode. Keep only the first one.
+        if (
+            self._test_gate_trajectory_last_t_ep is not None
+            and timestep <= self._test_gate_trajectory_last_t_ep
+        ):
+            self._test_gate_trajectory_active = False
+            return
+        probabilities = getattr(
+            self, "latest_dynamic_branch_probabilities_graph", None
+        )
+        if probabilities is None or probabilities.dim() < 3:
+            return
+        probabilities = probabilities.detach()
+        slot_count = probabilities.size(-1)
+        if probabilities.dim() == 3:
+            expected = int(batch_size) * int(self.n_agents)
+            if probabilities.size(1) != expected:
+                return
+            probabilities = probabilities.reshape(
+                2, int(batch_size), int(self.n_agents), slot_count
+            )
+        elif probabilities.dim() != 4:
+            return
+
+        if isinstance(batch_selection, slice):
+            selected_indices = list(range(int(batch_size)))[batch_selection]
+        elif th.is_tensor(batch_selection):
+            selected_indices = batch_selection.detach().cpu().reshape(-1).tolist()
+        else:
+            selected_indices = list(batch_selection)
+        selected_indices = [int(index) for index in selected_indices]
+        if not selected_indices:
+            return
+        # ParallelRunner removes finished environments from ``bs``.  Once
+        # environment zero disappears, stop rather than silently switching
+        # the plot to another environment's trajectory.
+        if self._test_gate_trajectory_rows and 0 not in selected_indices:
+            self._test_gate_trajectory_active = False
+            return
+        # In a parallel test run, use environment zero when it is still
+        # active; otherwise use the first active environment as a fallback.
+        if probabilities.size(1) == len(selected_indices):
+            env_index = (
+                selected_indices.index(0) if 0 in selected_indices else 0
+            )
+        else:
+            env_index = 0 if 0 in selected_indices else selected_indices[0]
+        if env_index >= probabilities.size(1):
+            return
+        values = probabilities[:, env_index].mean(dim=1).cpu().tolist()
+        if len(values) != 2 or any(len(branch) != slot_count for branch in values):
+            return
+        self._test_gate_trajectory_rows.append((timestep, values[0], values[1]))
+        self._test_gate_trajectory_last_t_ep = timestep
+        if len(self._test_gate_trajectory_rows) >= self._test_gate_trajectory_max_steps:
+            self._test_gate_trajectory_active = False
+
+    def pop_test_gate_probability_trajectory(self):
+        if not self._test_gate_trajectory_rows:
+            return None
+        relation_capturer = getattr(self.agent, "rpg_relation_capturer", None)
+        slot_names = list(getattr(relation_capturer, "semantic_names", ()))
+        slot_count = len(self._test_gate_trajectory_rows[0][1])
+        if len(slot_names) != slot_count:
+            slot_names = ["slot_{}".format(index) for index in range(slot_count)]
+        trajectory = {
+            "timesteps": [row[0] for row in self._test_gate_trajectory_rows],
+            "slot_names": slot_names,
+            "threshold": float(
+                getattr(
+                    self.agent,
+                    "hard_gate_threshold",
+                    getattr(self.args, "clean_hard_gate_threshold", 0.5),
+                )
+            ),
+            "branches": {
+                "linear": [row[1] for row in self._test_gate_trajectory_rows],
+                "attention": [
+                    row[2] for row in self._test_gate_trajectory_rows
+                ],
+            },
+        }
+        self._test_gate_trajectory_rows = []
+        self._test_gate_trajectory_active = False
+        self._test_gate_trajectory_last_t_ep = None
+        return trajectory
 
     def _accumulate_test_gate_probabilities(
         self, batch_selection, batch_size

@@ -234,6 +234,9 @@ class CleanLearner:
         self.gate_regularization_active = model_type in {
             "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond",
             "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl70_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bimodal_budget80_hypercond",
             "grf_abs_dual_branch_hard_concrete_l0_hypercond",
         }
         self.perturbed_parameter_importance_active = model_type == (
@@ -376,6 +379,9 @@ class CleanLearner:
             "rpg_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
             "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond",
             "grf_abs_dual_branch_binary_concrete_bayesg_kl80_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl70_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bimodal_budget80_hypercond",
             "grf_abs_dual_branch_hard_concrete_l0_hypercond",
             "grf_abs_dual_branch_binary_concrete_perturb_param_importance_hypercond",
             "grf_abs_dual_branch_binary_concrete_gradient_importance_hypercond",

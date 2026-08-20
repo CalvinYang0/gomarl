@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from modules.agents.clean_hyper_agent import (  # noqa: E402
     GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL,
     GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL,
+    GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL,
     GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS,
     GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS,
     GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS,
@@ -194,6 +195,21 @@ def check_sparse_gate_variants():
             "bernoulli_kl",
             0.80,
         ),
+        "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_hypercond": (
+            "binary_concrete",
+            "bernoulli_kl",
+            0.80,
+        ),
+        "grf_abs_dual_branch_binary_concrete_bayesg_kl70_hypercond": (
+            "binary_concrete",
+            "bernoulli_kl",
+            0.70,
+        ),
+        "grf_abs_dual_branch_binary_concrete_bimodal_budget80_hypercond": (
+            "binary_concrete",
+            "bimodal_budget",
+            0.80,
+        ),
         "grf_abs_dual_branch_hard_concrete_l0_hypercond": (
             "hard_concrete",
             "l0",
@@ -233,12 +249,15 @@ def check_sparse_gate_variants():
                 regularizer,
                 prior,
             )
+        if model_name in GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL:
+            assert 0.0 < GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL[model_name] < 1.0
 
     obs = th.randn(2, 4, 30)
     hidden = th.zeros(2, 4, 16)
     for regularizer, prior, mode in (
         ("bernoulli_kl", 0.20, "binary_concrete"),
         ("bernoulli_kl", 0.80, "binary_concrete"),
+        ("bimodal_budget", 0.80, "binary_concrete"),
         ("l0", 0.0, "hard_concrete"),
     ):
         model = build_grf(
@@ -254,6 +273,9 @@ def check_sparse_gate_variants():
         assert model.dynamic_branch_gate.gate_network[-1].weight.grad is not None
         if mode == "hard_concrete":
             assert "dynamic_gate_expected_l0" in model.latest_aux_stats
+        elif regularizer == "bimodal_budget":
+            assert "dynamic_gate_bimodal_entropy" in model.latest_aux_stats
+            assert "dynamic_gate_bimodal_budget_error" in model.latest_aux_stats
         else:
             assert "dynamic_gate_bernoulli_kl" in model.latest_aux_stats
 
