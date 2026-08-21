@@ -127,7 +127,10 @@ fi
   buffer_size="$BUFFER_SIZE" \
   t_max="$T_MAX" \
   test_interval="$TEST_INTERVAL" \
-  save_battle_trace=False \
   name="${GROUP_NAME:-$RUN_NAME}" \
   wandb_run_name="$RUN_NAME" \
-  $EXTRA_ARGS
+  $EXTRA_ARGS \
+  save_battle_trace=False \
+  battle_trace_upload_wandb=False \
+  battle_trace_make_video=False \
+  wandb_test_trajectory_video=False

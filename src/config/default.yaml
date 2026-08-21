@@ -51,14 +51,14 @@ local_results_path: "results" # Path for local results
 save_battle_trace: False # Periodically render one traced test episode
 battle_trace_interval: 1000000 # Trace/upload interval in environment steps
 battle_trace_dir: "" # Empty means results/battle_traces/<unique_token>
-battle_trace_upload_wandb: True # Upload trace media when W&B is enabled
-battle_trace_make_video: True # Try to render mp4/gif in addition to PNG summaries
+battle_trace_upload_wandb: False # Battle-trace media is disabled for training runs
+battle_trace_make_video: False # Do not render mp4/gif during training
 battle_trace_frame_stride: 1 # Render every Nth environment frame into video
 battle_trace_fps: 6 # Video playback FPS
 battle_trace_similarity_sample_size: 256 # Max agent-time samples for similarity heatmaps
-# GRF can render RGB frames headlessly. Capture one test trajectory after the
-# first battle_trace_interval and upload its video to W&B.
-wandb_test_trajectory_video: True
+# Keep trajectory/video diagnostics opt-in: rendering failures must not stop a
+# long training run.
+wandb_test_trajectory_video: False
 
 # --- RL hyperparameters ---
 gamma: 0.99
