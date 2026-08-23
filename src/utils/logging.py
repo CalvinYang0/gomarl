@@ -168,6 +168,9 @@ class Logger:
         """
         if not self.use_wandb or trajectory is None:
             return
+        # Keep this diagnostic independent from the gate-probability figure:
+        # either plot should still be uploaded if the other one fails.
+        self._log_test_generated_parameter_pca(trajectory, t)
         try:
             import matplotlib.pyplot as plt
 
@@ -229,6 +232,95 @@ class Logger:
         except Exception as exc:  # pragma: no cover - diagnostics must not stop training
             self.console_logger.warning(
                 "Failed to create test dynamic-gate trajectory: %s", exc
+            )
+
+    def _log_test_generated_parameter_pca(self, trajectory, t):
+        """Plot exact generated hypernetwork parameters from one test episode.
+
+        Each timestep is one point. PCA is fitted only for visualization and
+        is never part of the model or its training objective.
+        """
+        parameter_vectors = trajectory.get("generated_parameter_vectors")
+        if parameter_vectors is None:
+            return
+        try:
+            import matplotlib.pyplot as plt
+
+            if th.is_tensor(parameter_vectors):
+                parameters = parameter_vectors.detach().cpu().numpy()
+            else:
+                parameters = np.asarray(parameter_vectors, dtype=np.float32)
+            if parameters.ndim != 2 or parameters.shape[0] < 2:
+                return
+
+            centered = parameters.astype(np.float64, copy=False)
+            centered = centered - centered.mean(axis=0, keepdims=True)
+            u, singular_values, _ = np.linalg.svd(
+                centered, full_matrices=False
+            )
+            component_count = min(2, singular_values.size)
+            coordinates = np.zeros((centered.shape[0], 2), dtype=np.float64)
+            coordinates[:, :component_count] = (
+                u[:, :component_count] * singular_values[:component_count]
+            )
+            variance = singular_values ** 2
+            variance_total = float(variance.sum())
+            explained = np.zeros(2, dtype=np.float64)
+            if variance_total > 0.0:
+                explained[:component_count] = (
+                    variance[:component_count] / variance_total
+                )
+
+            timesteps = np.asarray(trajectory["timesteps"], dtype=int)
+            fig, axis = plt.subplots(figsize=(6.8, 5.6))
+            axis.plot(
+                coordinates[:, 0],
+                coordinates[:, 1],
+                color="0.72",
+                linewidth=1.0,
+                zorder=1,
+            )
+            points = axis.scatter(
+                coordinates[:, 0],
+                coordinates[:, 1],
+                c=timesteps,
+                cmap="viridis",
+                s=34,
+                edgecolors="none",
+                zorder=2,
+            )
+            axis.scatter(
+                coordinates[0, 0], coordinates[0, 1],
+                marker="o", s=80, facecolors="none", edgecolors="black",
+                linewidths=1.3, label="start",
+            )
+            axis.scatter(
+                coordinates[-1, 0], coordinates[-1, 1],
+                marker="X", s=70, color="black", label="end",
+            )
+            axis.set_xlabel(
+                "PC1 ({:.1f}% variance)".format(100.0 * explained[0])
+            )
+            axis.set_ylabel(
+                "PC2 ({:.1f}% variance)".format(100.0 * explained[1])
+            )
+            axis.set_title(
+                "Generated hypernetwork parameters across one test episode"
+            )
+            axis.grid(alpha=0.25)
+            axis.legend(loc="best")
+            colorbar = fig.colorbar(points, ax=axis)
+            colorbar.set_label("timestep")
+            fig.tight_layout()
+            self._update_wandb_buffer(
+                "test_generated_parameter_pca_trajectory",
+                self.wandb_module.Image(fig),
+                t,
+            )
+            plt.close(fig)
+        except Exception as exc:  # pragma: no cover - diagnostics must not stop training
+            self.console_logger.warning(
+                "Failed to create test parameter PCA trajectory: %s", exc
             )
 
     def log_battle_trace_media(self, paths, t, fps=6):

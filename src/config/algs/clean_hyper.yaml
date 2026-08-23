@@ -879,6 +879,10 @@ clean_hard_gate_initial_keep_probability: 0.55
 # Number of timesteps captured from the first deterministic test trajectory
 # for the W&B slot-wise drop-probability plot.
 clean_test_gate_trajectory_max_steps: 256
+# Fit a visualization-only PCA to the exact generated hypernetwork parameters
+# collected from the same deterministic test trajectory. Each timestep is one
+# point; this does not add a model projection or affect optimization.
+wandb_test_parameter_pca: True
 clean_dynamic_branch_gate_warmup_steps: 250000
 clean_importance_auxiliary_warmup_steps: 250000
 clean_parameter_perturbation_relative_std: 0.05

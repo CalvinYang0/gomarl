@@ -21,6 +21,9 @@ class CleanMAC(BasicMAC):
             1,
             int(getattr(args, "clean_test_gate_trajectory_max_steps", 256)),
         )
+        self._test_parameter_pca_enabled = bool(
+            getattr(args, "wandb_test_parameter_pca", True)
+        )
 
     @staticmethod
     def _fixed_parameter_projection(parameter_parts, projection_dim):
@@ -174,7 +177,15 @@ class CleanMAC(BasicMAC):
         values = probabilities[:, env_index].mean(dim=1).cpu().tolist()
         if len(values) != 2 or any(len(branch) != slot_count for branch in values):
             return
-        self._test_gate_trajectory_rows.append((timestep, values[0], values[1]))
+        parameter_vector = self._test_generated_parameter_vector(
+            selected_indices,
+            env_index,
+            batch_size,
+            probabilities.size(1),
+        )
+        self._test_gate_trajectory_rows.append(
+            (timestep, values[0], values[1], parameter_vector)
+        )
         self._test_gate_trajectory_last_t_ep = timestep
         if len(self._test_gate_trajectory_rows) >= self._test_gate_trajectory_max_steps:
             self._test_gate_trajectory_active = False
@@ -204,10 +215,65 @@ class CleanMAC(BasicMAC):
                 ],
             },
         }
+        parameter_vectors = [row[3] for row in self._test_gate_trajectory_rows]
+        if parameter_vectors and all(
+            vector is not None for vector in parameter_vectors
+        ):
+            parameter_size = parameter_vectors[0].numel()
+            if all(vector.numel() == parameter_size for vector in parameter_vectors):
+                trajectory["generated_parameter_vectors"] = th.stack(
+                    parameter_vectors, dim=0
+                )
         self._test_gate_trajectory_rows = []
         self._test_gate_trajectory_active = False
         self._test_gate_trajectory_last_t_ep = None
         return trajectory
+
+    def _test_generated_parameter_vector(
+        self,
+        selected_indices,
+        selected_env_index,
+        full_batch_size,
+        active_batch_size,
+    ):
+        """Return one exact generated-head vector for the plotted environment.
+
+        All generated parameter blocks and all agents are concatenated in a
+        fixed order.  Keeping the exact vector here lets the logger fit a 2-D
+        PCA to the already collected deterministic test trajectory without an
+        additional environment rollout or model forward.
+        """
+        if not self._test_parameter_pca_enabled:
+            return None
+        parameter_parts = getattr(
+            self, "latest_generated_parameter_graph", None
+        )
+        if not parameter_parts:
+            return None
+
+        vectors = []
+        for parameter in parameter_parts:
+            if parameter is None or parameter.dim() < 1:
+                return None
+            detached = parameter.detach()
+            leading_size = detached.size(0)
+            if leading_size == int(active_batch_size) * int(self.n_agents):
+                environment_parameters = detached.reshape(
+                    int(active_batch_size), int(self.n_agents), -1
+                )[int(selected_env_index)]
+            elif leading_size == int(full_batch_size) * int(self.n_agents):
+                actual_environment = (
+                    0
+                    if 0 in selected_indices
+                    else int(selected_indices[int(selected_env_index)])
+                )
+                environment_parameters = detached.reshape(
+                    int(full_batch_size), int(self.n_agents), -1
+                )[actual_environment]
+            else:
+                return None
+            vectors.append(environment_parameters.reshape(-1).to("cpu", th.float32))
+        return th.cat(vectors, dim=0) if vectors else None
 
     def _accumulate_test_gate_probabilities(
         self, batch_selection, batch_size

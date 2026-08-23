@@ -59,6 +59,7 @@ battle_trace_similarity_sample_size: 256 # Max agent-time samples for similarity
 # Keep trajectory/video diagnostics opt-in: rendering failures must not stop a
 # long training run.
 wandb_test_trajectory_video: False
+wandb_test_parameter_pca: True
 
 # --- RL hyperparameters ---
 gamma: 0.99
