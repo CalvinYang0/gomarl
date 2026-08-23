@@ -897,6 +897,11 @@ clean_perturbed_head_minimum_rms: 0.001
 # auxiliary gradient and are judged solely by TD loss.
 clean_temporal_param_switch_margin: 0.1
 clean_temporal_param_scale_eps: 0.000001
+# Scale that maps normalized generated-parameter distance d_theta to the
+# bounded relation target d_theta / (d_theta + scale).  The relation loss
+# regresses the observation-conditioned mask distance to this detached target,
+# and is differentiated only with respect to the gate network.
+clean_mask_parameter_relation_scale: 0.1
 # Optional decoupled importance training. After the ordinary gate warm-up,
 # alternate 80k environment steps of TD-only non-gate updates with 20k steps
 # where only the gate receives TD plus its importance auxiliary.

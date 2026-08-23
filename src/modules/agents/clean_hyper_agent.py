@@ -552,6 +552,27 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
     "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond",
     "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
+    "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_temporal_param_stability_freeze2m_hypercond",
+    "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
+    "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl90_hypercond",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
+}
+GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS = {
+    "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond",
+}
+GRF_DUAL_BRANCH_TRAIN_GATE_FREEZE_STEPS_BY_MODEL = {
+    "grf_abs_dual_branch_binary_concrete_temporal_param_stability_freeze2m_hypercond": 2000000,
+}
+GRF_DUAL_BRANCH_MASK_PARAMETER_RELATION_VARIANTS = {
+    "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
+    "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
+    "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
 }
 GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond",
@@ -605,6 +626,9 @@ GRF_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS = (
         "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
         "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond",
         "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
+        "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond",
+        "grf_abs_dual_branch_binary_concrete_temporal_param_stability_freeze2m_hypercond",
+        *GRF_DUAL_BRANCH_MASK_PARAMETER_RELATION_VARIANTS,
     }
 )
 GRF_DUAL_BRANCH_DROP_MODE_BY_MODEL = {
@@ -644,6 +668,14 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_temporal_param_stability_freeze2m_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl90_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond": "binary_concrete",
 }
 GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": (
@@ -667,6 +699,18 @@ GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL = {
         0.80,
     ),
     "grf_abs_dual_branch_hard_concrete_l0_hypercond": ("l0", 0.0),
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl90_hypercond": (
+        "bernoulli_kl",
+        0.90,
+    ),
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond": (
+        "bernoulli_kl",
+        0.80,
+    ),
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond": (
+        "bernoulli_kl",
+        0.80,
+    ),
 }
 GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL = {
     # Deterministic evaluation policy for the requested threshold ablations.
@@ -674,6 +718,7 @@ GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_hypercond": 0.70,
     "grf_abs_dual_branch_binary_concrete_bayesg_kl70_hypercond": 0.50,
     "grf_abs_dual_branch_binary_concrete_bimodal_budget80_hypercond": 0.50,
+    "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond": 0.70,
 }
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_hypercond",
@@ -1015,6 +1060,7 @@ class ObservationConditionedBranchGate(nn.Module):
         hard_threshold=0.5,
         initial_keep_probability=0.55,
         gate_scope="both",
+        slot_group_ids=None,
         hard_concrete_gamma=-0.1,
         hard_concrete_zeta=1.1,
     ):
@@ -1046,6 +1092,18 @@ class ObservationConditionedBranchGate(nn.Module):
             )
 
         self.obs_dim = int(obs_dim)
+        if slot_group_ids is None:
+            slot_group_ids = tuple(range(self.obs_dim))
+        slot_group_ids = tuple(int(index) for index in slot_group_ids)
+        if len(slot_group_ids) != self.obs_dim:
+            raise ValueError("slot_group_ids must contain one id per raw slot")
+        unique_ids = sorted(set(slot_group_ids))
+        if unique_ids != list(range(len(unique_ids))):
+            raise ValueError("slot_group_ids must be contiguous from zero")
+        self.group_count = len(unique_ids)
+        self.register_buffer(
+            "slot_group_ids", th.tensor(slot_group_ids, dtype=th.long)
+        )
         self.mode = mode
         self.gate_scope = str(gate_scope)
         if self.gate_scope not in {"both", "shared"}:
@@ -1060,7 +1118,11 @@ class ObservationConditionedBranchGate(nn.Module):
         if not self.hard_concrete_gamma < 0.0 < self.hard_concrete_zeta:
             raise ValueError("hard_concrete_gamma/zeta must straddle zero")
         hidden_dim = int(hidden_dim)
-        output_dim = self.obs_dim if self.gate_scope == "shared" else 2 * self.obs_dim
+        output_dim = (
+            self.group_count
+            if self.gate_scope == "shared"
+            else 2 * self.group_count
+        )
         if hidden_dim > 0:
             self.gate_network = nn.Sequential(
                 nn.Linear(self.obs_dim, hidden_dim),
@@ -1089,10 +1151,14 @@ class ObservationConditionedBranchGate(nn.Module):
         logits = self.gate_network(obs)
         if self.gate_scope == "shared":
             logits = logits.unsqueeze(-2).expand(
-                *obs.shape[:-1], 2, self.obs_dim
+                *obs.shape[:-1], 2, self.group_count
             )
         else:
-            logits = logits.view(*obs.shape[:-1], 2, self.obs_dim)
+            logits = logits.view(*obs.shape[:-1], 2, self.group_count)
+        # A grouped-property gate predicts one decision for a repeated
+        # entity-type attribute (for example every opponent direction_x), then
+        # expands it back to the original scalar layout. x/y are never merged.
+        logits = logits.index_select(-1, self.slot_group_ids)
         probability = th.sigmoid(logits)
         expected_l0 = None
 
@@ -1762,6 +1828,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         hard_gate_initial_keep_probability=0.55,
         dynamic_branch_gate_warmup_steps=250000,
         dynamic_branch_gate_scope="both",
+        dynamic_branch_gate_group_properties=False,
+        dynamic_branch_gate_training_freeze_steps=0,
         dynamic_branch_gate_regularizer="none",
         dynamic_branch_gate_prior_keep=0.5,
         dynamic_branch_gate_entropy_coef=1.0,
@@ -1918,6 +1986,12 @@ class PublicTransformerRelationCapturer(nn.Module):
             raise ValueError(
                 "dynamic_branch_gate_scope must be both, attention_only, or shared"
             )
+        self.dynamic_branch_gate_group_properties = bool(
+            dynamic_branch_gate_group_properties
+        )
+        self.dynamic_branch_gate_training_freeze_steps = max(
+            0, int(dynamic_branch_gate_training_freeze_steps)
+        )
         self.dynamic_branch_gate_regularizer = str(
             dynamic_branch_gate_regularizer
         )
@@ -2232,6 +2306,7 @@ class PublicTransformerRelationCapturer(nn.Module):
                     if self.dynamic_branch_gate_scope == "shared"
                     else "both"
                 ),
+                slot_group_ids=self._dynamic_gate_slot_group_ids(),
             )
             if self.dynamic_branch_gate_mode is not None
             else None
@@ -2251,6 +2326,27 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.latest_aux_stats = {}
         self.latest_dual_linear_condition = None
         self.latest_dual_attention_condition = None
+
+    def _dynamic_gate_slot_group_ids(self):
+        """Share an attribute across repeated allies/opponents when requested."""
+        if not self.dynamic_branch_gate_group_properties:
+            return tuple(range(len(self.semantic_names)))
+        group_by_key = {}
+        group_ids = []
+        for slot_name in self.semantic_names:
+            parts = slot_name.split("_", 2)
+            if (
+                len(parts) == 3
+                and parts[0] in {"ally", "opponent"}
+                and parts[1].isdigit()
+            ):
+                key = (parts[0], parts[2])
+            else:
+                key = ("singleton", slot_name)
+            if key not in group_by_key:
+                group_by_key[key] = len(group_by_key)
+            group_ids.append(group_by_key[key])
+        return tuple(group_ids)
 
     def _l0_gate(self, reference):
         if self.l0_log_alpha is None:
@@ -2667,11 +2763,25 @@ class PublicTransformerRelationCapturer(nn.Module):
 
     def _branch_keep_gates(self, reference):
         if self.dynamic_branch_gate is not None:
+            training_gate_frozen = (
+                not self._semantic_test_mode
+                and self.dynamic_branch_gate_training_freeze_steps > 0
+                and self._dynamic_branch_gate_t_env
+                >= self.dynamic_branch_gate_training_freeze_steps
+            )
             gates, probabilities = self.dynamic_branch_gate(
                 reference,
-                sample=not self._semantic_test_mode,
-                deterministic_soft=self._dynamic_branch_gate_target_mode,
+                sample=not self._semantic_test_mode and not training_gate_frozen,
+                deterministic_soft=(
+                    self._dynamic_branch_gate_target_mode
+                    and not training_gate_frozen
+                ),
             )
+            if training_gate_frozen:
+                # From this point onward training uses exactly the same hard
+                # decision as evaluation and the gate receives no TD gradient.
+                gates = gates.detach()
+                probabilities = probabilities.detach()
             if self._dynamic_branch_gate_override is not None:
                 override = self._dynamic_branch_gate_override
                 if override.shape != gates.shape:
@@ -2702,10 +2812,14 @@ class PublicTransformerRelationCapturer(nn.Module):
                 # discontinuous gate decisions are allowed to affect it.
                 gates = th.ones_like(gates)
             self.latest_dynamic_branch_gates_graph = gates
-            raw_probabilities = getattr(
-                self.dynamic_branch_gate,
-                "latest_probability",
-                probabilities,
+            raw_probabilities = (
+                probabilities
+                if training_gate_frozen
+                else getattr(
+                    self.dynamic_branch_gate,
+                    "latest_probability",
+                    probabilities,
+                )
             )
             self.latest_dynamic_branch_probabilities_graph = raw_probabilities
             self.latest_dynamic_branch_logits_graph = getattr(
@@ -2713,7 +2827,11 @@ class PublicTransformerRelationCapturer(nn.Module):
             )
 
             regularizer = None
-            if not warmup_active and not self._dynamic_branch_gate_force_open:
+            if (
+                not warmup_active
+                and not training_gate_frozen
+                and not self._dynamic_branch_gate_force_open
+            ):
                 if self.dynamic_branch_gate_regularizer == "bernoulli_kl":
                     eps = 1e-6
                     probability = raw_probabilities.clamp(eps, 1.0 - eps)
@@ -2807,6 +2925,9 @@ class PublicTransformerRelationCapturer(nn.Module):
                     "dynamic_gate_probability_max": probabilities.max().detach(),
                     "dynamic_gate_warmup_active": reference.new_tensor(
                         float(warmup_active)
+                    ),
+                    "dynamic_gate_training_frozen": reference.new_tensor(
+                        float(training_gate_frozen)
                     ),
                 }
             )
@@ -4819,6 +4940,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         hard_gate_initial_keep_probability=0.55,
         dynamic_branch_gate_warmup_steps=250000,
         dynamic_branch_gate_scope="both",
+        dynamic_branch_gate_group_properties=False,
+        dynamic_branch_gate_training_freeze_steps=0,
         dynamic_branch_gate_regularizer="none",
         dynamic_branch_gate_prior_keep=0.5,
         dynamic_branch_gate_entropy_coef=1.0,
@@ -4967,6 +5090,12 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             raise ValueError(
                 "dynamic_branch_gate_scope must be both, attention_only, or shared"
             )
+        self.dynamic_branch_gate_group_properties = bool(
+            dynamic_branch_gate_group_properties
+        )
+        self.dynamic_branch_gate_training_freeze_steps = max(
+            0, int(dynamic_branch_gate_training_freeze_steps)
+        )
         self.dynamic_branch_gate_regularizer = str(
             dynamic_branch_gate_regularizer
         )
@@ -5213,6 +5342,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
                     if self.dynamic_branch_gate_scope == "shared"
                     else "both"
                 ),
+                slot_group_ids=self._dynamic_gate_slot_group_ids(),
             )
             if self.dynamic_branch_gate_mode is not None
             else None
@@ -9289,6 +9419,15 @@ class CleanHyperAgent(nn.Module):
                 else "attention_only"
                 if self.model_type in GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS
                 else "both"
+            ),
+            dynamic_branch_gate_group_properties=(
+                self.model_type
+                in GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS
+            ),
+            dynamic_branch_gate_training_freeze_steps=(
+                GRF_DUAL_BRANCH_TRAIN_GATE_FREEZE_STEPS_BY_MODEL.get(
+                    self.model_type, 0
+                )
             ),
             dynamic_branch_gate_regularizer=(
                 GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL.get(

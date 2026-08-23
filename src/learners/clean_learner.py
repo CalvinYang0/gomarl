@@ -238,6 +238,9 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_bayesg_kl70_hypercond",
             "grf_abs_dual_branch_binary_concrete_bimodal_budget80_hypercond",
             "grf_abs_dual_branch_hard_concrete_l0_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl90_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
         }
         self.perturbed_parameter_importance_active = model_type == (
             "grf_abs_dual_branch_binary_concrete_"
@@ -249,10 +252,21 @@ class CleanLearner:
         self.perturbed_head_td_quality_active = model_type in {
             "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
             "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
+            "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
         }
         self.temporal_param_stability_active = model_type in {
             "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond",
             "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond",
+            "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_param_stability_freeze2m_hypercond",
+            "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
+        }
+        self.mask_parameter_relation_active = model_type in {
+            "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
+            "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
+            "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
         }
         self.temporal_param_small_change_active = model_type in {
             "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
@@ -267,6 +281,7 @@ class CleanLearner:
             or self.gradient_importance_active
             or self.perturbed_head_td_quality_active
             or self.temporal_param_auxiliary_active
+            or self.mask_parameter_relation_active
         )
         self.importance_gate_parameters = ()
         if self.importance_auxiliary_active:
@@ -334,6 +349,11 @@ class CleanLearner:
         self.temporal_param_scale_eps = float(
             getattr(args, "clean_temporal_param_scale_eps", 1e-6)
         )
+        self.mask_parameter_relation_scale = float(
+            getattr(args, "clean_mask_parameter_relation_scale", 0.1)
+        )
+        if self.mask_parameter_relation_scale <= 0.0:
+            raise ValueError("clean_mask_parameter_relation_scale must be positive")
         if self.temporal_param_switch_margin <= 0.0:
             raise ValueError("clean_temporal_param_switch_margin must be positive")
         if self.temporal_param_scale_eps <= 0.0:
@@ -388,6 +408,14 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
             "grf_abs_dual_branch_binary_concrete_temporal_param_stability_hypercond",
             "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
+            "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_param_stability_freeze2m_hypercond",
+            "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
+            "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
+            "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl90_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
+            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
             "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
             "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond",
             "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
@@ -761,6 +789,53 @@ class CleanLearner:
         per_agent_change = th.stack(relative_changes, dim=0).mean(dim=0)
         valid = pair_valid.reshape(batch_size, 1).expand(-1, n_agents)
         return per_agent_change, valid.to(per_agent_change.dtype)
+
+    def _mask_parameter_relation_pair(
+        self,
+        previous_parameters,
+        current_parameters,
+        previous_probabilities,
+        current_probabilities,
+        pair_valid,
+        batch_size,
+        n_agents,
+    ):
+        """Match mask distance to detached generated-parameter distance.
+
+        Parameter distance supplies the mode label but receives no gradient
+        from this auxiliary objective. Thus only q(mask|obs) is organized:
+        nearby generated heads ask for nearby masks, while different heads ask
+        for proportionally separated masks. TD remains the sole trainer of the
+        condition encoder and hypernetwork.
+        """
+        parameter_change, valid = self._normalized_generated_parameter_change(
+            previous_parameters,
+            current_parameters,
+            pair_valid,
+            batch_size,
+            n_agents,
+            self.temporal_param_scale_eps,
+        )
+        if previous_probabilities.shape != current_probabilities.shape:
+            raise RuntimeError("Dynamic gate probability shapes do not match")
+        if previous_probabilities.size(0) != 2:
+            raise RuntimeError("Dynamic gate probabilities must start with two branches")
+        previous_probabilities = previous_probabilities.reshape(
+            2, batch_size, n_agents, -1
+        )
+        current_probabilities = current_probabilities.reshape(
+            2, batch_size, n_agents, -1
+        )
+        # [branch, batch, agent, raw-slot] -> [batch, agent]
+        mask_distance = (
+            current_probabilities - previous_probabilities
+        ).abs().mean(dim=(0, -1))
+        parameter_target = (
+            parameter_change.detach()
+            / (parameter_change.detach() + self.mask_parameter_relation_scale)
+        )
+        pair_loss = (mask_distance - parameter_target).abs()
+        return (pair_loss * valid).sum(), valid.sum(), mask_distance, parameter_target
 
     def _gradient_importance_gate_loss(self, td_loss, gate_graphs):
         """Penalize keeping slots whose sampled gates have low TD sensitivity.
@@ -1333,6 +1408,24 @@ class CleanLearner:
         temporal_param_change_sum = mask.new_zeros(())
         temporal_param_small_count = mask.new_zeros(())
         temporal_param_valid_count = mask.new_zeros(())
+        relation_parameters = (
+            []
+            if self.mask_parameter_relation_active
+            and importance_auxiliary_enabled
+            else None
+        )
+        relation_probabilities = (
+            []
+            if self.mask_parameter_relation_active
+            and importance_auxiliary_enabled
+            else None
+        )
+        relation_valid_steps = (
+            []
+            if self.mask_parameter_relation_active
+            and importance_auxiliary_enabled
+            else None
+        )
         perturbed_parameter_sum = None
         perturbed_parameter_count = mask.new_zeros(())
         perturb_probe_times = (
@@ -1633,6 +1726,28 @@ class CleanLearner:
                             temporal_param_valid_count + valid_float.sum()
                         )
                     previous_temporal_parameters = current_temporal_parameters
+                if relation_parameters is not None and t < mask.shape[1]:
+                    current_relation_parameters = getattr(
+                        self.mac, "latest_generated_parameter_graph", None
+                    )
+                    current_relation_probabilities = getattr(
+                        self.mac,
+                        "latest_dynamic_branch_probabilities_graph",
+                        None,
+                    )
+                    if (
+                        current_relation_parameters is None
+                        or current_relation_probabilities is None
+                    ):
+                        raise RuntimeError(
+                            "Mask-parameter relation requires exact generated "
+                            "parameters and dynamic gate probabilities"
+                        )
+                    relation_parameters.append(current_relation_parameters)
+                    relation_probabilities.append(current_relation_probabilities)
+                    relation_valid_steps.append(
+                        mask[:, t].reshape(batch.batch_size) > 0
+                    )
                 if t in perturb_probe_times:
                     base_parameters = getattr(
                         self.mac, "latest_generated_parameter_graph", None
@@ -1717,6 +1832,47 @@ class CleanLearner:
             self.mac.agent.capture_semantic_parameter_graph = False
             if semantic_router is not None:
                 semantic_router.capture_semantic_observation_score = False
+            mask_parameter_relation_sum = None
+            mask_parameter_relation_count = mask.new_zeros(())
+            mask_parameter_pair_count = 0
+            if relation_parameters is not None and len(relation_parameters) > 1:
+                pair_indices = set()
+                for current_index in range(1, len(relation_parameters)):
+                    pair_indices.add((current_index - 1, current_index))
+                    # A non-local pair keeps revisited/different behavior modes
+                    # visible without the O(T^2) cost of every trajectory pair.
+                    anchor_index = current_index // 2
+                    if anchor_index < current_index - 1:
+                        pair_indices.add((anchor_index, current_index))
+                for previous_index, current_index in sorted(pair_indices):
+                    pair_valid = (
+                        relation_valid_steps[previous_index]
+                        & relation_valid_steps[current_index]
+                    )
+                    (
+                        pair_sum,
+                        pair_count,
+                        _,
+                        _,
+                    ) = self._mask_parameter_relation_pair(
+                        relation_parameters[previous_index],
+                        relation_parameters[current_index],
+                        relation_probabilities[previous_index],
+                        relation_probabilities[current_index],
+                        pair_valid,
+                        batch.batch_size,
+                        self.args.n_agents,
+                    )
+                    mask_parameter_relation_sum = (
+                        pair_sum
+                        if mask_parameter_relation_sum is None
+                        else mask_parameter_relation_sum + pair_sum
+                    )
+                    mask_parameter_relation_count = (
+                        mask_parameter_relation_count + pair_count
+                    )
+                    mask_parameter_pair_count += 1
+
             mac_out = th.stack(mac_out, dim=1)
             teacher_mac_out = (
                 th.stack(teacher_mac_out, dim=1)
@@ -1914,6 +2070,12 @@ class CleanLearner:
                     temporal_param_loss_sum
                     / temporal_param_valid_count.clamp(min=1.0)
                 )
+            mask_parameter_relation_loss = td_loss.new_zeros(())
+            if mask_parameter_relation_sum is not None:
+                mask_parameter_relation_loss = (
+                    mask_parameter_relation_sum
+                    / mask_parameter_relation_count.clamp(min=1.0)
+                )
             condition_gradient_consistency_coef = (
                 self.condition_gradient_consistency_coef
             )
@@ -1928,9 +2090,35 @@ class CleanLearner:
             gradient_importance_coef = 0.0
             perturbed_head_td_quality_coef = 0.0
             temporal_param_auxiliary_coef = 0.0
+            mask_parameter_combined_auxiliary_coef = 0.0
             adaptive_auxiliary_enabled = False
             if self.adaptive_auxiliary_ratio_active:
-                if self.gate_regularization_active and aux_losses:
+                if self.mask_parameter_relation_active:
+                    combined_relation_objective = mask_parameter_relation_loss
+                    if self.temporal_param_auxiliary_active:
+                        combined_relation_objective = (
+                            combined_relation_objective
+                            + temporal_param_auxiliary_loss
+                        )
+                    if self.perturbed_head_td_quality_active:
+                        combined_relation_objective = (
+                            combined_relation_objective
+                            + perturbed_head_td_quality_loss
+                        )
+                    if self.gate_regularization_active and aux_losses:
+                        combined_relation_objective = (
+                            combined_relation_objective + aux_loss
+                        )
+                        # The KL term joins the gate-only bundle below so all
+                        # requested auxiliaries share one 10%-of-TD budget.
+                        gate_auxiliary_coef = 0.0
+                    mask_parameter_combined_auxiliary_coef = (
+                        self._adaptive_auxiliary_coefficient(
+                            td_loss, combined_relation_objective
+                        )
+                    )
+                    adaptive_auxiliary_enabled = True
+                elif self.gate_regularization_active and aux_losses:
                     gate_auxiliary_coef = self._adaptive_auxiliary_coefficient(
                         td_loss, aux_loss
                     )
@@ -1995,6 +2183,26 @@ class CleanLearner:
                 self.latest_adaptive_auxiliary_stats = {}
             gate_only_importance_loss = None
             if (
+                self.mask_parameter_relation_active
+                and mask_parameter_relation_sum is not None
+                and mask_parameter_combined_auxiliary_coef > 0.0
+            ):
+                combined_gate_auxiliary = mask_parameter_relation_loss
+                if self.temporal_param_auxiliary_active:
+                    combined_gate_auxiliary = (
+                        combined_gate_auxiliary + temporal_param_auxiliary_loss
+                    )
+                if self.perturbed_head_td_quality_active:
+                    combined_gate_auxiliary = (
+                        combined_gate_auxiliary + perturbed_head_td_quality_loss
+                    )
+                if self.gate_regularization_active and aux_losses:
+                    combined_gate_auxiliary = combined_gate_auxiliary + aux_loss
+                gate_only_importance_loss = (
+                    mask_parameter_combined_auxiliary_coef
+                    * combined_gate_auxiliary
+                )
+            elif (
                 self.perturbed_parameter_importance_active
                 and perturbed_parameter_sum is not None
                 and perturbed_parameter_importance_coef > 0.0
@@ -2387,6 +2595,49 @@ class CleanLearner:
                         ).item(),
                         t_env,
                     )
+            if self.mask_parameter_relation_active:
+                weighted_relation_bundle = (
+                    mask_parameter_combined_auxiliary_coef
+                    * (
+                        mask_parameter_relation_loss.item()
+                        + (
+                            temporal_param_auxiliary_loss.item()
+                            if self.temporal_param_auxiliary_active
+                            else 0.0
+                        )
+                        + (
+                            perturbed_head_td_quality_loss.item()
+                            if self.perturbed_head_td_quality_active
+                            else 0.0
+                        )
+                        + (
+                            aux_loss.item()
+                            if gate_regularization_active and aux_losses
+                            else 0.0
+                        )
+                    )
+                )
+                self.logger.log_stat(
+                    "loss_mask_parameter_relation",
+                    mask_parameter_relation_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_mask_parameter_relation_bundle",
+                    weighted_relation_bundle,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "mask_parameter_relation_to_td_ratio",
+                    weighted_relation_bundle
+                    / max(td_loss.item(), self.adaptive_auxiliary_eps),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "mask_parameter_relation_pair_count",
+                    float(mask_parameter_pair_count),
+                    t_env,
+                )
             for stat_name, values in aux_stat_values.items():
                 if values:
                     self.logger.log_stat(stat_name, th.stack(values).mean().item(), t_env)
