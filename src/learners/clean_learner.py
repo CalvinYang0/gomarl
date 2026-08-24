@@ -554,6 +554,18 @@ class CleanLearner:
             else:
                 parameter.grad.add_(gradient.detach())
 
+    def _dynamic_gate_training_is_frozen(self, t_env):
+        """Return whether the online dynamic gate has reached its freeze step."""
+        relation_capturer = getattr(self.mac.agent, "rpg_relation_capturer", None)
+        freeze_steps = int(
+            getattr(
+                relation_capturer,
+                "dynamic_branch_gate_training_freeze_steps",
+                0,
+            )
+        )
+        return freeze_steps > 0 and int(t_env) >= freeze_steps
+
     def _backward_parameters_only(self, loss, parameters):
         """Differentiate one loss only with respect to the selected parameters."""
         parameters = tuple(parameters)
@@ -2181,6 +2193,23 @@ class CleanLearner:
                     adaptive_auxiliary_enabled = True
             if not adaptive_auxiliary_enabled:
                 self.latest_adaptive_auxiliary_stats = {}
+
+            dynamic_gate_training_frozen = (
+                self._dynamic_gate_training_is_frozen(t_env)
+            )
+            if dynamic_gate_training_frozen:
+                # The capturer detaches both gates and probabilities once the
+                # freeze step is reached.  From then on the rest of the model
+                # continues TD training with evaluation-equivalent hard gates,
+                # while every gate-only objective must be inactive as well.
+                gate_auxiliary_coef = 0.0
+                perturbed_parameter_importance_coef = 0.0
+                gradient_importance_coef = 0.0
+                perturbed_head_td_quality_coef = 0.0
+                temporal_param_auxiliary_coef = 0.0
+                mask_parameter_combined_auxiliary_coef = 0.0
+                self.latest_adaptive_auxiliary_stats = {}
+
             gate_only_importance_loss = None
             if (
                 self.mask_parameter_relation_active
@@ -2612,7 +2641,7 @@ class CleanLearner:
                         )
                         + (
                             aux_loss.item()
-                            if gate_regularization_active and aux_losses
+                            if self.gate_regularization_active and aux_losses
                             else 0.0
                         )
                     )

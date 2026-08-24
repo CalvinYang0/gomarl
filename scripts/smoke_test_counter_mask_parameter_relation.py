@@ -3,6 +3,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch as th
 
@@ -148,6 +149,19 @@ def check_freeze_matches_evaluation():
     assert th.allclose(train_condition, test_condition)
 
 
+def check_learner_freeze_boundary():
+    learner = CleanLearner.__new__(CleanLearner)
+    capturer = SimpleNamespace(dynamic_branch_gate_training_freeze_steps=2000000)
+    learner.mac = SimpleNamespace(
+        agent=SimpleNamespace(rpg_relation_capturer=capturer)
+    )
+    assert not learner._dynamic_gate_training_is_frozen(1999999)
+    assert learner._dynamic_gate_training_is_frozen(2000000)
+
+    capturer.dynamic_branch_gate_training_freeze_steps = 0
+    assert not learner._dynamic_gate_training_is_frozen(10000000)
+
+
 def check_relation_gradient_boundary():
     learner = CleanLearner.__new__(CleanLearner)
     learner.mask_parameter_relation_scale = 0.1
@@ -184,6 +198,7 @@ def main():
     check_registration()
     check_grouped_property_gate()
     check_freeze_matches_evaluation()
+    check_learner_freeze_boundary()
     check_relation_gradient_boundary()
     print("counter_mask_parameter_relation eight_variants=ok")
 
