@@ -21,6 +21,10 @@ INITIAL_KEEP_PROBABILITY="${INITIAL_KEEP_PROBABILITY:-0.95}"
 BINARY_CONCRETE_TEMPERATURE="${BINARY_CONCRETE_TEMPERATURE:-0.5}"
 AUXILIARY_TARGET_RATIO="${AUXILIARY_TARGET_RATIO:-0.10}"
 RELATION_SCALE="${RELATION_SCALE:-0.10}"
+RELATION_COEF="${RELATION_COEF:-10.0}"
+RELATION_TEMPORAL_COEF="${RELATION_TEMPORAL_COEF:-50.0}"
+RELATION_PERTURBED_HEAD_COEF="${RELATION_PERTURBED_HEAD_COEF:-1.0}"
+RELATION_GATE_REGULARIZATION_COEF="${RELATION_GATE_REGULARIZATION_COEF:-1.0}"
 SUBMIT_GAP_SECONDS="${SUBMIT_GAP_SECONDS:-1}"
 USE_WANDB="${USE_WANDB:-True}"
 WANDB_MODE="${WANDB_MODE:-offline}"
@@ -41,7 +45,7 @@ fi
 
 "$PYTHON_BIN" scripts/smoke_test_counter_mask_parameter_relation.py
 
-common_args="$EXTRA_ARGS torch_num_threads=$TORCH_NUM_THREADS torch_num_interop_threads=1 learner_updates_per_collect=1 clean_relation_teacher_td_coef=0.0 clean_relation_distill_coef=0.0 clean_smooth_head_loss_coef=0.0 clean_action_pred_loss_coef=0.0 clean_public_delta_loss_coef=0.0 clean_condition_gradient_consistency_coef=0.0 clean_generated_parameter_stability_coef=0.0 clean_td_weighted_parameter_likelihood_coef=0.0 clean_hard_gate_initial_keep_probability=$INITIAL_KEEP_PROBABILITY clean_binary_concrete_temperature=$BINARY_CONCRETE_TEMPERATURE clean_dynamic_branch_gate_warmup_steps=250000 clean_importance_auxiliary_warmup_steps=250000 clean_adaptive_auxiliary_target_ratio=$AUXILIARY_TARGET_RATIO clean_mask_parameter_relation_scale=$RELATION_SCALE clean_importance_alternating_training=False env_worker_startup_stagger=0.25 env_worker_reset_retries=5 env_worker_reset_retry_delay=2.0 env_worker_response_timeout=180.0 env_args.write_video=False save_battle_trace=False"
+common_args="$EXTRA_ARGS torch_num_threads=$TORCH_NUM_THREADS torch_num_interop_threads=1 learner_updates_per_collect=1 clean_relation_teacher_td_coef=0.0 clean_relation_distill_coef=0.0 clean_smooth_head_loss_coef=0.0 clean_action_pred_loss_coef=0.0 clean_public_delta_loss_coef=0.0 clean_condition_gradient_consistency_coef=0.0 clean_generated_parameter_stability_coef=0.0 clean_td_weighted_parameter_likelihood_coef=0.0 clean_hard_gate_initial_keep_probability=$INITIAL_KEEP_PROBABILITY clean_binary_concrete_temperature=$BINARY_CONCRETE_TEMPERATURE clean_dynamic_branch_gate_warmup_steps=250000 clean_importance_auxiliary_warmup_steps=250000 clean_adaptive_auxiliary_target_ratio=$AUXILIARY_TARGET_RATIO clean_mask_parameter_relation_scale=$RELATION_SCALE clean_mask_parameter_relation_coef=$RELATION_COEF clean_mask_parameter_relation_temporal_coef=$RELATION_TEMPORAL_COEF clean_mask_parameter_relation_perturbed_head_coef=$RELATION_PERTURBED_HEAD_COEF clean_mask_parameter_relation_gate_regularization_coef=$RELATION_GATE_REGULARIZATION_COEF clean_importance_alternating_training=False env_worker_startup_stagger=0.25 env_worker_reset_retries=5 env_worker_reset_retry_delay=2.0 env_worker_response_timeout=180.0 env_args.write_video=False save_battle_trace=False"
 
 active_job() {
   local exact_name="$1"
