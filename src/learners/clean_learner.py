@@ -260,6 +260,10 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond",
             "grf_abs_dual_branch_binary_concrete_temporal_param_stability_freeze2m_hypercond",
             "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_relation_group_gate_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_relation_group_distance_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_param_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_mask_hypercond",
         }
         self.mask_parameter_relation_active = model_type in {
             "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
@@ -267,7 +271,22 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
             "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
             "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_relation_group_gate_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_relation_group_distance_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_param_hypercond",
+            "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_mask_hypercond",
         }
+        self.mask_parameter_relation_group_distance = model_type == (
+            "grf_abs_dual_branch_binary_concrete_"
+            "temporal_relation_group_distance_hypercond"
+        )
+        self.mask_parameter_relation_stop_side = (
+            "mask"
+            if model_type
+            == "grf_abs_dual_branch_binary_concrete_"
+            "temporal_relation_stop_mask_hypercond"
+            else "parameter"
+        )
         self.temporal_param_small_change_active = model_type in {
             "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
             "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
@@ -312,6 +331,19 @@ class CleanLearner:
             for parameter in self.params
             if id(parameter) not in gate_parameter_ids
         )
+        self.mask_parameter_relation_group_ids = None
+        if self.mask_parameter_relation_group_distance:
+            relation_capturer = getattr(
+                self.mac.agent, "rpg_relation_capturer", None
+            )
+            semantic_names = getattr(relation_capturer, "semantic_names", None)
+            if semantic_names is None:
+                raise RuntimeError(
+                    "Group-distance relation requires GRF semantic slot names"
+                )
+            self.mask_parameter_relation_group_ids = (
+                self._property_group_ids(semantic_names)
+            )
         self.importance_auxiliary_warmup_steps = max(
             0,
             int(
@@ -831,13 +863,14 @@ class CleanLearner:
         batch_size,
         n_agents,
     ):
-        """Match mask distance to detached generated-parameter distance.
+        """Match mask distance to generated-parameter distance.
 
-        Parameter distance supplies the mode label but receives no gradient
-        from this auxiliary objective. Thus only q(mask|obs) is organized:
-        nearby generated heads ask for nearby masks, while different heads ask
-        for proportionally separated masks. TD remains the sole trainer of the
-        condition encoder and hypernetwork.
+        The default/stop-parameter direction treats parameter distance as a
+        detached mode label and organizes q(mask|obs).  The stop-mask ablation
+        reverses that relation gradient: mask distance is the detached label
+        and generated-parameter distance receives the relation signal.  In
+        either case the learner requests auxiliary gradients only for gate
+        parameters, so TD remains the sole updater of the main network.
         """
         parameter_change, valid = self._normalized_generated_parameter_change(
             previous_parameters,
@@ -857,16 +890,72 @@ class CleanLearner:
         current_probabilities = current_probabilities.reshape(
             2, batch_size, n_agents, -1
         )
+        if self.mask_parameter_relation_group_distance:
+            previous_probabilities = self._group_mask_probabilities(
+                previous_probabilities
+            )
+            current_probabilities = self._group_mask_probabilities(
+                current_probabilities
+            )
         # [branch, batch, agent, raw-slot] -> [batch, agent]
         mask_distance = (
             current_probabilities - previous_probabilities
         ).abs().mean(dim=(0, -1))
-        parameter_target = (
-            parameter_change.detach()
-            / (parameter_change.detach() + self.mask_parameter_relation_scale)
-        )
+        if self.mask_parameter_relation_stop_side == "mask":
+            mask_distance = mask_distance.detach()
+            parameter_target = parameter_change / (
+                parameter_change.detach() + self.mask_parameter_relation_scale
+            )
+        else:
+            parameter_target = (
+                parameter_change.detach()
+                / (parameter_change.detach() + self.mask_parameter_relation_scale)
+            )
         pair_loss = (mask_distance - parameter_target).abs()
         return (pair_loss * valid).sum(), valid.sum(), mask_distance, parameter_target
+
+    @staticmethod
+    def _property_group_ids(slot_names):
+        """Group repeated ally/opponent attributes without merging x/y."""
+        group_by_key = {}
+        group_ids = []
+        for slot_name in slot_names:
+            parts = slot_name.split("_", 2)
+            if (
+                len(parts) == 3
+                and parts[0] in {"ally", "opponent"}
+                and parts[1].isdigit()
+            ):
+                key = (parts[0], parts[2])
+            else:
+                key = ("singleton", slot_name)
+            if key not in group_by_key:
+                group_by_key[key] = len(group_by_key)
+            group_ids.append(group_by_key[key])
+        return tuple(group_ids)
+
+    def _group_mask_probabilities(self, probabilities):
+        """Mean-pool a raw-slot mask into a permutation-invariant group mask."""
+        group_ids = th.as_tensor(
+            self.mask_parameter_relation_group_ids,
+            device=probabilities.device,
+            dtype=th.long,
+        )
+        if probabilities.size(-1) != group_ids.numel():
+            raise RuntimeError("Mask slots do not match relation group ids")
+        group_count = int(group_ids.max().item()) + 1
+        grouped = probabilities.new_zeros(*probabilities.shape[:-1], group_count)
+        scatter_index = group_ids.view(
+            *((1,) * (probabilities.dim() - 1)), group_ids.numel()
+        ).expand_as(probabilities)
+        grouped.scatter_add_(-1, scatter_index, probabilities)
+        counts = probabilities.new_zeros(group_count)
+        counts.scatter_add_(
+            0,
+            group_ids,
+            probabilities.new_ones(group_ids.numel()),
+        )
+        return grouped / counts.clamp(min=1.0)
 
     def _gradient_importance_gate_loss(self, td_loss, gate_graphs):
         """Penalize keeping slots whose sampled gates have low TD sensitivity.

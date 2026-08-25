@@ -15,6 +15,7 @@ from learners.clean_learner import CleanLearner  # noqa: E402
 from modules.agents.clean_hyper_agent import (  # noqa: E402
     GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL,
     GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS,
+    GRF_DUAL_BRANCH_PERMUTATION_INVARIANT_GROUP_GATE_VARIANTS,
     GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL,
     GRF_DUAL_BRANCH_MASK_PARAMETER_RELATION_VARIANTS,
     GRF_DUAL_BRANCH_TRAIN_GATE_FREEZE_STEPS_BY_MODEL,
@@ -52,6 +53,22 @@ KL80_RELATION_KEEP = (
     "grf_abs_dual_branch_binary_concrete_"
     "bayesg_kl80_keep_relation_hypercond"
 )
+TEMPORAL_GROUP_GATE = (
+    "grf_abs_dual_branch_binary_concrete_"
+    "temporal_relation_group_gate_hypercond"
+)
+TEMPORAL_GROUP_DISTANCE = (
+    "grf_abs_dual_branch_binary_concrete_"
+    "temporal_relation_group_distance_hypercond"
+)
+TEMPORAL_STOP_PARAM = (
+    "grf_abs_dual_branch_binary_concrete_"
+    "temporal_relation_stop_param_hypercond"
+)
+TEMPORAL_STOP_MASK = (
+    "grf_abs_dual_branch_binary_concrete_"
+    "temporal_relation_stop_mask_hypercond"
+)
 
 
 def build_grf(**kwargs):
@@ -81,9 +98,16 @@ def check_registration():
         KL90,
         KL80_RELATION_T70,
         KL80_RELATION_KEEP,
+        TEMPORAL_GROUP_GATE,
+        TEMPORAL_GROUP_DISTANCE,
+        TEMPORAL_STOP_PARAM,
+        TEMPORAL_STOP_MASK,
     }
     assert variants <= GRF_DUAL_BRANCH_VARIANTS
     assert GROUPED in GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS
+    assert TEMPORAL_GROUP_GATE in (
+        GRF_DUAL_BRANCH_PERMUTATION_INVARIANT_GROUP_GATE_VARIANTS
+    )
     assert GRF_DUAL_BRANCH_TRAIN_GATE_FREEZE_STEPS_BY_MODEL[FREEZE] == 2000000
     assert {
         RELATION,
@@ -91,6 +115,10 @@ def check_registration():
         RELATION_PERTURBED,
         KL80_RELATION_T70,
         KL80_RELATION_KEEP,
+        TEMPORAL_GROUP_GATE,
+        TEMPORAL_GROUP_DISTANCE,
+        TEMPORAL_STOP_PARAM,
+        TEMPORAL_STOP_MASK,
     } <= GRF_DUAL_BRANCH_MASK_PARAMETER_RELATION_VARIANTS
     assert GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL[KL90] == (
         "bernoulli_kl",
@@ -126,6 +154,31 @@ def check_grouped_property_gate():
         probabilities[..., names.index("opponent_0_direction_x")],
         probabilities[..., names.index("opponent_1_direction_x")],
     )
+
+
+def check_permutation_invariant_group_gate():
+    model = build_grf(
+        dynamic_branch_gate_group_properties=True,
+        dynamic_branch_gate_group_input=True,
+    )
+    generator = model.dynamic_branch_gate
+    # The production gate initializes its final layer to a constant prior.
+    # Give the smoke test non-constant weights so invariance is verified for
+    # the grouped computation itself rather than passing trivially at init.
+    with th.no_grad():
+        for parameter in generator.gate_network.parameters():
+            parameter.uniform_(-0.3, 0.3)
+    names = list(model.semantic_names)
+    obs = th.randn(2, 4, 30)
+    permuted = obs.clone()
+    for suffix in ("relative_x", "relative_y", "direction_x", "direction_y"):
+        left = names.index("ally_0_{}".format(suffix))
+        right = names.index("ally_1_{}".format(suffix))
+        permuted[..., left] = obs[..., right]
+        permuted[..., right] = obs[..., left]
+    _, original_probability = generator(obs, sample=False)
+    _, permuted_probability = generator(permuted, sample=False)
+    assert th.allclose(original_probability, permuted_probability)
 
 
 def check_freeze_matches_evaluation():
@@ -166,6 +219,9 @@ def check_relation_gradient_boundary():
     learner = CleanLearner.__new__(CleanLearner)
     learner.mask_parameter_relation_scale = 0.1
     learner.temporal_param_scale_eps = 1e-6
+    learner.mask_parameter_relation_group_distance = False
+    learner.mask_parameter_relation_group_ids = None
+    learner.mask_parameter_relation_stop_side = "parameter"
     batch_size, n_agents, slots = 2, 3, 5
     previous_parameter = th.randn(
         batch_size * n_agents, 4, requires_grad=True
@@ -193,13 +249,54 @@ def check_relation_gradient_boundary():
     assert current_parameter.grad is None
 
 
+def check_group_distance_and_reverse_gradient_boundary():
+    learner = CleanLearner.__new__(CleanLearner)
+    learner.mask_parameter_relation_scale = 0.1
+    learner.temporal_param_scale_eps = 1e-6
+    learner.mask_parameter_relation_group_distance = True
+    learner.mask_parameter_relation_group_ids = (0, 1, 1, 2)
+    learner.mask_parameter_relation_stop_side = "mask"
+    batch_size, n_agents = 1, 2
+    previous_parameter = th.randn(batch_size * n_agents, 4, requires_grad=True)
+    current_parameter = th.randn(batch_size * n_agents, 4, requires_grad=True)
+    previous_logits = th.randn(2, batch_size, n_agents, 4, requires_grad=True)
+    current_logits = th.randn(2, batch_size, n_agents, 4, requires_grad=True)
+    total, count, _, _ = learner._mask_parameter_relation_pair(
+        (previous_parameter,),
+        (current_parameter,),
+        previous_logits.sigmoid(),
+        current_logits.sigmoid(),
+        th.tensor([True]),
+        batch_size,
+        n_agents,
+    )
+    (total / count.clamp(min=1.0)).backward()
+    assert previous_logits.grad is None
+    assert current_logits.grad is None
+    assert previous_parameter.grad is not None
+    assert current_parameter.grad is not None
+    assert previous_parameter.grad.abs().sum().item() > 0.0
+    assert current_parameter.grad.abs().sum().item() > 0.0
+
+    probabilities = th.tensor([[[[0.2, 0.1, 0.9, 0.4]]]])
+    permuted = probabilities.clone()
+    permuted[..., 1] = probabilities[..., 2]
+    permuted[..., 2] = probabilities[..., 1]
+    assert th.allclose(
+        learner._group_mask_probabilities(probabilities),
+        learner._group_mask_probabilities(permuted),
+    )
+
+
 def main():
     th.manual_seed(23)
     check_registration()
     check_grouped_property_gate()
+    check_permutation_invariant_group_gate()
     check_freeze_matches_evaluation()
     check_learner_freeze_boundary()
     check_relation_gradient_boundary()
+    check_group_distance_and_reverse_gradient_boundary()
     print("counter_mask_parameter_relation eight_variants=ok")
 
 

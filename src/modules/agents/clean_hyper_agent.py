@@ -557,12 +557,19 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_group_gate_hypercond",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_group_distance_hypercond",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_param_hypercond",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_mask_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl90_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
 }
 GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond",
+}
+GRF_DUAL_BRANCH_PERMUTATION_INVARIANT_GROUP_GATE_VARIANTS = {
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_group_gate_hypercond",
 }
 GRF_DUAL_BRANCH_TRAIN_GATE_FREEZE_STEPS_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_temporal_param_stability_freeze2m_hypercond": 2000000,
@@ -571,6 +578,10 @@ GRF_DUAL_BRANCH_MASK_PARAMETER_RELATION_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_group_gate_hypercond",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_group_distance_hypercond",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_param_hypercond",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_mask_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
 }
@@ -673,6 +684,10 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_group_gate_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_group_distance_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_param_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_mask_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl90_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond": "binary_concrete",
@@ -1061,6 +1076,7 @@ class ObservationConditionedBranchGate(nn.Module):
         initial_keep_probability=0.55,
         gate_scope="both",
         slot_group_ids=None,
+        aggregate_group_inputs=False,
         hard_concrete_gamma=-0.1,
         hard_concrete_zeta=1.1,
     ):
@@ -1104,6 +1120,7 @@ class ObservationConditionedBranchGate(nn.Module):
         self.register_buffer(
             "slot_group_ids", th.tensor(slot_group_ids, dtype=th.long)
         )
+        self.aggregate_group_inputs = bool(aggregate_group_inputs)
         self.mode = mode
         self.gate_scope = str(gate_scope)
         if self.gate_scope not in {"both", "shared"}:
@@ -1123,14 +1140,15 @@ class ObservationConditionedBranchGate(nn.Module):
             if self.gate_scope == "shared"
             else 2 * self.group_count
         )
+        gate_input_dim = self.group_count if self.aggregate_group_inputs else self.obs_dim
         if hidden_dim > 0:
             self.gate_network = nn.Sequential(
-                nn.Linear(self.obs_dim, hidden_dim),
+                nn.Linear(gate_input_dim, hidden_dim),
                 nn.ReLU(inplace=True),
                 nn.Linear(hidden_dim, output_dim),
             )
         else:
-            self.gate_network = nn.Linear(self.obs_dim, output_dim)
+            self.gate_network = nn.Linear(gate_input_dim, output_dim)
 
         if self.mode in {"hard_st", "binary_concrete", "hard_concrete"}:
             final_layer = (
@@ -1148,7 +1166,24 @@ class ObservationConditionedBranchGate(nn.Module):
         self.latest_expected_l0 = None
 
     def forward(self, obs, sample=True, deterministic_soft=False):
-        logits = self.gate_network(obs)
+        gate_input = obs
+        if self.aggregate_group_inputs:
+            # Mean-pool repeated ally/opponent attributes before predicting
+            # group gates. Reordering entities inside one semantic group then
+            # leaves both the gate input and expanded output unchanged.
+            gate_input = obs.new_zeros(*obs.shape[:-1], self.group_count)
+            scatter_index = self.slot_group_ids.view(
+                *((1,) * (obs.dim() - 1)), self.obs_dim
+            ).expand_as(obs)
+            gate_input.scatter_add_(-1, scatter_index, obs)
+            counts = obs.new_zeros(self.group_count)
+            counts.scatter_add_(
+                0,
+                self.slot_group_ids,
+                obs.new_ones(self.obs_dim),
+            )
+            gate_input = gate_input / counts.clamp(min=1.0)
+        logits = self.gate_network(gate_input)
         if self.gate_scope == "shared":
             logits = logits.unsqueeze(-2).expand(
                 *obs.shape[:-1], 2, self.group_count
@@ -1829,6 +1864,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         dynamic_branch_gate_warmup_steps=250000,
         dynamic_branch_gate_scope="both",
         dynamic_branch_gate_group_properties=False,
+        dynamic_branch_gate_group_input=False,
         dynamic_branch_gate_training_freeze_steps=0,
         dynamic_branch_gate_regularizer="none",
         dynamic_branch_gate_prior_keep=0.5,
@@ -1988,6 +2024,9 @@ class PublicTransformerRelationCapturer(nn.Module):
             )
         self.dynamic_branch_gate_group_properties = bool(
             dynamic_branch_gate_group_properties
+        )
+        self.dynamic_branch_gate_group_input = bool(
+            dynamic_branch_gate_group_input
         )
         self.dynamic_branch_gate_training_freeze_steps = max(
             0, int(dynamic_branch_gate_training_freeze_steps)
@@ -2307,6 +2346,7 @@ class PublicTransformerRelationCapturer(nn.Module):
                     else "both"
                 ),
                 slot_group_ids=self._dynamic_gate_slot_group_ids(),
+                aggregate_group_inputs=self.dynamic_branch_gate_group_input,
             )
             if self.dynamic_branch_gate_mode is not None
             else None
@@ -9422,7 +9462,14 @@ class CleanHyperAgent(nn.Module):
             ),
             dynamic_branch_gate_group_properties=(
                 self.model_type
-                in GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS
+                in (
+                    GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS
+                    | GRF_DUAL_BRANCH_PERMUTATION_INVARIANT_GROUP_GATE_VARIANTS
+                )
+            ),
+            dynamic_branch_gate_group_input=(
+                self.model_type
+                in GRF_DUAL_BRANCH_PERMUTATION_INVARIANT_GROUP_GATE_VARIANTS
             ),
             dynamic_branch_gate_training_freeze_steps=(
                 GRF_DUAL_BRANCH_TRAIN_GATE_FREEZE_STEPS_BY_MODEL.get(
