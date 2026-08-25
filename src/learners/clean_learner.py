@@ -352,8 +352,32 @@ class CleanLearner:
         self.mask_parameter_relation_scale = float(
             getattr(args, "clean_mask_parameter_relation_scale", 0.1)
         )
+        self.mask_parameter_relation_coef = float(
+            getattr(args, "clean_mask_parameter_relation_coef", 10.0)
+        )
+        self.mask_parameter_relation_temporal_coef = float(
+            getattr(args, "clean_mask_parameter_relation_temporal_coef", 50.0)
+        )
+        self.mask_parameter_relation_perturbed_head_coef = float(
+            getattr(args, "clean_mask_parameter_relation_perturbed_head_coef", 1.0)
+        )
+        self.mask_parameter_relation_gate_regularization_coef = float(
+            getattr(
+                args,
+                "clean_mask_parameter_relation_gate_regularization_coef",
+                1.0,
+            )
+        )
         if self.mask_parameter_relation_scale <= 0.0:
             raise ValueError("clean_mask_parameter_relation_scale must be positive")
+        for coefficient_name in (
+            "mask_parameter_relation_coef",
+            "mask_parameter_relation_temporal_coef",
+            "mask_parameter_relation_perturbed_head_coef",
+            "mask_parameter_relation_gate_regularization_coef",
+        ):
+            if getattr(self, coefficient_name) < 0.0:
+                raise ValueError("{} must be non-negative".format(coefficient_name))
         if self.temporal_param_switch_margin <= 0.0:
             raise ValueError("clean_temporal_param_switch_margin must be positive")
         if self.temporal_param_scale_eps <= 0.0:
@@ -410,12 +434,7 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
             "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond",
             "grf_abs_dual_branch_binary_concrete_temporal_param_stability_freeze2m_hypercond",
-            "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
-            "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
-            "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
             "grf_abs_dual_branch_binary_concrete_bayesg_kl90_hypercond",
-            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
-            "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
             "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
             "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond",
             "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
@@ -2104,33 +2123,17 @@ class CleanLearner:
             temporal_param_auxiliary_coef = 0.0
             mask_parameter_combined_auxiliary_coef = 0.0
             adaptive_auxiliary_enabled = False
+            if self.mask_parameter_relation_active:
+                # Relation-family experiments use independently interpretable
+                # fixed weights. A shared EMA coefficient allowed the larger
+                # raw relation loss to swallow the temporal contribution.
+                mask_parameter_combined_auxiliary_coef = 1.0
+                if self.gate_regularization_active and aux_losses:
+                    # KL/budget regularization is included in the gate-only
+                    # fixed bundle below, so do not add it twice.
+                    gate_auxiliary_coef = 0.0
             if self.adaptive_auxiliary_ratio_active:
-                if self.mask_parameter_relation_active:
-                    combined_relation_objective = mask_parameter_relation_loss
-                    if self.temporal_param_auxiliary_active:
-                        combined_relation_objective = (
-                            combined_relation_objective
-                            + temporal_param_auxiliary_loss
-                        )
-                    if self.perturbed_head_td_quality_active:
-                        combined_relation_objective = (
-                            combined_relation_objective
-                            + perturbed_head_td_quality_loss
-                        )
-                    if self.gate_regularization_active and aux_losses:
-                        combined_relation_objective = (
-                            combined_relation_objective + aux_loss
-                        )
-                        # The KL term joins the gate-only bundle below so all
-                        # requested auxiliaries share one 10%-of-TD budget.
-                        gate_auxiliary_coef = 0.0
-                    mask_parameter_combined_auxiliary_coef = (
-                        self._adaptive_auxiliary_coefficient(
-                            td_loss, combined_relation_objective
-                        )
-                    )
-                    adaptive_auxiliary_enabled = True
-                elif self.gate_regularization_active and aux_losses:
+                if self.gate_regularization_active and aux_losses:
                     gate_auxiliary_coef = self._adaptive_auxiliary_coefficient(
                         td_loss, aux_loss
                     )
@@ -2216,17 +2219,28 @@ class CleanLearner:
                 and mask_parameter_relation_sum is not None
                 and mask_parameter_combined_auxiliary_coef > 0.0
             ):
-                combined_gate_auxiliary = mask_parameter_relation_loss
+                combined_gate_auxiliary = (
+                    self.mask_parameter_relation_coef
+                    * mask_parameter_relation_loss
+                )
                 if self.temporal_param_auxiliary_active:
                     combined_gate_auxiliary = (
-                        combined_gate_auxiliary + temporal_param_auxiliary_loss
+                        combined_gate_auxiliary
+                        + self.mask_parameter_relation_temporal_coef
+                        * temporal_param_auxiliary_loss
                     )
                 if self.perturbed_head_td_quality_active:
                     combined_gate_auxiliary = (
-                        combined_gate_auxiliary + perturbed_head_td_quality_loss
+                        combined_gate_auxiliary
+                        + self.mask_parameter_relation_perturbed_head_coef
+                        * perturbed_head_td_quality_loss
                     )
                 if self.gate_regularization_active and aux_losses:
-                    combined_gate_auxiliary = combined_gate_auxiliary + aux_loss
+                    combined_gate_auxiliary = (
+                        combined_gate_auxiliary
+                        + self.mask_parameter_relation_gate_regularization_coef
+                        * aux_loss
+                    )
                 gate_only_importance_loss = (
                     mask_parameter_combined_auxiliary_coef
                     * combined_gate_auxiliary
@@ -2628,19 +2642,23 @@ class CleanLearner:
                 weighted_relation_bundle = (
                     mask_parameter_combined_auxiliary_coef
                     * (
-                        mask_parameter_relation_loss.item()
+                        self.mask_parameter_relation_coef
+                        * mask_parameter_relation_loss.item()
                         + (
-                            temporal_param_auxiliary_loss.item()
+                            self.mask_parameter_relation_temporal_coef
+                            * temporal_param_auxiliary_loss.item()
                             if self.temporal_param_auxiliary_active
                             else 0.0
                         )
                         + (
-                            perturbed_head_td_quality_loss.item()
+                            self.mask_parameter_relation_perturbed_head_coef
+                            * perturbed_head_td_quality_loss.item()
                             if self.perturbed_head_td_quality_active
                             else 0.0
                         )
                         + (
-                            aux_loss.item()
+                            self.mask_parameter_relation_gate_regularization_coef
+                            * aux_loss.item()
                             if self.gate_regularization_active and aux_losses
                             else 0.0
                         )

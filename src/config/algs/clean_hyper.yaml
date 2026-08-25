@@ -902,6 +902,13 @@ clean_temporal_param_scale_eps: 0.000001
 # regresses the observation-conditioned mask distance to this detached target,
 # and is differentiated only with respect to the gate network.
 clean_mask_parameter_relation_scale: 0.1
+# Fixed gate-only weights for relation-family variants. These are intentionally
+# independent: the smaller temporal loss must not be diluted by the larger
+# relation loss through a shared adaptive coefficient.
+clean_mask_parameter_relation_coef: 10.0
+clean_mask_parameter_relation_temporal_coef: 50.0
+clean_mask_parameter_relation_perturbed_head_coef: 1.0
+clean_mask_parameter_relation_gate_regularization_coef: 1.0
 # Optional decoupled importance training. After the ordinary gate warm-up,
 # alternate 80k environment steps of TD-only non-gate updates with 20k steps
 # where only the gate receives TD plus its importance auxiliary.
