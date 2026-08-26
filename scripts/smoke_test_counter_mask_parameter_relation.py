@@ -162,6 +162,7 @@ def check_permutation_invariant_group_gate():
         dynamic_branch_gate_group_input=True,
     )
     generator = model.dynamic_branch_gate
+    assert generator.aggregate_group_inputs
     # The production gate initializes its final layer to a constant prior.
     # Give the smoke test non-constant weights so invariance is verified for
     # the grouped computation itself rather than passing trivially at init.
@@ -169,7 +170,11 @@ def check_permutation_invariant_group_gate():
         for parameter in generator.gate_network.parameters():
             parameter.uniform_(-0.3, 0.3)
     names = list(model.semantic_names)
-    obs = th.randn(2, 4, 30)
+    # Use exactly representable values here.  With arbitrary random floats,
+    # swapping two members of a group changes scatter_add's accumulation order
+    # and can introduce a tiny round-off difference even though the grouped
+    # mean is permutation invariant mathematically.
+    obs = (th.arange(2 * 4 * 30, dtype=th.float32) % 17).view(2, 4, 30)
     permuted = obs.clone()
     for suffix in ("relative_x", "relative_y", "direction_x", "direction_y"):
         left = names.index("ally_0_{}".format(suffix))
@@ -178,7 +183,15 @@ def check_permutation_invariant_group_gate():
         permuted[..., right] = obs[..., left]
     _, original_probability = generator(obs, sample=False)
     _, permuted_probability = generator(permuted, sample=False)
-    assert th.allclose(original_probability, permuted_probability)
+    max_difference = (original_probability - permuted_probability).abs().max()
+    assert th.allclose(
+        original_probability,
+        permuted_probability,
+        rtol=1e-6,
+        atol=1e-7,
+    ), "grouped gate changed after ally permutation (max diff={})".format(
+        max_difference.item()
+    )
 
 
 def check_freeze_matches_evaluation():
