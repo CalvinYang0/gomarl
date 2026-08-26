@@ -4981,6 +4981,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         dynamic_branch_gate_warmup_steps=250000,
         dynamic_branch_gate_scope="both",
         dynamic_branch_gate_group_properties=False,
+        dynamic_branch_gate_group_input=False,
         dynamic_branch_gate_training_freeze_steps=0,
         dynamic_branch_gate_regularizer="none",
         dynamic_branch_gate_prior_keep=0.5,
@@ -5132,6 +5133,9 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             )
         self.dynamic_branch_gate_group_properties = bool(
             dynamic_branch_gate_group_properties
+        )
+        self.dynamic_branch_gate_group_input = bool(
+            dynamic_branch_gate_group_input
         )
         self.dynamic_branch_gate_training_freeze_steps = max(
             0, int(dynamic_branch_gate_training_freeze_steps)
