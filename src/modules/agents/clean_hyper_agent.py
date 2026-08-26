@@ -5387,6 +5387,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
                     else "both"
                 ),
                 slot_group_ids=self._dynamic_gate_slot_group_ids(),
+                aggregate_group_inputs=self.dynamic_branch_gate_group_input,
             )
             if self.dynamic_branch_gate_mode is not None
             else None
