@@ -565,6 +565,7 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl90_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
+    "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond",
 }
 GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond",
@@ -694,6 +695,7 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl90_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond": "binary_concrete",
 }
 GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": (
@@ -2073,6 +2075,10 @@ class PublicTransformerRelationCapturer(nn.Module):
         self._dynamic_branch_gate_target_mode = False
         self._dynamic_branch_gate_force_open = False
         self._dynamic_branch_gate_override = None
+        # Optional detached Bernoulli mask used only by the learner's
+        # random-drop auxiliary rollout.  The learned gate probabilities and
+        # the normal forward path remain unchanged.
+        self._dynamic_branch_gate_random_aux_mask = None
         self.latest_dynamic_branch_gates_graph = None
         self.latest_dynamic_branch_probabilities_graph = None
         self.latest_dynamic_branch_logits_graph = None
@@ -2854,6 +2860,29 @@ class PublicTransformerRelationCapturer(nn.Module):
                 # Establish the full-observation Q/hypernetwork before the
                 # discontinuous gate decisions are allowed to affect it.
                 gates = th.ones_like(gates)
+            if (
+                self._dynamic_branch_gate_random_aux_mask is not None
+                and not warmup_active
+                and not self._semantic_test_mode
+            ):
+                random_mask = self._dynamic_branch_gate_random_aux_mask.to(
+                    device=gates.device, dtype=gates.dtype
+                )
+                if random_mask.dim() == 2:
+                    random_mask = random_mask.unsqueeze(1).expand(
+                        gates.shape[0], -1, -1
+                    )
+                if random_mask.shape != gates.shape:
+                    raise ValueError(
+                        "Random auxiliary gate mask has shape {}; expected {}".format(
+                            tuple(random_mask.shape), tuple(gates.shape)
+                        )
+                    )
+                # This mask is sampled by the learner and detached.  Keeping
+                # it outside `probabilities` preserves the gate's normal
+                # statistics while allowing the auxiliary TD loss to train
+                # the gate on the surviving branch inputs.
+                gates = gates * random_mask
             self.latest_dynamic_branch_gates_graph = gates
             raw_probabilities = (
                 probabilities
@@ -3298,6 +3327,9 @@ class PublicTransformerRelationCapturer(nn.Module):
 
     def set_dynamic_branch_gate_override(self, gates):
         self._dynamic_branch_gate_override = gates
+
+    def set_dynamic_branch_gate_random_aux_mask(self, mask):
+        self._dynamic_branch_gate_random_aux_mask = mask
 
     def semantic_router_needs_binary_audit(self):
         return (
@@ -5182,6 +5214,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self._dynamic_branch_gate_target_mode = False
         self._dynamic_branch_gate_force_open = False
         self._dynamic_branch_gate_override = None
+        self._dynamic_branch_gate_random_aux_mask = None
         self.latest_dynamic_branch_gates_graph = None
         self.latest_dynamic_branch_probabilities_graph = None
         self.latest_dynamic_branch_logits_graph = None
@@ -11914,6 +11947,13 @@ class CleanHyperAgent(nn.Module):
             relation_capturer, "set_dynamic_branch_gate_target_mode"
         ):
             relation_capturer.set_dynamic_branch_gate_target_mode(enabled)
+
+    def set_dynamic_branch_gate_random_aux_mask(self, mask):
+        relation_capturer = getattr(self, "rpg_relation_capturer", None)
+        if relation_capturer is not None and hasattr(
+            relation_capturer, "set_dynamic_branch_gate_random_aux_mask"
+        ):
+            relation_capturer.set_dynamic_branch_gate_random_aux_mask(mask)
 
     def set_dynamic_branch_gate_force_open(self, enabled):
         relation_capturer = getattr(self, "rpg_relation_capturer", None)

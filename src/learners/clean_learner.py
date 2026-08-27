@@ -296,12 +296,35 @@ class CleanLearner:
             self.temporal_param_stability_active
             or self.temporal_param_small_change_active
         )
+        self.random_drop_auxiliary_active = model_type == (
+            "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond"
+        )
+        self.random_drop_auxiliary_keep_probability = float(
+            getattr(args, "clean_random_drop_auxiliary_keep_probability", 0.8)
+        )
+        self.random_drop_auxiliary_coef = float(
+            getattr(args, "clean_random_drop_auxiliary_coef", 0.5)
+        )
+        self.random_drop_auxiliary_scope = str(
+            getattr(args, "clean_random_drop_auxiliary_scope", "episode")
+        ).lower()
+        if not 0.0 < self.random_drop_auxiliary_keep_probability <= 1.0:
+            raise ValueError(
+                "clean_random_drop_auxiliary_keep_probability must be in (0, 1]"
+            )
+        if self.random_drop_auxiliary_coef < 0.0:
+            raise ValueError("clean_random_drop_auxiliary_coef must be non-negative")
+        if self.random_drop_auxiliary_scope not in {"episode", "timestep"}:
+            raise ValueError(
+                "clean_random_drop_auxiliary_scope must be episode or timestep"
+            )
         self.importance_auxiliary_active = (
             self.perturbed_parameter_importance_active
             or self.gradient_importance_active
             or self.perturbed_head_td_quality_active
             or self.temporal_param_auxiliary_active
             or self.mask_parameter_relation_active
+            or self.random_drop_auxiliary_active
         )
         self.importance_gate_parameters = ()
         if self.importance_auxiliary_active:
@@ -2238,6 +2261,73 @@ class CleanLearner:
             td_mask = mask.expand_as(td_error)
             masked_td_error = td_error * td_mask
             td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
+            random_drop_auxiliary_loss = td_loss.new_zeros(())
+            random_drop_auxiliary_enabled = (
+                self.random_drop_auxiliary_active
+                and importance_auxiliary_enabled
+                and self.random_drop_auxiliary_coef > 0.0
+            )
+            if random_drop_auxiliary_enabled:
+                reference_gates = getattr(
+                    self.mac, "latest_dynamic_branch_gates_graph", None
+                )
+                if reference_gates is None:
+                    raise RuntimeError(
+                        "Random-drop auxiliary requires dynamic branch gates"
+                    )
+                episode_mask = None
+                random_mac_out = []
+                random_relation_conditions = (
+                    [] if self.relation_mixer_gate is not None else None
+                )
+                self.mac.init_hidden(batch.batch_size)
+                try:
+                    for t in range(batch.max_seq_length):
+                        if (
+                            episode_mask is None
+                            or self.random_drop_auxiliary_scope == "timestep"
+                        ):
+                            episode_mask = th.full_like(
+                                reference_gates.detach(),
+                                self.random_drop_auxiliary_keep_probability,
+                            ).bernoulli_()
+                        self.mac.set_dynamic_branch_gate_random_aux_mask(
+                            episode_mask
+                        )
+                        random_mac_out.append(self.mac.forward(batch, t=t))
+                        if random_relation_conditions is not None:
+                            condition = getattr(self.mac, "latest_condition", None)
+                            if condition is None:
+                                raise RuntimeError(
+                                    "Random-drop auxiliary with relation mixer "
+                                    "requires relation conditions"
+                                )
+                            random_relation_conditions.append(condition)
+                finally:
+                    self.mac.set_dynamic_branch_gate_random_aux_mask(None)
+                random_mac_out = th.stack(random_mac_out, dim=1)
+                random_chosen_qvals = th.gather(
+                    random_mac_out[:, :-1], dim=3, index=actions
+                ).squeeze(3)
+                if self.mixer is not None:
+                    if random_relation_conditions is not None:
+                        random_relation_conditions = th.stack(
+                            random_relation_conditions, dim=1
+                        )
+                        random_chosen_qvals = self._apply_relation_gate(
+                            random_chosen_qvals,
+                            random_relation_conditions[:, :-1],
+                            target=False,
+                        )
+                    random_chosen_qvals = self.mixer(
+                        random_chosen_qvals, batch["state"][:, :-1]
+                    )
+                random_td_error = random_chosen_qvals - targets.detach()
+                random_masked_td_error = random_td_error * td_mask
+                random_drop_auxiliary_loss = (
+                    random_masked_td_error.pow(2).sum()
+                    / td_mask.sum().clamp(min=1.0)
+                )
             perturbed_head_td_quality_loss = td_loss.new_zeros(())
             if perturbed_head_parameter_graphs is not None:
                 time_steps = len(perturbed_head_parameter_graphs)
@@ -2389,6 +2479,11 @@ class CleanLearner:
             perturbed_head_td_quality_coef = 0.0
             temporal_param_auxiliary_coef = 0.0
             mask_parameter_combined_auxiliary_coef = 0.0
+            random_drop_auxiliary_coef = (
+                self.random_drop_auxiliary_coef
+                if random_drop_auxiliary_enabled
+                else 0.0
+            )
             adaptive_auxiliary_enabled = False
             if self.mask_parameter_relation_active:
                 # Relation-family experiments use independently interpretable
@@ -2478,6 +2573,7 @@ class CleanLearner:
                 perturbed_head_td_quality_coef = 0.0
                 temporal_param_auxiliary_coef = 0.0
                 mask_parameter_combined_auxiliary_coef = 0.0
+                random_drop_auxiliary_coef = 0.0
                 self.latest_adaptive_auxiliary_stats = {}
 
             gate_only_importance_loss = None
@@ -2546,6 +2642,14 @@ class CleanLearner:
                 gate_only_importance_loss = (
                     temporal_param_auxiliary_coef
                     * temporal_param_auxiliary_loss
+                )
+            elif (
+                self.random_drop_auxiliary_active
+                and random_drop_auxiliary_enabled
+                and random_drop_auxiliary_coef > 0.0
+            ):
+                gate_only_importance_loss = (
+                    random_drop_auxiliary_coef * random_drop_auxiliary_loss
                 )
             loss = (
                 td_loss
@@ -2866,6 +2970,37 @@ class CleanLearner:
                     "perturbed_head_td_quality_to_td_ratio",
                     weighted_perturbed_head_td
                     / max(td_loss.item(), self.adaptive_auxiliary_eps),
+                    t_env,
+                )
+            if self.random_drop_auxiliary_active:
+                weighted_random_drop = (
+                    random_drop_auxiliary_coef
+                    * random_drop_auxiliary_loss.item()
+                )
+                self.logger.log_stat(
+                    "loss_random_drop_td_auxiliary",
+                    random_drop_auxiliary_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_random_drop_td_auxiliary",
+                    weighted_random_drop,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "random_drop_td_auxiliary_to_td_ratio",
+                    weighted_random_drop
+                    / max(td_loss.item(), self.adaptive_auxiliary_eps),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "random_drop_auxiliary_keep_probability",
+                    self.random_drop_auxiliary_keep_probability,
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "random_drop_auxiliary_episode_scope",
+                    float(self.random_drop_auxiliary_scope == "episode"),
                     t_env,
                 )
             if self.temporal_param_auxiliary_active:

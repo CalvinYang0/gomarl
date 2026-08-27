@@ -75,6 +75,10 @@ TEMPORAL_STOP_MASK = (
     "grf_abs_dual_branch_binary_concrete_"
     "temporal_relation_stop_mask_hypercond"
 )
+RANDOM_DROP_AUX = (
+    "grf_abs_dual_branch_binary_concrete_"
+    "random_drop_aux_hypercond"
+)
 
 
 def build_grf(**kwargs):
@@ -109,6 +113,7 @@ def check_registration():
         TEMPORAL_GROUP_DISTANCE,
         TEMPORAL_STOP_PARAM,
         TEMPORAL_STOP_MASK,
+        RANDOM_DROP_AUX,
     }
     assert variants <= GRF_DUAL_BRANCH_VARIANTS
     assert GROUPED in GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS
@@ -140,6 +145,22 @@ def check_registration():
         )
     assert GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL[KL80_RELATION_T70] == 0.70
     assert KL80_RELATION_KEEP not in GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL
+    assert GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[RANDOM_DROP_AUX] == (
+        "binary_concrete"
+    )
+
+
+def check_random_drop_auxiliary_mask():
+    model = build_grf()
+    model.set_dynamic_branch_gate_t_env(300000)
+    obs = th.randn(2, 4, 30)
+    hidden = th.zeros(2, 4, 16)
+    random_mask = th.ones(8, 2, 30)
+    random_mask[:, :, 0] = 0.0
+    model.set_dynamic_branch_gate_random_aux_mask(random_mask)
+    model(obs, hidden)
+    assert th.count_nonzero(model.latest_dynamic_branch_gates_graph[..., 0]) == 0
+    model.set_dynamic_branch_gate_random_aux_mask(None)
 
 
 def check_grouped_property_gate():
@@ -405,6 +426,7 @@ def check_random_relation_pairing():
 def main():
     th.manual_seed(23)
     check_registration()
+    check_random_drop_auxiliary_mask()
     check_grouped_property_gate()
     check_permutation_invariant_group_gate()
     check_freeze_matches_evaluation()

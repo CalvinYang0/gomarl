@@ -84,6 +84,10 @@ class CleanMAC(BasicMAC):
         if hasattr(self.agent, "set_dynamic_branch_gate_override"):
             self.agent.set_dynamic_branch_gate_override(gates)
 
+    def set_dynamic_branch_gate_random_aux_mask(self, mask):
+        if hasattr(self.agent, "set_dynamic_branch_gate_random_aux_mask"):
+            self.agent.set_dynamic_branch_gate_random_aux_mask(mask)
+
     def set_td_parameter_sampling_enabled(self, enabled):
         if hasattr(self.agent, "set_td_parameter_sampling_enabled"):
             self.agent.set_td_parameter_sampling_enabled(enabled)

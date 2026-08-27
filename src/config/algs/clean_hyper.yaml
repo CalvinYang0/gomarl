@@ -885,6 +885,13 @@ clean_test_gate_trajectory_max_steps: 256
 wandb_test_parameter_pca: True
 clean_dynamic_branch_gate_warmup_steps: 250000
 clean_importance_auxiliary_warmup_steps: 250000
+# REFIL-inspired random observation masking auxiliary. The ordinary TD path
+# remains unchanged; a second masked rollout contributes a gate-only TD loss.
+clean_random_drop_auxiliary_keep_probability: 0.8
+clean_random_drop_auxiliary_coef: 0.5
+# episode: one Bernoulli mask is reused across the sampled sequence;
+# timestep: a fresh mask is sampled at every timestep.
+clean_random_drop_auxiliary_scope: episode
 clean_parameter_perturbation_relative_std: 0.05
 clean_parameter_perturbation_probe_timesteps: 2
 # Per-timestep generated-head robustness objective. The noise scale is the
