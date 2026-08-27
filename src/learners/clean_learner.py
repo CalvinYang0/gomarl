@@ -385,6 +385,18 @@ class CleanLearner:
         self.mask_parameter_relation_scale = float(
             getattr(args, "clean_mask_parameter_relation_scale", 0.1)
         )
+        self.mask_parameter_relation_pairing = str(
+            getattr(args, "clean_mask_parameter_relation_pairing", "fixed")
+        ).strip().lower()
+        if self.mask_parameter_relation_pairing not in {
+            "fixed",
+            "episode_random",
+            "global_random",
+        }:
+            raise ValueError(
+                "clean_mask_parameter_relation_pairing must be one of "
+                "fixed, episode_random, or global_random"
+            )
         self.mask_parameter_relation_coef = float(
             getattr(args, "clean_mask_parameter_relation_coef", 10.0)
         )
@@ -914,6 +926,117 @@ class CleanLearner:
             )
         pair_loss = (mask_distance - parameter_target).abs()
         return (pair_loss * valid).sum(), valid.sum(), mask_distance, parameter_target
+
+    @staticmethod
+    def _random_relation_pair_indices(valid_steps, pairing):
+        """Return random valid-state pairs for the requested sampling scope.
+
+        A random permutation followed by a one-position cyclic shift makes
+        every selected state participate exactly once on each side of a pair.
+        This gives full valid-state coverage at O(BT) cost without constructing
+        every possible O((BT)^2) pair.
+        """
+        if valid_steps.dim() != 2:
+            raise RuntimeError("Relation validity must have shape [batch, time]")
+        if pairing not in {"episode_random", "global_random"}:
+            raise ValueError("Random relation pairing mode is invalid")
+
+        device = valid_steps.device
+        previous_batch = []
+        previous_time = []
+        current_batch = []
+        current_time = []
+
+        if pairing == "episode_random":
+            for batch_index in range(valid_steps.size(0)):
+                times = th.nonzero(
+                    valid_steps[batch_index], as_tuple=False
+                ).flatten()
+                if times.numel() < 2:
+                    continue
+                shuffled = times[th.randperm(times.numel(), device=device)]
+                shifted = th.roll(shuffled, shifts=-1, dims=0)
+                batch_indices = th.full_like(shuffled, batch_index)
+                previous_batch.append(batch_indices)
+                previous_time.append(shuffled)
+                current_batch.append(batch_indices)
+                current_time.append(shifted)
+        else:
+            coordinates = th.nonzero(valid_steps, as_tuple=False)
+            if coordinates.size(0) >= 2:
+                shuffled = coordinates[
+                    th.randperm(coordinates.size(0), device=device)
+                ]
+                shifted = th.roll(shuffled, shifts=-1, dims=0)
+                previous_batch.append(shuffled[:, 0])
+                previous_time.append(shuffled[:, 1])
+                current_batch.append(shifted[:, 0])
+                current_time.append(shifted[:, 1])
+
+        if not previous_batch:
+            empty = th.empty(0, dtype=th.long, device=device)
+            return empty, empty, empty, empty
+        return (
+            th.cat(previous_batch),
+            th.cat(previous_time),
+            th.cat(current_batch),
+            th.cat(current_time),
+        )
+
+    @staticmethod
+    def _gather_relation_states(
+        parameters_by_time,
+        probabilities_by_time,
+        batch_indices,
+        time_indices,
+        batch_size,
+        n_agents,
+    ):
+        """Gather arbitrary trajectory states into the pair helper layout."""
+        sample_count = batch_indices.numel()
+        sort_order = th.argsort(time_indices)
+        inverse_order = th.argsort(sort_order)
+        sorted_batch = batch_indices[sort_order]
+        sorted_time = time_indices[sort_order]
+        unique_times = th.unique_consecutive(sorted_time).tolist()
+        selected_parameters = []
+        for component_index in range(len(parameters_by_time[0])):
+            time_chunks = []
+            for time_index in unique_times:
+                time_mask = sorted_time == time_index
+                component = parameters_by_time[time_index][
+                    component_index
+                ].reshape(
+                    batch_size,
+                    n_agents,
+                    *parameters_by_time[time_index][component_index].shape[1:],
+                )
+                time_chunks.append(
+                    component.index_select(0, sorted_batch[time_mask])
+                )
+            selected = th.cat(time_chunks, dim=0).index_select(0, inverse_order)
+            selected_parameters.append(
+                selected.reshape(
+                    sample_count * n_agents,
+                    *selected.shape[2:],
+                )
+            )
+
+        probability_chunks = []
+        for time_index in unique_times:
+            time_mask = sorted_time == time_index
+            probability = probabilities_by_time[time_index].reshape(
+                2, batch_size, n_agents, -1
+            )
+            probability_chunks.append(
+                probability.index_select(1, sorted_batch[time_mask])
+            )
+        selected_probabilities = (
+            th.cat(probability_chunks, dim=1)
+            .index_select(1, inverse_order)
+            .reshape(2, sample_count * n_agents, -1)
+        )
+        return tuple(selected_parameters), selected_probabilities
 
     @staticmethod
     def _property_group_ids(slot_names):
@@ -1957,42 +2080,96 @@ class CleanLearner:
             mask_parameter_relation_count = mask.new_zeros(())
             mask_parameter_pair_count = 0
             if relation_parameters is not None and len(relation_parameters) > 1:
-                pair_indices = set()
-                for current_index in range(1, len(relation_parameters)):
-                    pair_indices.add((current_index - 1, current_index))
-                    # A non-local pair keeps revisited/different behavior modes
-                    # visible without the O(T^2) cost of every trajectory pair.
-                    anchor_index = current_index // 2
-                    if anchor_index < current_index - 1:
-                        pair_indices.add((anchor_index, current_index))
-                for previous_index, current_index in sorted(pair_indices):
-                    pair_valid = (
-                        relation_valid_steps[previous_index]
-                        & relation_valid_steps[current_index]
-                    )
+                if self.mask_parameter_relation_pairing == "fixed":
+                    pair_indices = set()
+                    for current_index in range(1, len(relation_parameters)):
+                        pair_indices.add((current_index - 1, current_index))
+                        # A non-local pair keeps revisited/different behavior modes
+                        # visible without the O(T^2) cost of every trajectory pair.
+                        anchor_index = current_index // 2
+                        if anchor_index < current_index - 1:
+                            pair_indices.add((anchor_index, current_index))
+                    for previous_index, current_index in sorted(pair_indices):
+                        pair_valid = (
+                            relation_valid_steps[previous_index]
+                            & relation_valid_steps[current_index]
+                        )
+                        (
+                            pair_sum,
+                            pair_count,
+                            _,
+                            _,
+                        ) = self._mask_parameter_relation_pair(
+                            relation_parameters[previous_index],
+                            relation_parameters[current_index],
+                            relation_probabilities[previous_index],
+                            relation_probabilities[current_index],
+                            pair_valid,
+                            batch.batch_size,
+                            self.args.n_agents,
+                        )
+                        mask_parameter_relation_sum = (
+                            pair_sum
+                            if mask_parameter_relation_sum is None
+                            else mask_parameter_relation_sum + pair_sum
+                        )
+                        mask_parameter_relation_count = (
+                            mask_parameter_relation_count + pair_count
+                        )
+                        mask_parameter_pair_count += 1
+                else:
+                    valid_steps = th.stack(relation_valid_steps, dim=1)
                     (
-                        pair_sum,
-                        pair_count,
-                        _,
-                        _,
-                    ) = self._mask_parameter_relation_pair(
-                        relation_parameters[previous_index],
-                        relation_parameters[current_index],
-                        relation_probabilities[previous_index],
-                        relation_probabilities[current_index],
-                        pair_valid,
-                        batch.batch_size,
-                        self.args.n_agents,
+                        previous_batch,
+                        previous_time,
+                        current_batch,
+                        current_time,
+                    ) = self._random_relation_pair_indices(
+                        valid_steps,
+                        self.mask_parameter_relation_pairing,
                     )
-                    mask_parameter_relation_sum = (
-                        pair_sum
-                        if mask_parameter_relation_sum is None
-                        else mask_parameter_relation_sum + pair_sum
-                    )
-                    mask_parameter_relation_count = (
-                        mask_parameter_relation_count + pair_count
-                    )
-                    mask_parameter_pair_count += 1
+                    random_pair_count = previous_batch.numel()
+                    if random_pair_count > 0:
+                        previous_parameters, previous_probabilities = (
+                            self._gather_relation_states(
+                                relation_parameters,
+                                relation_probabilities,
+                                previous_batch,
+                                previous_time,
+                                batch.batch_size,
+                                self.args.n_agents,
+                            )
+                        )
+                        current_parameters, current_probabilities = (
+                            self._gather_relation_states(
+                                relation_parameters,
+                                relation_probabilities,
+                                current_batch,
+                                current_time,
+                                batch.batch_size,
+                                self.args.n_agents,
+                            )
+                        )
+                        pair_valid = th.ones(
+                            random_pair_count,
+                            dtype=th.bool,
+                            device=mask.device,
+                        )
+                        (
+                            mask_parameter_relation_sum,
+                            mask_parameter_relation_count,
+                            _,
+                            _,
+                        ) = self._mask_parameter_relation_pair(
+                            previous_parameters,
+                            current_parameters,
+                            previous_probabilities,
+                            current_probabilities,
+                            pair_valid,
+                            random_pair_count,
+                            self.args.n_agents,
+                        )
+                        mask_parameter_pair_count = random_pair_count
 
             mac_out = th.stack(mac_out, dim=1)
             teacher_mac_out = (

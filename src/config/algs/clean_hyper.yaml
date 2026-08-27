@@ -902,6 +902,9 @@ clean_temporal_param_scale_eps: 0.000001
 # regresses the observation-conditioned mask distance to this detached target,
 # and is differentiated only with respect to the gate network.
 clean_mask_parameter_relation_scale: 0.1
+# fixed: adjacent + deterministic non-local pairs; episode_random: random
+# pairs within each episode; global_random: random pairs across the replay batch.
+clean_mask_parameter_relation_pairing: fixed
 # Fixed gate-only weights for relation-family variants. These are intentionally
 # independent: the smaller temporal loss must not be diluted by the larger
 # relation loss through a shared adaptive coefficient.

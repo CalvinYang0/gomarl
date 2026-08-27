@@ -332,6 +332,76 @@ def check_group_distance_and_reverse_gradient_boundary():
     )
 
 
+def check_random_relation_pairing():
+    valid = th.tensor(
+        [
+            [True, True, False, True],
+            [False, True, True, False],
+            [True, False, False, False],
+        ]
+    )
+    th.manual_seed(31)
+    previous_batch, previous_time, current_batch, current_time = (
+        CleanLearner._random_relation_pair_indices(valid, "episode_random")
+    )
+    # The two episodes with at least two states contribute all five states;
+    # the singleton episode cannot form an in-episode pair.
+    assert previous_batch.numel() == 5
+    assert th.equal(previous_batch, current_batch)
+    assert th.all(valid[previous_batch, previous_time])
+    assert th.all(valid[current_batch, current_time])
+    assert th.all(previous_time != current_time)
+
+    # With one valid state in each episode, removing the episode restriction
+    # must still create two cross-episode directed pairs.
+    cross_only = th.tensor([[True, False], [False, True]])
+    previous_batch, previous_time, current_batch, current_time = (
+        CleanLearner._random_relation_pair_indices(cross_only, "global_random")
+    )
+    assert previous_batch.numel() == 2
+    assert th.all(previous_batch != current_batch)
+    assert th.all(cross_only[previous_batch, previous_time])
+    assert th.all(cross_only[current_batch, current_time])
+
+    batch_size, n_agents, timesteps = 2, 3, 4
+    parameters = []
+    probabilities = []
+    for timestep in range(timesteps):
+        parameters.append(
+            (
+                th.full((batch_size * n_agents, 2), float(timestep)),
+                th.full((batch_size * n_agents, 1, 2), float(timestep + 10)),
+            )
+        )
+        probabilities.append(
+            th.full(
+                (2, batch_size * n_agents, 5),
+                float(timestep) / 10.0,
+            )
+        )
+    batch_indices = th.tensor([1, 0])
+    time_indices = th.tensor([3, 1])
+    selected_parameters, selected_probabilities = (
+        CleanLearner._gather_relation_states(
+            parameters,
+            probabilities,
+            batch_indices,
+            time_indices,
+            batch_size,
+            n_agents,
+        )
+    )
+    assert selected_parameters[0].shape == (2 * n_agents, 2)
+    assert selected_parameters[1].shape == (2 * n_agents, 1, 2)
+    assert selected_probabilities.shape == (2, 2 * n_agents, 5)
+    assert th.all(selected_parameters[0][:n_agents] == 3.0)
+    assert th.all(selected_parameters[0][n_agents:] == 1.0)
+    assert th.allclose(
+        selected_probabilities[:, :n_agents],
+        th.full((2, n_agents, 5), 0.3),
+    )
+
+
 def main():
     th.manual_seed(23)
     check_registration()
@@ -342,7 +412,8 @@ def main():
     check_relation_gradient_boundary()
     check_hard_training_gate()
     check_group_distance_and_reverse_gradient_boundary()
-    print("counter_mask_parameter_relation eight_variants=ok")
+    check_random_relation_pairing()
+    print("counter_mask_parameter_relation pairing_variants=ok")
 
 
 if __name__ == "__main__":
