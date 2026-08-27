@@ -268,6 +268,7 @@ class CleanLearner:
         self.mask_parameter_relation_active = model_type in {
             "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
             "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
+            "grf_abs_dual_branch_hard_gate_mask_parameter_relation_hypercond",
             "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
             "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
             "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",

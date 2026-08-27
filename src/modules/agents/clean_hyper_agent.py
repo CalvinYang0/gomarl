@@ -556,6 +556,7 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_temporal_param_stability_freeze2m_hypercond",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
+    "grf_abs_dual_branch_hard_gate_mask_parameter_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
     "grf_abs_dual_branch_binary_concrete_temporal_relation_group_gate_hypercond",
     "grf_abs_dual_branch_binary_concrete_temporal_relation_group_distance_hypercond",
@@ -577,6 +578,7 @@ GRF_DUAL_BRANCH_TRAIN_GATE_FREEZE_STEPS_BY_MODEL = {
 GRF_DUAL_BRANCH_MASK_PARAMETER_RELATION_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond",
+    "grf_abs_dual_branch_hard_gate_mask_parameter_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond",
     "grf_abs_dual_branch_binary_concrete_temporal_relation_group_gate_hypercond",
     "grf_abs_dual_branch_binary_concrete_temporal_relation_group_distance_hypercond",
@@ -683,6 +685,7 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_temporal_param_stability_freeze2m_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_temporal_stability_hypercond": "binary_concrete",
+    "grf_abs_dual_branch_hard_gate_mask_parameter_relation_hypercond": "hard_st",
     "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_perturbed_head_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_temporal_relation_group_gate_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_temporal_relation_group_distance_hypercond": "binary_concrete",

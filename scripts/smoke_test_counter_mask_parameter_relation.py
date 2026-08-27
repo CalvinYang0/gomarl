@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from learners.clean_learner import CleanLearner  # noqa: E402
 from modules.agents.clean_hyper_agent import (  # noqa: E402
+    GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL,
     GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL,
     GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS,
     GRF_DUAL_BRANCH_PERMUTATION_INVARIANT_GROUP_GATE_VARIANTS,
@@ -21,6 +22,7 @@ from modules.agents.clean_hyper_agent import (  # noqa: E402
     GRF_DUAL_BRANCH_TRAIN_GATE_FREEZE_STEPS_BY_MODEL,
     GRF_DUAL_BRANCH_VARIANTS,
     GRFPublicPrivateBiasTransformerCapturer,
+    ObservationConditionedBranchGate,
 )
 
 
@@ -39,6 +41,10 @@ RELATION = (
 RELATION_TEMPORAL = (
     "grf_abs_dual_branch_binary_concrete_"
     "mask_parameter_relation_temporal_stability_hypercond"
+)
+RELATION_HARD = (
+    "grf_abs_dual_branch_hard_gate_"
+    "mask_parameter_relation_hypercond"
 )
 RELATION_PERTURBED = (
     "grf_abs_dual_branch_binary_concrete_"
@@ -94,6 +100,7 @@ def check_registration():
         FREEZE,
         RELATION,
         RELATION_TEMPORAL,
+        RELATION_HARD,
         RELATION_PERTURBED,
         KL90,
         KL80_RELATION_T70,
@@ -112,6 +119,7 @@ def check_registration():
     assert {
         RELATION,
         RELATION_TEMPORAL,
+        RELATION_HARD,
         RELATION_PERTURBED,
         KL80_RELATION_T70,
         KL80_RELATION_KEEP,
@@ -120,6 +128,7 @@ def check_registration():
         TEMPORAL_STOP_PARAM,
         TEMPORAL_STOP_MASK,
     } <= GRF_DUAL_BRANCH_MASK_PARAMETER_RELATION_VARIANTS
+    assert GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[RELATION_HARD] == "hard_st"
     assert GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL[KL90] == (
         "bernoulli_kl",
         0.90,
@@ -262,6 +271,28 @@ def check_relation_gradient_boundary():
     assert current_parameter.grad is None
 
 
+def check_hard_training_gate():
+    gate = ObservationConditionedBranchGate(
+        obs_dim=6,
+        hidden_dim=0,
+        mode="hard_st",
+        hard_threshold=0.5,
+        initial_keep_probability=0.95,
+    )
+    with th.no_grad():
+        gate.gate_network.weight.fill_(0.25)
+        gate.gate_network.bias.copy_(
+            th.tensor([-2.0, 2.0] * 6, dtype=gate.gate_network.bias.dtype)
+        )
+    obs = th.randn(3, 6, requires_grad=True)
+    hard, probability = gate(obs, sample=True)
+    assert th.equal(hard, (probability > 0.5).to(hard.dtype))
+    assert th.all((hard == 0.0) | (hard == 1.0))
+    hard.sum().backward()
+    assert gate.gate_network.weight.grad is not None
+    assert gate.gate_network.weight.grad.abs().sum().item() > 0.0
+
+
 def check_group_distance_and_reverse_gradient_boundary():
     learner = CleanLearner.__new__(CleanLearner)
     learner.mask_parameter_relation_scale = 0.1
@@ -309,6 +340,7 @@ def main():
     check_freeze_matches_evaluation()
     check_learner_freeze_boundary()
     check_relation_gradient_boundary()
+    check_hard_training_gate()
     check_group_distance_and_reverse_gradient_boundary()
     print("counter_mask_parameter_relation eight_variants=ok")
 
