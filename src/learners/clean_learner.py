@@ -309,6 +309,13 @@ class CleanLearner:
         self.random_drop_auxiliary_scope = str(
             getattr(args, "clean_random_drop_auxiliary_scope", "episode")
         ).lower()
+        self.random_drop_auxiliary_combine_mode = str(
+            getattr(
+                args,
+                "clean_random_drop_auxiliary_combine_mode",
+                "replace",
+            )
+        ).lower()
         if not 0.0 < self.random_drop_auxiliary_keep_probability <= 1.0:
             raise ValueError(
                 "clean_random_drop_auxiliary_keep_probability must be in (0, 1]"
@@ -318,6 +325,13 @@ class CleanLearner:
         if self.random_drop_auxiliary_scope not in {"episode", "timestep"}:
             raise ValueError(
                 "clean_random_drop_auxiliary_scope must be episode or timestep"
+            )
+        if self.random_drop_auxiliary_combine_mode not in {
+            "replace",
+            "multiply",
+        }:
+            raise ValueError(
+                "clean_random_drop_auxiliary_combine_mode must be replace or multiply"
             )
         self.importance_auxiliary_active = (
             self.perturbed_parameter_importance_active
@@ -2274,6 +2288,9 @@ class CleanLearner:
                 )
                 self.mac.init_hidden(batch.batch_size)
                 try:
+                    self.mac.set_dynamic_branch_gate_random_aux_combine_mode(
+                        self.random_drop_auxiliary_combine_mode
+                    )
                     if self.random_drop_auxiliary_scope == "episode":
                         self.mac.set_dynamic_branch_gate_random_aux_mask(
                             td_loss.new_tensor(

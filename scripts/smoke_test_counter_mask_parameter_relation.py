@@ -163,7 +163,22 @@ def check_random_drop_auxiliary_mask():
     # The auxiliary random mask replaces, rather than multiplies, the learned
     # Binary-Concrete gate.  Its exact 0/1 pattern must therefore be preserved.
     assert th.equal(model.latest_dynamic_branch_gates_graph, random_mask)
+
+    learned_mask = th.ones_like(random_mask)
+    learned_mask[..., 2] = 0.0
+    random_mask = th.ones_like(random_mask)
+    random_mask[..., 3] = 0.0
+    model.set_dynamic_branch_gate_override(learned_mask)
+    model.set_dynamic_branch_gate_random_aux_combine_mode("multiply")
+    model.set_dynamic_branch_gate_random_aux_mask(random_mask)
+    model(obs, hidden)
+    assert th.equal(
+        model.latest_dynamic_branch_gates_graph,
+        learned_mask * random_mask,
+    )
+    model.set_dynamic_branch_gate_override(None)
     model.set_dynamic_branch_gate_random_aux_mask(None)
+    model.set_dynamic_branch_gate_random_aux_combine_mode("replace")
 
 
 def check_grouped_property_gate():

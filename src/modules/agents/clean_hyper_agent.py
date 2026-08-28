@@ -2080,6 +2080,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         # random-drop auxiliary rollout.  The learned gate probabilities and
         # the normal forward path remain unchanged.
         self._dynamic_branch_gate_random_aux_mask = None
+        self._dynamic_branch_gate_random_aux_combine_mode = "replace"
         self.latest_dynamic_branch_gates_graph = None
         self.latest_dynamic_branch_probabilities_graph = None
         self.latest_dynamic_branch_logits_graph = None
@@ -2887,12 +2888,12 @@ class PublicTransformerRelationCapturer(nn.Module):
                             tuple(random_mask.shape), tuple(gates.shape)
                         )
                     )
-                # The random-drop auxiliary is a separate observation-corruption
-                # path.  It replaces the learned observation-conditioned mask;
-                # multiplying the two would instead measure a second drop on top
-                # of the learned gate and would confound the intended ablation.
-                # `probabilities` remains untouched for normal gate diagnostics.
-                gates = random_mask.detach()
+                if self._dynamic_branch_gate_random_aux_combine_mode == "multiply":
+                    gates = gates * random_mask.detach()
+                else:
+                    # The default random-drop auxiliary is a separate
+                    # observation-corruption path and replaces the learned mask.
+                    gates = random_mask.detach()
             self.latest_dynamic_branch_gates_graph = gates
             raw_probabilities = (
                 probabilities
@@ -3340,6 +3341,14 @@ class PublicTransformerRelationCapturer(nn.Module):
 
     def set_dynamic_branch_gate_random_aux_mask(self, mask):
         self._dynamic_branch_gate_random_aux_mask = mask
+
+    def set_dynamic_branch_gate_random_aux_combine_mode(self, mode):
+        mode = str(mode).lower()
+        if mode not in {"replace", "multiply"}:
+            raise ValueError(
+                "Random auxiliary combine mode must be replace or multiply"
+            )
+        self._dynamic_branch_gate_random_aux_combine_mode = mode
 
     def semantic_router_needs_binary_audit(self):
         return (
@@ -11964,6 +11973,14 @@ class CleanHyperAgent(nn.Module):
             relation_capturer, "set_dynamic_branch_gate_random_aux_mask"
         ):
             relation_capturer.set_dynamic_branch_gate_random_aux_mask(mask)
+
+    def set_dynamic_branch_gate_random_aux_combine_mode(self, mode):
+        relation_capturer = getattr(self, "rpg_relation_capturer", None)
+        if relation_capturer is not None and hasattr(
+            relation_capturer,
+            "set_dynamic_branch_gate_random_aux_combine_mode",
+        ):
+            relation_capturer.set_dynamic_branch_gate_random_aux_combine_mode(mode)
 
     def set_dynamic_branch_gate_force_open(self, enabled):
         relation_capturer = getattr(self, "rpg_relation_capturer", None)
