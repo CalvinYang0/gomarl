@@ -5234,6 +5234,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self._dynamic_branch_gate_force_open = False
         self._dynamic_branch_gate_override = None
         self._dynamic_branch_gate_random_aux_mask = None
+        self._dynamic_branch_gate_random_aux_combine_mode = "replace"
         self.latest_dynamic_branch_gates_graph = None
         self.latest_dynamic_branch_probabilities_graph = None
         self.latest_dynamic_branch_logits_graph = None
