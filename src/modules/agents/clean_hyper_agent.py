@@ -587,6 +587,7 @@ GRF_DUAL_BRANCH_MASK_PARAMETER_RELATION_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_mask_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
+    "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond",
 }
 GRF_INDEPENDENT_ENTITY_THREE_HEAD_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond",
@@ -2868,6 +2869,14 @@ class PublicTransformerRelationCapturer(nn.Module):
                 random_mask = self._dynamic_branch_gate_random_aux_mask.to(
                     device=gates.device, dtype=gates.dtype
                 )
+                if random_mask.numel() == 1:
+                    keep_probability = float(random_mask.item())
+                    random_mask = th.full_like(gates, keep_probability).bernoulli_()
+                    # An episode-scoped caller sets the scalar probability once,
+                    # so retaining the realized tensor reuses exactly the same
+                    # mask at later timesteps.  A timestep-scoped caller resets
+                    # the scalar before each forward and therefore resamples it.
+                    self._dynamic_branch_gate_random_aux_mask = random_mask.detach()
                 if random_mask.dim() == 2:
                     random_mask = random_mask.unsqueeze(1).expand(
                         gates.shape[0], -1, -1
@@ -2878,11 +2887,12 @@ class PublicTransformerRelationCapturer(nn.Module):
                             tuple(random_mask.shape), tuple(gates.shape)
                         )
                     )
-                # This mask is sampled by the learner and detached.  Keeping
-                # it outside `probabilities` preserves the gate's normal
-                # statistics while allowing the auxiliary TD loss to train
-                # the gate on the surviving branch inputs.
-                gates = gates * random_mask
+                # The random-drop auxiliary is a separate observation-corruption
+                # path.  It replaces the learned observation-conditioned mask;
+                # multiplying the two would instead measure a second drop on top
+                # of the learned gate and would confound the intended ablation.
+                # `probabilities` remains untouched for normal gate diagnostics.
+                gates = random_mask.detach()
             self.latest_dynamic_branch_gates_graph = gates
             raw_probabilities = (
                 probabilities

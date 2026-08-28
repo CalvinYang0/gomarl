@@ -264,6 +264,7 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_temporal_relation_group_distance_hypercond",
             "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_param_hypercond",
             "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_mask_hypercond",
+            "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond",
         }
         self.mask_parameter_relation_active = model_type in {
             "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond",
@@ -324,7 +325,6 @@ class CleanLearner:
             or self.perturbed_head_td_quality_active
             or self.temporal_param_auxiliary_active
             or self.mask_parameter_relation_active
-            or self.random_drop_auxiliary_active
         )
         self.importance_gate_parameters = ()
         if self.importance_auxiliary_active:
@@ -2264,36 +2264,29 @@ class CleanLearner:
             random_drop_auxiliary_loss = td_loss.new_zeros(())
             random_drop_auxiliary_enabled = (
                 self.random_drop_auxiliary_active
-                and importance_auxiliary_enabled
+                and t_env >= self.importance_auxiliary_warmup_steps
                 and self.random_drop_auxiliary_coef > 0.0
             )
             if random_drop_auxiliary_enabled:
-                reference_gates = getattr(
-                    self.mac, "latest_dynamic_branch_gates_graph", None
-                )
-                if reference_gates is None:
-                    raise RuntimeError(
-                        "Random-drop auxiliary requires dynamic branch gates"
-                    )
-                episode_mask = None
                 random_mac_out = []
                 random_relation_conditions = (
                     [] if self.relation_mixer_gate is not None else None
                 )
                 self.mac.init_hidden(batch.batch_size)
                 try:
-                    for t in range(batch.max_seq_length):
-                        if (
-                            episode_mask is None
-                            or self.random_drop_auxiliary_scope == "timestep"
-                        ):
-                            episode_mask = th.full_like(
-                                reference_gates.detach(),
-                                self.random_drop_auxiliary_keep_probability,
-                            ).bernoulli_()
+                    if self.random_drop_auxiliary_scope == "episode":
                         self.mac.set_dynamic_branch_gate_random_aux_mask(
-                            episode_mask
+                            td_loss.new_tensor(
+                                self.random_drop_auxiliary_keep_probability
+                            )
                         )
+                    for t in range(batch.max_seq_length):
+                        if self.random_drop_auxiliary_scope == "timestep":
+                            self.mac.set_dynamic_branch_gate_random_aux_mask(
+                                td_loss.new_tensor(
+                                    self.random_drop_auxiliary_keep_probability
+                                )
+                            )
                         random_mac_out.append(self.mac.forward(batch, t=t))
                         if random_relation_conditions is not None:
                             condition = getattr(self.mac, "latest_condition", None)
@@ -2643,16 +2636,9 @@ class CleanLearner:
                     temporal_param_auxiliary_coef
                     * temporal_param_auxiliary_loss
                 )
-            elif (
-                self.random_drop_auxiliary_active
-                and random_drop_auxiliary_enabled
-                and random_drop_auxiliary_coef > 0.0
-            ):
-                gate_only_importance_loss = (
-                    random_drop_auxiliary_coef * random_drop_auxiliary_loss
-                )
             loss = (
                 td_loss
+                + random_drop_auxiliary_coef * random_drop_auxiliary_loss
                 + gate_auxiliary_coef * aux_loss
                 + float(
                     getattr(self.args, "clean_relation_teacher_td_coef", 0.0)

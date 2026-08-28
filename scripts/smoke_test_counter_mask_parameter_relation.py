@@ -132,6 +132,7 @@ def check_registration():
         TEMPORAL_GROUP_DISTANCE,
         TEMPORAL_STOP_PARAM,
         TEMPORAL_STOP_MASK,
+        RANDOM_DROP_AUX,
     } <= GRF_DUAL_BRANCH_MASK_PARAMETER_RELATION_VARIANTS
     assert GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[RELATION_HARD] == "hard_st"
     assert GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL[KL90] == (
@@ -155,11 +156,13 @@ def check_random_drop_auxiliary_mask():
     model.set_dynamic_branch_gate_t_env(300000)
     obs = th.randn(2, 4, 30)
     hidden = th.zeros(2, 4, 16)
-    random_mask = th.ones(2, 2, 4, 30)
-    random_mask[..., 0] = 0.0
+    random_mask = th.zeros(2, 2, 4, 30)
+    random_mask[..., 1] = 1.0
     model.set_dynamic_branch_gate_random_aux_mask(random_mask)
     model(obs, hidden)
-    assert th.count_nonzero(model.latest_dynamic_branch_gates_graph[..., 0]) == 0
+    # The auxiliary random mask replaces, rather than multiplies, the learned
+    # Binary-Concrete gate.  Its exact 0/1 pattern must therefore be preserved.
+    assert th.equal(model.latest_dynamic_branch_gates_graph, random_mask)
     model.set_dynamic_branch_gate_random_aux_mask(None)
 
 
