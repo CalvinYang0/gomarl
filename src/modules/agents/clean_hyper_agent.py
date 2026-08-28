@@ -264,6 +264,7 @@ RPG_DUAL_BRANCH_VARIANTS = {
     "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
     "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond",
     "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
+    "rpg_dual_branch_binary_concrete_random_drop_aux_hypercond",
 }
 RPG_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS = {
     "rpg_dual_branch_attention_only_hard_gate_param_stability_hypercond",
@@ -307,6 +308,7 @@ RPG_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS = (
         "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond",
         "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond",
         "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
+        "rpg_dual_branch_binary_concrete_random_drop_aux_hypercond",
     }
 )
 RPG_DUAL_BRANCH_GRAD_CONSISTENCY_VARIANTS = {
@@ -351,6 +353,7 @@ RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "rpg_dual_branch_binary_concrete_perturbed_head_td_quality_hypercond": "binary_concrete",
     "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond": "binary_concrete",
     "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond": "binary_concrete",
+    "rpg_dual_branch_binary_concrete_random_drop_aux_hypercond": "binary_concrete",
 }
 SEMANTIC_ROUTER_FILM_VARIANTS = {
     "rpg_simple_bias_gradient_importance_film_router_hypercond",

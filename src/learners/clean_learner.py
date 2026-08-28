@@ -297,9 +297,10 @@ class CleanLearner:
             self.temporal_param_stability_active
             or self.temporal_param_small_change_active
         )
-        self.random_drop_auxiliary_active = model_type == (
-            "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond"
-        )
+        self.random_drop_auxiliary_active = model_type in {
+            "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond",
+            "rpg_dual_branch_binary_concrete_random_drop_aux_hypercond",
+        }
         self.random_drop_auxiliary_keep_probability = float(
             getattr(args, "clean_random_drop_auxiliary_keep_probability", 0.8)
         )
