@@ -569,7 +569,6 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond",
-    "grf_abs_dual_branch_binary_concrete_fixed_head",
 }
 GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond",
@@ -701,7 +700,6 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond": "binary_concrete",
-    "grf_abs_dual_branch_binary_concrete_fixed_head": "binary_concrete",
 }
 GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": (
@@ -7980,10 +7978,6 @@ class CleanHyperAgent(nn.Module):
             name: {"uses_hypernet": True, "execution_scope": "ctde"}
             for name in GRF_PUBLIC_TRANSFORMER_VARIANTS
         },
-        "grf_abs_dual_branch_binary_concrete_fixed_head": {
-            "uses_hypernet": False,
-            "execution_scope": "ctde",
-        },
     }
 
     def __init__(self, input_shape, args):
@@ -8424,17 +8418,6 @@ class CleanHyperAgent(nn.Module):
                 if self.model_type == "qmix_minimal"
                 else None
             )
-
-        self.fixed_relation_head = (
-            nn.Sequential(
-                nn.Linear(self.hidden_dim + self.cond_dim, self.hidden_dim),
-                nn.ELU(inplace=True),
-                nn.Linear(self.hidden_dim, self.n_actions),
-            )
-            if self.model_type
-            == "grf_abs_dual_branch_binary_concrete_fixed_head"
-            else None
-        )
 
         if self.model_type in GRF_DECISION_MAKER_VARIANTS:
             self._init_grf_decision_maker_head()
@@ -12184,14 +12167,7 @@ class CleanHyperAgent(nn.Module):
                         )
                     else:
                         self.latest_condition_graph = relation_condition
-                if (
-                    self.model_type
-                    == "grf_abs_dual_branch_binary_concrete_fixed_head"
-                ):
-                    q = self.fixed_relation_head(
-                        th.cat([hidden, relation_condition], dim=-1)
-                    )
-                elif self.model_type in GRF_DECISION_MAKER_VARIANTS:
+                if self.model_type in GRF_DECISION_MAKER_VARIANTS:
                     q = self._apply_grf_decision_maker_head(
                         hidden, relation_condition, context=context
                     )

@@ -5,7 +5,7 @@ set -euo pipefail
 #   1) relation distance uses sampled Binary-Concrete gate values;
 #   2) probability relation + per-timestep multiply mask, keep=0.5, weight=1;
 #   3) probability relation + per-timestep multiply mask, keep=0.9, weight=1;
-#   4) dual-branch fixed Q head with no hypernetwork (TD-only control).
+#   4) plain recurrent fixed Q head with no hypernetwork, dual encoder, or gate.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
@@ -93,9 +93,9 @@ submit_one \
 sleep "$SUBMIT_GAP_SECONDS"
 
 submit_one \
-  "grf_counter_dual_branch_fixed_head_no_hyper_s${SEED}" \
-  "grf_counter_dual_branch_fixed_head_no_hyper_10m_s${SEED}" \
-  "grf_abs_dual_branch_binary_concrete_fixed_head" \
+  "grf_counter_qmix_minimal_no_hyper_s${SEED}" \
+  "grf_counter_qmix_minimal_no_hyper_10m_s${SEED}" \
+  "qmix_minimal" \
   "clean_mask_parameter_relation_coef=0.0 clean_mask_parameter_relation_pairing=fixed"
 
 echo "processed total: 4"
