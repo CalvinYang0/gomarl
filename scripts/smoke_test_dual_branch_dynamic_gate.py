@@ -169,6 +169,7 @@ def check_grf_transformer_only():
     assert model.dual_linear_encoder is None
     assert model.dual_condition_fuser is None
     (condition.mean() + next_hidden.mean()).backward()
+    assert model.transformer_layers[0].self_attn.qkv.weight.grad is not None
 
 
 def check_single_branch_random_drop_auxiliary():
@@ -227,7 +228,6 @@ def check_qmix_minimal_no_hypernetwork():
     assert hidden.shape == (2, 4, 16)
     q.mean().backward()
     assert agent.fixed_head[0].weight.grad is not None
-    assert model.transformer_layers[0].self_attn.qkv.weight.grad is not None
 
 
 def check_shared_slot_gate():
