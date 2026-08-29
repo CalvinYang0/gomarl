@@ -24,6 +24,8 @@ class CleanMAC(BasicMAC):
         self._test_parameter_pca_enabled = bool(
             getattr(args, "wandb_test_parameter_pca", True)
         )
+        self._random_drop_auxiliary_input_keep_probability = None
+        self._random_drop_auxiliary_input_mask = None
 
     @staticmethod
     def _fixed_parameter_projection(parameter_parts, projection_dim):
@@ -93,6 +95,40 @@ class CleanMAC(BasicMAC):
             self.agent, "set_dynamic_branch_gate_random_aux_combine_mode"
         ):
             self.agent.set_dynamic_branch_gate_random_aux_combine_mode(mode)
+
+    def set_random_drop_auxiliary_input_keep_probability(self, probability):
+        """Enable one cached Bernoulli mask over the raw observation.
+
+        Calling this method again invalidates the cache, so the learner can
+        choose episode-level or timestep-level resampling without coupling the
+        single-branch controls to the dual-branch gate implementation.
+        """
+        if probability is None:
+            self._random_drop_auxiliary_input_keep_probability = None
+            self._random_drop_auxiliary_input_mask = None
+            return
+        if th.is_tensor(probability):
+            probability = float(probability.detach().item())
+        probability = float(probability)
+        if not 0.0 < probability <= 1.0:
+            raise ValueError("Random auxiliary input keep probability must be in (0, 1]")
+        self._random_drop_auxiliary_input_keep_probability = probability
+        self._random_drop_auxiliary_input_mask = None
+
+    def _random_drop_auxiliary_observation(self, observation):
+        probability = self._random_drop_auxiliary_input_keep_probability
+        if probability is None:
+            return observation
+        mask = self._random_drop_auxiliary_input_mask
+        if (
+            mask is None
+            or mask.shape != observation.shape
+            or mask.device != observation.device
+            or mask.dtype != observation.dtype
+        ):
+            mask = th.empty_like(observation).bernoulli_(probability)
+            self._random_drop_auxiliary_input_mask = mask
+        return observation * mask
 
     def set_td_parameter_sampling_enabled(self, enabled):
         if hasattr(self.agent, "set_td_parameter_sampling_enabled"):
@@ -494,7 +530,8 @@ class CleanMAC(BasicMAC):
 
     def _build_inputs(self, batch, t):
         batch_size = batch.batch_size
-        inputs = [batch["obs"][:, t]]
+        observation = self._random_drop_auxiliary_observation(batch["obs"][:, t])
+        inputs = [observation]
         if self.args.obs_last_action:
             if t == 0:
                 inputs.append(th.zeros_like(batch["actions_onehot"][:, t]))
@@ -525,8 +562,9 @@ class CleanMAC(BasicMAC):
         if t < batch.max_seq_length - 1:
             action_targets = batch["actions"][:, t].reshape(batch_size, self.n_agents)
             action_target_mask = batch["filled"][:, t].reshape(batch_size, 1).expand(-1, self.n_agents)
+        observation = self._random_drop_auxiliary_observation(batch["obs"][:, t])
         return {
-            "obs": batch["obs"][:, t].reshape(batch_size, self.n_agents, -1),
+            "obs": observation.reshape(batch_size, self.n_agents, -1),
             "prev_obs": prev_obs.reshape(batch_size, self.n_agents, -1),
             "next_obs": next_obs.reshape(batch_size, self.n_agents, -1),
             "next_obs_mask": next_obs_mask.reshape(batch_size, 1).expand(-1, self.n_agents),

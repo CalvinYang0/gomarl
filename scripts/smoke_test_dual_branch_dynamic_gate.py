@@ -19,6 +19,8 @@ from modules.agents.clean_hyper_agent import (  # noqa: E402
     GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS,
     GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS,
     GRF_DUAL_BRANCH_VARIANTS,
+    GRF_MLP_RELATION_VARIANTS,
+    GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS,
     GRFPublicPrivateBiasTransformerCapturer,
     CleanHyperAgent,
     RPG_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL,
@@ -167,6 +169,33 @@ def check_grf_transformer_only():
     assert model.dual_linear_encoder is None
     assert model.dual_condition_fuser is None
     (condition.mean() + next_hidden.mean()).backward()
+
+
+def check_single_branch_random_drop_auxiliary():
+    mlp_name = "grf_abs_mlp_relation_random_drop_aux_hypercond"
+    transformer_name = (
+        "grf_abs_single_transformer_branch_random_drop_aux_hypercond"
+    )
+    assert mlp_name in GRF_MLP_RELATION_VARIANTS
+    assert transformer_name in GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS
+
+    # Exercise the controller-level observation mask used by both controls.
+    mac = CleanMAC.__new__(CleanMAC)
+    mac._random_drop_auxiliary_input_keep_probability = None
+    mac._random_drop_auxiliary_input_mask = None
+    observation = th.ones(8, 4, 30)
+    mac.set_random_drop_auxiliary_input_keep_probability(0.2)
+    first = mac._random_drop_auxiliary_observation(observation)
+    repeated = mac._random_drop_auxiliary_observation(observation)
+    assert th.equal(first, repeated)
+    assert 0.0 < first.mean().item() < 0.5
+
+    # Resetting the probability is how timestep scope requests a fresh mask.
+    mac.set_random_drop_auxiliary_input_keep_probability(0.2)
+    resampled = mac._random_drop_auxiliary_observation(observation)
+    assert not th.equal(first, resampled)
+    mac.set_random_drop_auxiliary_input_keep_probability(None)
+    assert th.equal(mac._random_drop_auxiliary_observation(observation), observation)
 
 
 def check_qmix_minimal_no_hypernetwork():
@@ -784,6 +813,8 @@ def main():
     print("dual_branch binary_concrete stochastic_recovery=ok")
     check_grf_transformer_only()
     print("single_transformer_branch forward_backward=ok")
+    check_single_branch_random_drop_auxiliary()
+    print("single_branch random_drop_auxiliary observation_mask=ok")
     check_qmix_minimal_no_hypernetwork()
     print("qmix_minimal fixed_head_no_hypernetwork=ok")
     check_shared_slot_gate()

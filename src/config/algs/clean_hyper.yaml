@@ -575,6 +575,13 @@ hypernet_layers: 2
 #                                      keeps the dual baseline's full-observation
 #                                      entity Transformer branch and removes the
 #                                      Linear branch, fusion layer, and gates.
+# - grf_abs_mlp_relation_random_drop_aux_hypercond and
+#   grf_abs_single_transformer_branch_random_drop_aux_hypercond: TD-only
+#                                      single-branch controls. A second training
+#                                      forward masks raw observation scalars with
+#                                      an independent Bernoulli mask and receives
+#                                      clean_random_drop_auxiliary_coef times TD;
+#                                      rollout/evaluation remains unmasked.
 # - grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond:
 #                                      TD-only Concrete-gated dual condition.
 #                                      Its action module separately encodes raw

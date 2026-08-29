@@ -300,6 +300,12 @@ class CleanLearner:
         self.random_drop_auxiliary_active = model_type in {
             "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond",
             "rpg_dual_branch_binary_concrete_random_drop_aux_hypercond",
+            "grf_abs_mlp_relation_random_drop_aux_hypercond",
+            "grf_abs_single_transformer_branch_random_drop_aux_hypercond",
+        }
+        self.random_drop_auxiliary_input_mask = model_type in {
+            "grf_abs_mlp_relation_random_drop_aux_hypercond",
+            "grf_abs_single_transformer_branch_random_drop_aux_hypercond",
         }
         self.random_drop_auxiliary_keep_probability = float(
             getattr(args, "clean_random_drop_auxiliary_keep_probability", 0.8)
@@ -2308,22 +2314,35 @@ class CleanLearner:
                 )
                 self.mac.init_hidden(batch.batch_size)
                 try:
-                    self.mac.set_dynamic_branch_gate_random_aux_combine_mode(
-                        self.random_drop_auxiliary_combine_mode
-                    )
-                    if self.random_drop_auxiliary_scope == "episode":
-                        self.mac.set_dynamic_branch_gate_random_aux_mask(
-                            td_loss.new_tensor(
-                                self.random_drop_auxiliary_keep_probability
-                            )
+                    if not self.random_drop_auxiliary_input_mask:
+                        self.mac.set_dynamic_branch_gate_random_aux_combine_mode(
+                            self.random_drop_auxiliary_combine_mode
                         )
+                    if self.random_drop_auxiliary_scope == "episode":
+                        keep_probability = td_loss.new_tensor(
+                            self.random_drop_auxiliary_keep_probability
+                        )
+                        if self.random_drop_auxiliary_input_mask:
+                            self.mac.set_random_drop_auxiliary_input_keep_probability(
+                                keep_probability
+                            )
+                        else:
+                            self.mac.set_dynamic_branch_gate_random_aux_mask(
+                                keep_probability
+                            )
                     for t in range(batch.max_seq_length):
                         if self.random_drop_auxiliary_scope == "timestep":
-                            self.mac.set_dynamic_branch_gate_random_aux_mask(
-                                td_loss.new_tensor(
-                                    self.random_drop_auxiliary_keep_probability
-                                )
+                            keep_probability = td_loss.new_tensor(
+                                self.random_drop_auxiliary_keep_probability
                             )
+                            if self.random_drop_auxiliary_input_mask:
+                                self.mac.set_random_drop_auxiliary_input_keep_probability(
+                                    keep_probability
+                                )
+                            else:
+                                self.mac.set_dynamic_branch_gate_random_aux_mask(
+                                    keep_probability
+                                )
                         random_mac_out.append(self.mac.forward(batch, t=t))
                         if random_relation_conditions is not None:
                             condition = getattr(self.mac, "latest_condition", None)
@@ -2334,7 +2353,10 @@ class CleanLearner:
                                 )
                             random_relation_conditions.append(condition)
                 finally:
-                    self.mac.set_dynamic_branch_gate_random_aux_mask(None)
+                    if self.random_drop_auxiliary_input_mask:
+                        self.mac.set_random_drop_auxiliary_input_keep_probability(None)
+                    else:
+                        self.mac.set_dynamic_branch_gate_random_aux_mask(None)
                 random_mac_out = th.stack(random_mac_out, dim=1)
                 random_chosen_qvals = th.gather(
                     random_mac_out[:, :-1], dim=3, index=actions

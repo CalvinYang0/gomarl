@@ -480,6 +480,7 @@ GRF_DECISION_MAKER_VARIANTS = {
 }
 GRF_MLP_RELATION_VARIANTS = {
     "grf_abs_mlp_relation_hypercond",
+    "grf_abs_mlp_relation_random_drop_aux_hypercond",
     "grf_abs_gimp_lthr_drop_mlp_relation_hypercond",
     "grf_abs_gimp_lthr_soft_mlp_relation_hypercond",
     "grf_abs_gimp_lowfreq_soft_mlp_relation_hypercond",
@@ -746,6 +747,7 @@ GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL = {
 }
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_hypercond",
+    "grf_abs_single_transformer_branch_random_drop_aux_hypercond",
 }
 GRF_DECISION_MAKER_VARIANTS |= (
     GRF_MLP_RELATION_VARIANTS
