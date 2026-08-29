@@ -159,6 +159,11 @@ hypernet_layers: 2
 #                                     entity-token Transformer. Public tokens
 #                                     keep presence, health/shield, and unit
 #                                     type only.
+# - rpg_public_transformer_random_drop_aux_hypercond: same single public-entity
+#                                     Transformer, with an extra TD pass whose
+#                                     hypernetwork-condition observation is
+#                                     independently Bernoulli-masked. The policy
+#                                     GRU input and evaluation path stay clean.
 # - rpg_public_future_delta_token_transformer_hypercond: public Transformer
 #                                                        relation generator
 #                                                        with predicted

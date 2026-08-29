@@ -176,8 +176,12 @@ def check_single_branch_random_drop_auxiliary():
     transformer_name = (
         "grf_abs_single_transformer_branch_random_drop_aux_hypercond"
     )
+    corridor_transformer_name = (
+        "rpg_public_transformer_random_drop_aux_hypercond"
+    )
     assert mlp_name in GRF_MLP_RELATION_VARIANTS
     assert transformer_name in GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS
+    assert corridor_transformer_name in CleanHyperAgent.MODEL_SPECS
 
     # Exercise the controller-level observation mask used by both controls.
     mac = CleanMAC.__new__(CleanMAC)

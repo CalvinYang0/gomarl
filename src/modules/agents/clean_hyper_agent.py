@@ -434,7 +434,10 @@ PUBLIC_TRANSFORMER_BIAS_VARIANTS = {
     "rpg_public_past_delta_bias_transformer_private_head_input_hypercond",
 } | PUBLIC_TRANSFORMER_SIMPLE_BIAS_FAMILY
 PUBLIC_TRANSFORMER_RELATION_VARIANTS = (
-    {"rpg_public_transformer_hypercond"}
+    {
+        "rpg_public_transformer_hypercond",
+        "rpg_public_transformer_random_drop_aux_hypercond",
+    }
     | RPG_DUAL_BRANCH_VARIANTS
     | MLP_RELATION_VARIANTS
     | PUBLIC_TRANSFORMER_FUTURE_DELTA_VARIANTS
@@ -988,6 +991,7 @@ class CompactSemanticEntityEncoder(nn.Module):
 
 PUBLIC_TRANSFORMER_MODE_BY_MODEL = {
     "rpg_public_transformer_hypercond": "baseline",
+    "rpg_public_transformer_random_drop_aux_hypercond": "baseline",
     "rpg_public_transformer_single_head_hypercond": "baseline",
     "rpg_mlp_relation_hypercond": "baseline",
     **{name: "full_obs" for name in RPG_DUAL_BRANCH_VARIANTS},

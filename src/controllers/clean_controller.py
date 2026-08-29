@@ -437,6 +437,7 @@ class CleanMAC(BasicMAC):
             "rpg_dual_branch_binary_concrete_adaptive_split_head_grad_consistency_hypercond",
             "rpg_dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond",
             "rpg_public_transformer_hypercond",
+            "rpg_public_transformer_random_drop_aux_hypercond",
             "rpg_public_future_delta_token_transformer_hypercond",
             "rpg_public_future_delta_bias_transformer_hypercond",
             "rpg_public_private_token_transformer_hypercond",
@@ -530,8 +531,11 @@ class CleanMAC(BasicMAC):
 
     def _build_inputs(self, batch, t):
         batch_size = batch.batch_size
-        observation = self._random_drop_auxiliary_observation(batch["obs"][:, t])
-        inputs = [observation]
+        # Random-drop auxiliaries perturb only the observation-conditioned
+        # relation/hypernetwork path. The recurrent policy trunk deliberately
+        # keeps the clean observation, matching the original dual-branch
+        # random-gate auxiliary.
+        inputs = [batch["obs"][:, t]]
         if self.args.obs_last_action:
             if t == 0:
                 inputs.append(th.zeros_like(batch["actions_onehot"][:, t]))
