@@ -913,6 +913,9 @@ clean_mask_parameter_relation_scale: 0.1
 # fixed: adjacent + deterministic non-local pairs; episode_random: random
 # pairs within each episode; global_random: random pairs across the replay batch.
 clean_mask_parameter_relation_pairing: fixed
+# probability compares sigmoid keep probabilities; sampled_gate compares the
+# stochastic Binary-Concrete values actually applied to the observation.
+clean_mask_parameter_relation_mask_source: probability
 # Fixed gate-only weights for relation-family variants. These are intentionally
 # independent: the smaller temporal loss must not be diluted by the larger
 # relation loss through a shared adaptive coefficient.

@@ -167,6 +167,38 @@ def check_grf_transformer_only():
     assert model.dual_linear_encoder is None
     assert model.dual_condition_fuser is None
     (condition.mean() + next_hidden.mean()).backward()
+
+
+def check_grf_dual_branch_fixed_head():
+    model_name = "grf_abs_dual_branch_binary_concrete_fixed_head"
+    assert model_name in GRF_DUAL_BRANCH_VARIANTS
+    assert GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[model_name] == (
+        "binary_concrete"
+    )
+    args = SimpleNamespace(
+        clean_model_type=model_name,
+        env="academy_counterattack_easy",
+        n_agents=4,
+        n_actions=19,
+        rnn_hidden_dim=16,
+        hypernet_embed=16,
+        obs_last_action=False,
+        obs_agent_id=False,
+        clean_hard_gate_initial_keep_probability=0.95,
+    )
+    agent = CleanHyperAgent(input_shape=30, args=args)
+    assert agent.MODEL_SPECS[model_name]["uses_hypernet"] is False
+    assert agent.hyper_bottleneck_w is None
+    assert agent.hyper_out_w is None
+    assert agent.fixed_relation_head is not None
+    obs = th.randn(2, 4, 30)
+    context = {"obs": obs, "prev_action": th.zeros(2, 4, 19)}
+    agent.set_dynamic_branch_gate_t_env(250000)
+    q, hidden = agent(obs, None, context=context)
+    assert q.shape == (2, 4, 19)
+    assert hidden.shape == (2, 4, 32)
+    q.mean().backward()
+    assert agent.fixed_relation_head[0].weight.grad is not None
     assert model.transformer_layers[0].self_attn.qkv.weight.grad is not None
 
 
@@ -757,6 +789,8 @@ def main():
     print("dual_branch binary_concrete stochastic_recovery=ok")
     check_grf_transformer_only()
     print("single_transformer_branch forward_backward=ok")
+    check_grf_dual_branch_fixed_head()
+    print("dual_branch fixed_head_no_hypernetwork=ok")
     check_shared_slot_gate()
     print("shared_slot_binary_concrete forward_backward=ok")
     check_sparse_gate_variants()

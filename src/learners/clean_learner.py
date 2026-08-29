@@ -426,6 +426,13 @@ class CleanLearner:
         self.mask_parameter_relation_pairing = str(
             getattr(args, "clean_mask_parameter_relation_pairing", "fixed")
         ).strip().lower()
+        self.mask_parameter_relation_mask_source = str(
+            getattr(
+                args,
+                "clean_mask_parameter_relation_mask_source",
+                "probability",
+            )
+        ).strip().lower()
         if self.mask_parameter_relation_pairing not in {
             "fixed",
             "episode_random",
@@ -434,6 +441,14 @@ class CleanLearner:
             raise ValueError(
                 "clean_mask_parameter_relation_pairing must be one of "
                 "fixed, episode_random, or global_random"
+            )
+        if self.mask_parameter_relation_mask_source not in {
+            "probability",
+            "sampled_gate",
+        }:
+            raise ValueError(
+                "clean_mask_parameter_relation_mask_source must be "
+                "probability or sampled_gate"
             )
         self.mask_parameter_relation_coef = float(
             getattr(args, "clean_mask_parameter_relation_coef", 10.0)
@@ -2012,10 +2027,14 @@ class CleanLearner:
                     current_relation_parameters = getattr(
                         self.mac, "latest_generated_parameter_graph", None
                     )
+                    relation_mask_attribute = (
+                        "latest_dynamic_branch_gates_graph"
+                        if self.mask_parameter_relation_mask_source
+                        == "sampled_gate"
+                        else "latest_dynamic_branch_probabilities_graph"
+                    )
                     current_relation_probabilities = getattr(
-                        self.mac,
-                        "latest_dynamic_branch_probabilities_graph",
-                        None,
+                        self.mac, relation_mask_attribute, None
                     )
                     if (
                         current_relation_parameters is None
@@ -2023,7 +2042,7 @@ class CleanLearner:
                     ):
                         raise RuntimeError(
                             "Mask-parameter relation requires exact generated "
-                            "parameters and dynamic gate probabilities"
+                            "parameters and the requested dynamic gate values"
                         )
                     relation_parameters.append(current_relation_parameters)
                     relation_probabilities.append(current_relation_probabilities)
