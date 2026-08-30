@@ -16,7 +16,10 @@ WANDB_ENTITY="${WANDB_ENTITY:-hjh331-sjtu}"
 WANDB_PROJECT="${WANDB_PROJECT:-gomarl}"
 SYNC_TIMEOUT="${SYNC_TIMEOUT:-600}"
 TERMINATION_TIMEOUT="${TERMINATION_TIMEOUT:-180}"
-START_GRACE_SECONDS="${START_GRACE_SECONDS:-300}"
+# Slurm's %S timestamp is reported in the controller/login-node timezone,
+# while W&B's offline-run directory timestamp can come from a UTC compute
+# node.  Allow the largest Australian UTC offset plus a small startup margin.
+START_GRACE_SECONDS="${START_GRACE_SECONDS:-50400}"
 CANCEL_OLD="${CANCEL_OLD:-NO}"
 SYNC_ONLY="${SYNC_ONLY:-NO}"
 
