@@ -4,7 +4,8 @@ set -euo pipefail
 # Matched Counter single-Transformer learned-mask pair:
 #   1) observation-conditioned Binary-Concrete slot mask;
 #   2) the same learned mask plus a timestep-wise random-mask TD auxiliary.
-# The auxiliary multiplies (rather than replaces) the learned mask.
+# The auxiliary has keep=0.5 and weight=1.0, and multiplies (rather than
+# replaces) the learned mask.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
@@ -73,10 +74,10 @@ submit_one \
 sleep "$SUBMIT_GAP_SECONDS"
 
 submit_one \
-  "grf_counter_transformer_only_obs_gate_randommask_d80_w05_timestep_s${SEED}" \
-  "grf_counter_transformer_only_obs_gate_randommask_d80_w05_timestep_10m_s${SEED}" \
+  "grf_counter_transformer_only_obs_gate_randommask_d50_w10_timestep_s${SEED}" \
+  "grf_counter_transformer_only_obs_gate_randommask_d50_w10_timestep_10m_s${SEED}" \
   "grf_abs_single_transformer_branch_binary_concrete_gate_random_drop_aux_hypercond" \
-  "clean_random_drop_auxiliary_keep_probability=0.20 clean_random_drop_auxiliary_coef=0.5 clean_random_drop_auxiliary_scope=timestep clean_random_drop_auxiliary_combine_mode=multiply"
+  "clean_random_drop_auxiliary_keep_probability=0.50 clean_random_drop_auxiliary_coef=1.0 clean_random_drop_auxiliary_scope=timestep clean_random_drop_auxiliary_combine_mode=multiply"
 
 echo "processed total: 2"
 squeue -u "$USER" -o "%.18i %.90j %.10T %.12M %.10m %R"
