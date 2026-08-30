@@ -172,6 +172,60 @@ def check_grf_transformer_only():
     assert model.transformer_layers[0].self_attn.qkv.weight.grad is not None
 
 
+def check_single_transformer_observation_gate():
+    gated_name = (
+        "grf_abs_single_transformer_branch_binary_concrete_gate_hypercond"
+    )
+    random_aux_name = (
+        "grf_abs_single_transformer_branch_binary_concrete_gate_"
+        "random_drop_aux_hypercond"
+    )
+    assert {gated_name, random_aux_name} <= GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS
+    assert GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[gated_name] == (
+        "binary_concrete"
+    )
+    assert GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL[random_aux_name] == (
+        "binary_concrete"
+    )
+
+    model = GRFPublicPrivateBiasTransformerCapturer(
+        n_agents=4,
+        relation_dim=16,
+        output_dim=16,
+        num_heads=4,
+        use_absolute_public=True,
+        relation_encoder_style="attention_only",
+        dynamic_branch_gate_mode="binary_concrete",
+        dynamic_branch_gate_hidden_dim=16,
+        dynamic_branch_gate_warmup_steps=250000,
+    )
+    assert model.dual_linear_encoder is None
+    assert model.dual_condition_fuser is None
+    obs = th.randn(2, 4, 30)
+    hidden = th.zeros(2, 4, 16)
+    model.set_dynamic_branch_gate_t_env(300000)
+    condition, _ = model(obs, hidden)
+    condition.mean().backward()
+    gate_weight = model.dynamic_branch_gate.gate_network[-1].weight
+    assert gate_weight.grad is not None
+    assert gate_weight.grad.abs().sum().item() > 0.0
+
+    learned_mask = th.ones(2, 2, 4, 30)
+    learned_mask[..., 2] = 0.0
+    random_mask = th.ones_like(learned_mask)
+    random_mask[..., 3] = 0.0
+    model.set_dynamic_branch_gate_override(learned_mask)
+    model.set_dynamic_branch_gate_random_aux_combine_mode("multiply")
+    model.set_dynamic_branch_gate_random_aux_mask(random_mask)
+    model(obs, hidden)
+    assert th.equal(
+        model.latest_dynamic_branch_gates_graph,
+        learned_mask * random_mask,
+    )
+    model.set_dynamic_branch_gate_override(None)
+    model.set_dynamic_branch_gate_random_aux_mask(None)
+
+
 def check_single_branch_random_drop_auxiliary():
     mlp_name = "grf_abs_mlp_relation_random_drop_aux_hypercond"
     transformer_name = (
@@ -817,6 +871,8 @@ def main():
     print("dual_branch binary_concrete stochastic_recovery=ok")
     check_grf_transformer_only()
     print("single_transformer_branch forward_backward=ok")
+    check_single_transformer_observation_gate()
+    print("single_transformer obs_gate_and_random_multiply=ok")
     check_single_branch_random_drop_auxiliary()
     print("single_branch random_drop_auxiliary observation_mask=ok")
     check_qmix_minimal_no_hypernetwork()

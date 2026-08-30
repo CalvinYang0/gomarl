@@ -587,6 +587,13 @@ hypernet_layers: 2
 #                                      an independent Bernoulli mask and receives
 #                                      clean_random_drop_auxiliary_coef times TD;
 #                                      rollout/evaluation remains unmasked.
+# - grf_abs_single_transformer_branch_binary_concrete_gate_hypercond: the same
+#                                      single Transformer condition branch with
+#                                      an observation-conditioned Binary-Concrete
+#                                      slot mask and no Linear/fusion branch.
+# - grf_abs_single_transformer_branch_binary_concrete_gate_random_drop_aux_hypercond:
+#                                      adds a second TD forward whose random mask
+#                                      multiplies the learned observation mask.
 # - grf_abs_dual_branch_binary_concrete_td_only_entity_three_head_hypercond:
 #                                      TD-only Concrete-gated dual condition.
 #                                      Its action module separately encodes raw

@@ -704,6 +704,8 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond": "binary_concrete",
     "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond": "binary_concrete",
+    "grf_abs_single_transformer_branch_binary_concrete_gate_hypercond": "binary_concrete",
+    "grf_abs_single_transformer_branch_binary_concrete_gate_random_drop_aux_hypercond": "binary_concrete",
 }
 GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": (
@@ -751,6 +753,8 @@ GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL = {
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_hypercond",
     "grf_abs_single_transformer_branch_random_drop_aux_hypercond",
+    "grf_abs_single_transformer_branch_binary_concrete_gate_hypercond",
+    "grf_abs_single_transformer_branch_binary_concrete_gate_random_drop_aux_hypercond",
 }
 GRF_DECISION_MAKER_VARIANTS |= (
     GRF_MLP_RELATION_VARIANTS
@@ -5593,7 +5597,15 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
 
     def _forward_attention_only_relation(self, obs):
         flat_obs = obs[..., : self.expected_obs_dim]
-        next_relation_hidden = self._forward_full_obs_attention_branch(flat_obs)
+        attention_input = flat_obs
+        if self.dynamic_branch_gate is not None:
+            branch_gates = self._branch_keep_gates(flat_obs)
+            attention_input = self._apply_branch_gate(
+                flat_obs, branch_gates, 1
+            )
+        next_relation_hidden = self._forward_full_obs_attention_branch(
+            attention_input
+        )
         condition = (
             next_relation_hidden
             if self.output_dim == self.relation_dim
