@@ -18,10 +18,15 @@ SYNC_TIMEOUT="${SYNC_TIMEOUT:-600}"
 TERMINATION_TIMEOUT="${TERMINATION_TIMEOUT:-180}"
 START_GRACE_SECONDS="${START_GRACE_SECONDS:-300}"
 CANCEL_OLD="${CANCEL_OLD:-NO}"
+SYNC_ONLY="${SYNC_ONLY:-NO}"
 
 cd "$REPO_DIR"
 
-if [[ "$CANCEL_OLD" != "YES" ]]; then
+if [[ "$SYNC_ONLY" != "YES" && "$SYNC_ONLY" != "NO" ]]; then
+  echo "ERROR: SYNC_ONLY must be YES or NO" >&2
+  exit 2
+fi
+if [[ "$SYNC_ONLY" != "YES" && "$CANCEL_OLD" != "YES" ]]; then
   echo "ERROR: set CANCEL_OLD=YES to confirm replacing all active Slurm jobs" >&2
   exit 2
 fi
@@ -145,6 +150,12 @@ done
 if (( initial_failed > 0 )); then
   echo "ERROR: initial W&B update failed for $initial_failed job(s); nothing was cancelled" >&2
   exit 1
+fi
+
+if [[ "$SYNC_ONLY" == "YES" ]]; then
+  echo "sync-only complete: active_jobs=${#JOB_IDS[@]}; no jobs were cancelled or submitted"
+  squeue -u "$USER" -o "%.18i %.90j %.10T %.12M %.10m %R"
+  exit 0
 fi
 
 if (( ${#JOB_IDS[@]} > 0 )); then
