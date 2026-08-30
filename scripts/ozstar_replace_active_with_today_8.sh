@@ -78,20 +78,32 @@ run_dir_epoch() {
 
 find_active_run_dir() {
   local run_name="$1" start_time="$2"
-  local start_epoch earliest config run_dir run_epoch best_dir="" best_epoch=0
+  local start_epoch earliest run_dir run_epoch run_file matched best_dir="" best_epoch=0
   start_epoch="$(date -d "$start_time" +%s)" || return 1
   earliest=$((start_epoch - START_GRACE_SECONDS))
-  while IFS= read -r -d '' config; do
-    grep -qF -- "$run_name" "$config" || continue
-    run_dir="${config%/files/config.yaml}"
+  while IFS= read -r -d '' run_dir; do
     run_epoch="$(run_dir_epoch "$run_dir")" || continue
-    if (( run_epoch >= earliest && run_epoch > best_epoch )); then
+    (( run_epoch >= earliest )) || continue
+
+    matched=0
+    if [[ -f "$run_dir/files/config.yaml" ]] && \
+       grep -qF -- "$run_name" "$run_dir/files/config.yaml"; then
+      matched=1
+    else
+      run_file="$(find "$run_dir" -maxdepth 1 -type f -name 'run-*.wandb' -print -quit)"
+      if [[ -f "$run_file" ]] && grep -aqF -- "$run_name" "$run_file"; then
+        matched=1
+      fi
+    fi
+    (( matched == 1 )) || continue
+
+    if (( run_epoch > best_epoch )); then
       best_dir="$run_dir"
       best_epoch="$run_epoch"
     fi
   done < <(
-    find "$WANDB_ROOT" -maxdepth 3 -type f \
-      -path "$WANDB_ROOT/offline-run-*/files/config.yaml" -print0 2>/dev/null
+    find "$WANDB_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -name 'offline-run-*' -print0 2>/dev/null
   )
   [[ -n "$best_dir" ]] && printf '%s\n' "$best_dir"
 }
