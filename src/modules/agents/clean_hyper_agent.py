@@ -706,6 +706,8 @@ GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond": "binary_concrete",
     "grf_abs_single_transformer_branch_binary_concrete_gate_hypercond": "binary_concrete",
     "grf_abs_single_transformer_branch_binary_concrete_gate_random_drop_aux_hypercond": "binary_concrete",
+    "grf_abs_single_linear_branch_binary_concrete_gate_hypercond": "binary_concrete",
+    "grf_abs_single_linear_branch_binary_concrete_gate_random_drop_aux_hypercond": "binary_concrete",
 }
 GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl20_hypercond": (
@@ -755,6 +757,10 @@ GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS = {
     "grf_abs_single_transformer_branch_random_drop_aux_hypercond",
     "grf_abs_single_transformer_branch_binary_concrete_gate_hypercond",
     "grf_abs_single_transformer_branch_binary_concrete_gate_random_drop_aux_hypercond",
+}
+GRF_SINGLE_LINEAR_BRANCH_VARIANTS = {
+    "grf_abs_single_linear_branch_binary_concrete_gate_hypercond",
+    "grf_abs_single_linear_branch_binary_concrete_gate_random_drop_aux_hypercond",
 }
 GRF_DECISION_MAKER_VARIANTS |= (
     GRF_MLP_RELATION_VARIANTS
@@ -835,6 +841,7 @@ GRF_PUBLIC_TRANSFORMER_VARIANTS = {
     *GRF_SEMANTIC_ROUTER_VARIANTS,
     *GRF_DUAL_BRANCH_VARIANTS,
     *GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS,
+    *GRF_SINGLE_LINEAR_BRANCH_VARIANTS,
 }
 
 
@@ -5128,9 +5135,11 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             "mlp",
             "dual",
             "attention_only",
+            "linear_only",
         }:
             raise ValueError(
-                "relation_encoder_style must be transformer, mlp, dual, or attention_only"
+                "relation_encoder_style must be transformer, mlp, dual, "
+                "attention_only, or linear_only"
             )
         self.l0_drop = bool(l0_drop)
         self.mlp_soft_gate = bool(mlp_soft_gate)
@@ -5423,7 +5432,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.transformer_layers = nn.ModuleList(
             BiasTransformerEncoderLayer(relation_dim, num_heads)
             for _ in range(max(1, num_layers))
-        )
+        ) if self.relation_encoder_style != "linear_only" else nn.ModuleList()
         self.temporal_gru = nn.GRUCell(relation_dim * 2, relation_dim)
         self.mlp_relation_encoder = nn.Sequential(
             nn.Linear(self.expected_obs_dim, relation_dim),
@@ -5433,6 +5442,11 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.mlp_temporal_gru = nn.GRUCell(relation_dim, relation_dim)
         if self.relation_encoder_style == "attention_only":
             self.dual_linear_encoder = None
+            self.dual_condition_fuser = None
+        elif self.relation_encoder_style == "linear_only":
+            self.dual_linear_encoder = nn.Linear(
+                self.expected_obs_dim, relation_dim
+            )
             self.dual_condition_fuser = None
         else:
             self.dual_linear_encoder = nn.Linear(self.expected_obs_dim, relation_dim)
@@ -5611,6 +5625,21 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             if self.output_dim == self.relation_dim
             else self.output_encoder(next_relation_hidden)
         )
+        return condition, next_relation_hidden
+
+    def _forward_linear_only_relation(self, obs):
+        flat_obs = obs[..., : self.expected_obs_dim]
+        linear_input = flat_obs
+        if self.dynamic_branch_gate is not None:
+            branch_gates = self._branch_keep_gates(flat_obs)
+            linear_input = self._apply_branch_gate(flat_obs, branch_gates, 0)
+        next_relation_hidden = self.dual_linear_encoder(linear_input)
+        condition = (
+            next_relation_hidden
+            if self.output_dim == self.relation_dim
+            else self.output_encoder(next_relation_hidden)
+        )
+        self.latest_context_token = next_relation_hidden
         return condition, next_relation_hidden
 
     def _forward_dual_relation(self, obs):
@@ -6065,6 +6094,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             return self._forward_dual_relation(obs)
         if self.relation_encoder_style == "attention_only":
             return self._forward_attention_only_relation(obs)
+        if self.relation_encoder_style == "linear_only":
+            return self._forward_linear_only_relation(obs)
         if self.relation_encoder_style == "mlp":
             return self._forward_mlp_relation(obs, prev_relation_hidden)
         if self.semantic_router_active:
@@ -9455,6 +9486,7 @@ class CleanHyperAgent(nn.Module):
                 *GRF_MLP_RELATION_VARIANTS,
                 *GRF_DUAL_BRANCH_VARIANTS,
                 *GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS,
+                *GRF_SINGLE_LINEAR_BRANCH_VARIANTS,
             },
             semantic_router_mode=GRF_SEMANTIC_ROUTER_MODE_BY_MODEL.get(
                 self.model_type
@@ -9492,6 +9524,8 @@ class CleanHyperAgent(nn.Module):
                 if self.model_type in GRF_DUAL_BRANCH_VARIANTS
                 else "attention_only"
                 if self.model_type in GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS
+                else "linear_only"
+                if self.model_type in GRF_SINGLE_LINEAR_BRANCH_VARIANTS
                 else "mlp"
                 if self.model_type in GRF_MLP_RELATION_VARIANTS
                 else "transformer"

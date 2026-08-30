@@ -303,6 +303,7 @@ class CleanLearner:
             "grf_abs_mlp_relation_random_drop_aux_hypercond",
             "grf_abs_single_transformer_branch_random_drop_aux_hypercond",
             "grf_abs_single_transformer_branch_binary_concrete_gate_random_drop_aux_hypercond",
+            "grf_abs_single_linear_branch_binary_concrete_gate_random_drop_aux_hypercond",
             "rpg_public_transformer_random_drop_aux_hypercond",
         }
         self.random_drop_auxiliary_input_mask = model_type in {
