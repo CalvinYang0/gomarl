@@ -8,6 +8,7 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
 SEED="${SEED:-1}"
+RUN_SUFFIX="${RUN_SUFFIX:-}"
 T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 TIME="${TIME:-2-00:00:00}"
@@ -50,8 +51,8 @@ common_args="$EXTRA_ARGS torch_num_threads=$TORCH_NUM_THREADS torch_num_interop_
 submit_one() {
   local keep_label="$1" keep_probability="$2"
   local job_name run_name existing job_id
-  job_name="grf_counter_equal1_episode_random_randommask_${keep_label}_w10_timestep_s${SEED}"
-  run_name="grf_counter_equal1_episode_random_randommask_${keep_label}_w10_timestep_10m_s${SEED}"
+  job_name="grf_counter_equal1_episode_random_randommask_${keep_label}_w10_timestep_s${SEED}${RUN_SUFFIX}"
+  run_name="grf_counter_equal1_episode_random_randommask_${keep_label}_w10_timestep_10m_s${SEED}${RUN_SUFFIX}"
   existing=$(active_job "$job_name")
   if [[ -n "$existing" ]]; then
     echo "reused active job=$existing name=$job_name"

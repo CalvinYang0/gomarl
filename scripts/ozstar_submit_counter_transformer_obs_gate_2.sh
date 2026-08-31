@@ -10,6 +10,7 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
 SEED="${SEED:-1}"
+RUN_SUFFIX="${RUN_SUFFIX:-}"
 T_MAX="${T_MAX:-10050000}"
 TEST_INTERVAL="${TEST_INTERVAL:-50000}"
 TIME="${TIME:-2-00:00:00}"
@@ -67,15 +68,15 @@ submit_one() {
 }
 
 submit_one \
-  "grf_counter_transformer_only_obs_gate_s${SEED}" \
-  "grf_counter_transformer_only_obs_gate_10m_s${SEED}" \
+  "grf_counter_transformer_only_obs_gate_s${SEED}${RUN_SUFFIX}" \
+  "grf_counter_transformer_only_obs_gate_10m_s${SEED}${RUN_SUFFIX}" \
   "grf_abs_single_transformer_branch_binary_concrete_gate_hypercond" \
   "clean_random_drop_auxiliary_coef=0.0"
 sleep "$SUBMIT_GAP_SECONDS"
 
 submit_one \
-  "grf_counter_transformer_only_obs_gate_randommask_d50_w10_timestep_s${SEED}" \
-  "grf_counter_transformer_only_obs_gate_randommask_d50_w10_timestep_10m_s${SEED}" \
+  "grf_counter_transformer_only_obs_gate_randommask_d50_w10_timestep_s${SEED}${RUN_SUFFIX}" \
+  "grf_counter_transformer_only_obs_gate_randommask_d50_w10_timestep_10m_s${SEED}${RUN_SUFFIX}" \
   "grf_abs_single_transformer_branch_binary_concrete_gate_random_drop_aux_hypercond" \
   "clean_random_drop_auxiliary_keep_probability=0.50 clean_random_drop_auxiliary_coef=1.0 clean_random_drop_auxiliary_scope=timestep clean_random_drop_auxiliary_combine_mode=multiply"
 

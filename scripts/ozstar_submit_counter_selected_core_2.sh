@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# Matched Counter single-Linear learned-mask pair:
-#   1) observation-conditioned Binary-Concrete slot mask;
-#   2) learned mask multiplied by a timestep-wise Bernoulli mask.
-# The random auxiliary has keep=0.5 and TD weight=1.0.
+# The two retained Counter experiments:
+#   1) equal1 episode-random relation distance on sampled learned gates;
+#   2) equal1 episode-random relation plus keep=0.5, weight=1.0,
+#      timestep-wise multiplicative random-mask TD auxiliary.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
@@ -38,6 +38,7 @@ fi
   src/controllers/clean_controller.py \
   src/learners/clean_learner.py
 "$PYTHON_BIN" scripts/smoke_test_dual_branch_dynamic_gate.py
+"$PYTHON_BIN" scripts/smoke_test_counter_mask_parameter_relation.py
 
 active_job() {
   local exact_name="$1"
@@ -46,7 +47,7 @@ active_job() {
       '$2 == expected && ($3 == "RUNNING" || $3 == "PENDING") {print $1; exit}'
 }
 
-common_args="$EXTRA_ARGS torch_num_threads=$TORCH_NUM_THREADS torch_num_interop_threads=1 learner_updates_per_collect=1 clean_relation_teacher_td_coef=0.0 clean_relation_distill_coef=0.0 clean_smooth_head_loss_coef=0.0 clean_action_pred_loss_coef=0.0 clean_public_delta_loss_coef=0.0 clean_condition_gradient_consistency_coef=0.0 clean_generated_parameter_stability_coef=0.0 clean_td_weighted_parameter_likelihood_coef=0.0 clean_mask_parameter_relation_coef=0.0 clean_mask_parameter_relation_temporal_coef=0.0 clean_mask_parameter_relation_perturbed_head_coef=0.0 clean_mask_parameter_relation_gate_regularization_coef=0.0 clean_hard_gate_initial_keep_probability=0.95 clean_binary_concrete_temperature=0.5 clean_dynamic_branch_gate_warmup_steps=250000 clean_dynamic_branch_gate_scope=both clean_dynamic_branch_gate_regularizer=none clean_importance_auxiliary_warmup_steps=250000 clean_importance_alternating_training=False env_worker_startup_stagger=0.25 env_worker_reset_retries=5 env_worker_reset_retry_delay=2.0 env_worker_response_timeout=180.0 env_args.write_video=False save_battle_trace=False"
+common_args="$EXTRA_ARGS torch_num_threads=$TORCH_NUM_THREADS torch_num_interop_threads=1 learner_updates_per_collect=1 clean_relation_teacher_td_coef=0.0 clean_relation_distill_coef=0.0 clean_smooth_head_loss_coef=0.0 clean_action_pred_loss_coef=0.0 clean_public_delta_loss_coef=0.0 clean_condition_gradient_consistency_coef=0.0 clean_generated_parameter_stability_coef=0.0 clean_td_weighted_parameter_likelihood_coef=0.0 clean_hard_gate_initial_keep_probability=0.95 clean_binary_concrete_temperature=0.5 clean_dynamic_branch_gate_warmup_steps=250000 clean_importance_auxiliary_warmup_steps=250000 clean_importance_alternating_training=False clean_mask_parameter_relation_scale=0.10 clean_mask_parameter_relation_coef=1.0 clean_mask_parameter_relation_temporal_coef=0.0 clean_mask_parameter_relation_perturbed_head_coef=0.0 clean_mask_parameter_relation_gate_regularization_coef=0.0 clean_mask_parameter_relation_pairing=episode_random env_worker_startup_stagger=0.25 env_worker_reset_retries=5 env_worker_reset_retry_delay=2.0 env_worker_response_timeout=180.0 env_args.write_video=False save_battle_trace=False"
 
 submit_one() {
   local job_name="$1" run_name="$2" model_type="$3" variant_args="$4"
@@ -67,17 +68,17 @@ submit_one() {
 }
 
 submit_one \
-  "grf_counter_linear_only_obs_gate_s${SEED}${RUN_SUFFIX}" \
-  "grf_counter_linear_only_obs_gate_10m_s${SEED}${RUN_SUFFIX}" \
-  "grf_abs_single_linear_branch_binary_concrete_gate_hypercond" \
-  "clean_random_drop_auxiliary_coef=0.0"
+  "grf_counter_equal1_episode_random_sampled_gate_s${SEED}${RUN_SUFFIX}" \
+  "grf_counter_equal1_episode_random_sampled_gate_10m_s${SEED}${RUN_SUFFIX}" \
+  "grf_abs_dual_branch_binary_concrete_mask_parameter_relation_hypercond" \
+  "clean_mask_parameter_relation_mask_source=sampled_gate clean_random_drop_auxiliary_coef=0.0"
 sleep "$SUBMIT_GAP_SECONDS"
 
 submit_one \
-  "grf_counter_linear_only_obs_gate_randommask_d50_w10_timestep_s${SEED}${RUN_SUFFIX}" \
-  "grf_counter_linear_only_obs_gate_randommask_d50_w10_timestep_10m_s${SEED}${RUN_SUFFIX}" \
-  "grf_abs_single_linear_branch_binary_concrete_gate_random_drop_aux_hypercond" \
-  "clean_random_drop_auxiliary_keep_probability=0.50 clean_random_drop_auxiliary_coef=1.0 clean_random_drop_auxiliary_scope=timestep clean_random_drop_auxiliary_combine_mode=multiply"
+  "grf_counter_equal1_episode_random_randommask_k50_w10_timestep_s${SEED}${RUN_SUFFIX}" \
+  "grf_counter_equal1_episode_random_randommask_k50_w10_timestep_10m_s${SEED}${RUN_SUFFIX}" \
+  "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond" \
+  "clean_mask_parameter_relation_mask_source=probability clean_random_drop_auxiliary_keep_probability=0.50 clean_random_drop_auxiliary_coef=1.0 clean_random_drop_auxiliary_scope=timestep clean_random_drop_auxiliary_combine_mode=multiply"
 
 echo "processed total: 2"
 squeue -u "$USER" -o "%.18i %.90j %.10T %.12M %.10m %R"
