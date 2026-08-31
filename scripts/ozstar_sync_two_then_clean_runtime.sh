@@ -36,6 +36,7 @@ RUN_NAMES=(
   "grf_counter_equal1_episode_random_sampled_gate_10m_s${SEED}"
   "grf_counter_equal1_episode_random_randommask_k50_w10_timestep_10m_s${SEED}"
 )
+PROTECTED_TIMESTAMP_GLOB="${PROTECTED_TIMESTAMP_GLOB:-offline-run-20260829_222848-*}"
 
 run_dir_matches() {
   local run_dir="$1" run_name="$2" run_file
@@ -69,14 +70,15 @@ find_latest_run_dir() {
 }
 
 RUN_DIRS=()
+name_lookup_failed=0
 for run_name in "${RUN_NAMES[@]}"; do
   if ! run_dir="$(find_latest_run_dir "$run_name")"; then
     run_dir=""
   fi
   if [[ -z "$run_dir" ]]; then
-    echo "ERROR: protected offline run not found: $run_name" >&2
-    echo "Nothing was deleted." >&2
-    exit 1
+    echo "WARNING: protected run name is not searchable locally: $run_name" >&2
+    name_lookup_failed=1
+    break
   fi
   run_file="$(find "$run_dir" -maxdepth 1 -type f -name 'run-*.wandb' -print -quit)"
   if [[ ! -f "$run_file" ]]; then
@@ -87,6 +89,31 @@ for run_name in "${RUN_NAMES[@]}"; do
   RUN_DIRS+=("$run_dir")
   echo "protected run=$run_name bytes=$(stat -c '%s' "$run_file") dir=$run_dir"
 done
+
+if (( name_lookup_failed == 1 )); then
+  RUN_DIRS=()
+  shopt -s nullglob
+  timestamp_candidates=("$REPO_REAL/wandb"/$PROTECTED_TIMESTAMP_GLOB)
+  shopt -u nullglob
+  if (( ${#timestamp_candidates[@]} != 2 )); then
+    echo "ERROR: expected exactly two protected directories matching:" >&2
+    echo "  $REPO_REAL/wandb/$PROTECTED_TIMESTAMP_GLOB" >&2
+    echo "found: ${#timestamp_candidates[@]}" >&2
+    printf '  %s\n' "${timestamp_candidates[@]}" >&2
+    echo "Nothing was deleted." >&2
+    exit 1
+  fi
+  for run_dir in "${timestamp_candidates[@]}"; do
+    run_file="$(find "$run_dir" -maxdepth 1 -type f -name 'run-*.wandb' -print -quit)"
+    if [[ ! -f "$run_file" ]]; then
+      echo "ERROR: protected run data is missing: $run_dir" >&2
+      echo "Nothing was deleted." >&2
+      exit 1
+    fi
+    RUN_DIRS+=("$run_dir")
+    echo "protected timestamp run bytes=$(stat -c '%s' "$run_file") dir=$run_dir"
+  done
+fi
 
 echo "== Final W&B uploads =="
 for index in "${!RUN_NAMES[@]}"; do
