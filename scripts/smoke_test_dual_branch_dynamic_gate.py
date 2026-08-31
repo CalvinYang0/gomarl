@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from modules.agents.clean_hyper_agent import (  # noqa: E402
     GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL,
+    GRF_DUAL_BRANCH_FIXED_RANDOM_DROP_KEEP_BY_MODEL,
     GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL,
     GRF_DUAL_BRANCH_HARD_GATE_THRESHOLD_BY_MODEL,
     GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS,
@@ -170,6 +171,54 @@ def check_grf_transformer_only():
     assert model.dual_linear_encoder is None
     assert model.dual_condition_fuser is None
     (condition.mean() + next_hidden.mean()).backward()
+    assert model.transformer_layers[0].self_attn.qkv.weight.grad is not None
+
+
+def check_grf_fixed_random_drop80():
+    model_name = "grf_abs_dual_branch_fixed_random_drop80_hypercond"
+    assert model_name in GRF_DUAL_BRANCH_VARIANTS
+    assert model_name not in GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL
+    assert GRF_DUAL_BRANCH_FIXED_RANDOM_DROP_KEEP_BY_MODEL[model_name] == 0.80
+
+    model = GRFPublicPrivateBiasTransformerCapturer(
+        n_agents=4,
+        relation_dim=16,
+        output_dim=16,
+        num_heads=4,
+        use_absolute_public=True,
+        relation_encoder_style="dual",
+        dynamic_branch_gate_warmup_steps=250000,
+        fixed_random_drop_keep_probability=0.80,
+    )
+    assert model.dynamic_branch_gate is None
+    obs = th.randn(2, 4, 30)
+    hidden = th.zeros(2, 4, 16)
+
+    model.set_dynamic_branch_gate_t_env(249999)
+    warmup_gate = model._branch_keep_gates(obs)
+    assert th.all(warmup_gate == 1.0)
+
+    model.set_dynamic_branch_gate_t_env(250000)
+    sampled_gate_1 = model._branch_keep_gates(obs)
+    sampled_gate_2 = model._branch_keep_gates(obs)
+    assert th.all((sampled_gate_1 == 0.0) | (sampled_gate_1 == 1.0))
+    assert not th.equal(sampled_gate_1, sampled_gate_2)
+
+    model.set_dynamic_branch_gate_target_mode(True)
+    target_gate = model._branch_keep_gates(obs)
+    assert th.allclose(target_gate, th.full_like(target_gate, 0.80))
+    model.set_dynamic_branch_gate_target_mode(False)
+
+    model.set_semantic_test_mode(True)
+    test_gate = model._branch_keep_gates(obs)
+    assert th.all(test_gate == 1.0)
+    model.set_semantic_test_mode(False)
+
+    condition, next_hidden = model(obs, hidden)
+    assert condition.shape == (2, 4, 16)
+    assert next_hidden.shape == (2, 4, 16)
+    (condition.mean() + next_hidden.mean()).backward()
+    assert model.dual_linear_encoder.weight.grad is not None
     assert model.transformer_layers[0].self_attn.qkv.weight.grad is not None
 
 
@@ -926,6 +975,8 @@ def main():
     print("dual_branch binary_concrete stochastic_recovery=ok")
     check_grf_transformer_only()
     print("single_transformer_branch forward_backward=ok")
+    check_grf_fixed_random_drop80()
+    print("dual_branch fixed_random_drop80 train_sample_target_mean_test_open=ok")
     check_single_transformer_observation_gate()
     print("single_transformer obs_gate_and_random_multiply=ok")
     check_single_linear_observation_gate()

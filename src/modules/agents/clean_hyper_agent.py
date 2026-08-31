@@ -520,6 +520,7 @@ GRF_MLP_L0_DROP_VARIANTS = {
 }
 GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_relation_hypercond",
+    "grf_abs_dual_branch_fixed_random_drop80_hypercond",
     "grf_abs_dual_branch_td_benefit_drop_hypercond",
     "grf_abs_dual_branch_parameter_invariant_drop_hypercond",
     "grf_abs_dual_branch_cstg_gate_hypercond",
@@ -573,6 +574,13 @@ GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
     "grf_abs_dual_branch_binary_concrete_random_drop_aux_hypercond",
+}
+GRF_DUAL_BRANCH_FIXED_RANDOM_DROP_KEEP_BY_MODEL = {
+    # Direct structured-dropout control for KL80: there is no observation-
+    # conditioned gate network and no KL/relation auxiliary.  The online
+    # network samples a fresh mask with keep=0.8, the target network uses the
+    # expectation, and deterministic evaluation keeps every slot.
+    "grf_abs_dual_branch_fixed_random_drop80_hypercond": 0.80,
 }
 GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS = {
     "grf_abs_dual_branch_binary_concrete_grouped_property_param_stability_hypercond",
@@ -1896,6 +1904,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         dynamic_branch_gate_prior_keep=0.5,
         dynamic_branch_gate_entropy_coef=1.0,
         dynamic_branch_gate_budget_coef=10.0,
+        fixed_random_drop_keep_probability=None,
     ):
         super().__init__()
         self.move_dim = move_dim
@@ -2091,6 +2100,26 @@ class PublicTransformerRelationCapturer(nn.Module):
         if self.dynamic_branch_gate_budget_coef < 0.0:
             raise ValueError(
                 "dynamic_branch_gate_budget_coef must be non-negative"
+            )
+        self.fixed_random_drop_keep_probability = (
+            None
+            if fixed_random_drop_keep_probability is None
+            else float(fixed_random_drop_keep_probability)
+        )
+        if (
+            self.fixed_random_drop_keep_probability is not None
+            and not 0.0 < self.fixed_random_drop_keep_probability <= 1.0
+        ):
+            raise ValueError(
+                "fixed_random_drop_keep_probability must be in (0, 1]"
+            )
+        if (
+            self.fixed_random_drop_keep_probability is not None
+            and self.dynamic_branch_gate_mode is not None
+        ):
+            raise ValueError(
+                "fixed random drop and an observation-conditioned gate cannot "
+                "be enabled together"
             )
         self._dynamic_branch_gate_t_env = 0
         self._dynamic_branch_gate_target_mode = False
@@ -2833,6 +2862,53 @@ class PublicTransformerRelationCapturer(nn.Module):
         self._branch_audit_keep = float(bool(keep))
 
     def _branch_keep_gates(self, reference):
+        if self.fixed_random_drop_keep_probability is not None:
+            keep_probability = self.fixed_random_drop_keep_probability
+            warmup_active = (
+                self._dynamic_branch_gate_t_env
+                < self.dynamic_branch_gate_warmup_steps
+            )
+            gate_shape = (2,) + tuple(reference.shape)
+            probabilities = reference.new_full(gate_shape, keep_probability)
+            if self._semantic_test_mode or warmup_active:
+                gates = th.ones_like(probabilities)
+            elif self._dynamic_branch_gate_target_mode:
+                # Match the KL80 target path: use the mask expectation instead
+                # of injecting an independent random target at every update.
+                gates = probabilities
+            else:
+                # A new mask is drawn on every forward call, which corresponds
+                # to timestep-level structured dropout in the learner rollout.
+                gates = th.empty_like(probabilities).bernoulli_(keep_probability)
+            self.latest_dynamic_branch_gates_graph = gates
+            # Publish the fixed probability for the existing trajectory logger.
+            # It is a constant diagnostic, not an observation-conditioned gate.
+            self.latest_dynamic_branch_probabilities_graph = probabilities
+            self.latest_dynamic_branch_logits_graph = None
+            self.latest_aux_stats.update(
+                {
+                    "fixed_random_drop_keep_probability": reference.new_tensor(
+                        keep_probability
+                    ),
+                    "fixed_random_drop_linear_mean": gates[0].mean().detach(),
+                    "fixed_random_drop_attention_mean": gates[1].mean().detach(),
+                    "fixed_random_drop_warmup_active": reference.new_tensor(
+                        float(warmup_active)
+                    ),
+                    "fixed_random_drop_target_expectation": reference.new_tensor(
+                        float(
+                            self._dynamic_branch_gate_target_mode
+                            and not self._semantic_test_mode
+                            and not warmup_active
+                        )
+                    ),
+                    "fixed_random_drop_test_force_open": reference.new_tensor(
+                        float(self._semantic_test_mode)
+                    ),
+                }
+            )
+            return gates
+
         if self.dynamic_branch_gate is not None:
             training_gate_frozen = (
                 not self._semantic_test_mode
@@ -5061,6 +5137,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         dynamic_branch_gate_prior_keep=0.5,
         dynamic_branch_gate_entropy_coef=1.0,
         dynamic_branch_gate_budget_coef=10.0,
+        fixed_random_drop_keep_probability=None,
     ):
         nn.Module.__init__(self)
         self.n_agents = n_agents
@@ -5250,6 +5327,26 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         if self.dynamic_branch_gate_budget_coef < 0.0:
             raise ValueError(
                 "dynamic_branch_gate_budget_coef must be non-negative"
+            )
+        self.fixed_random_drop_keep_probability = (
+            None
+            if fixed_random_drop_keep_probability is None
+            else float(fixed_random_drop_keep_probability)
+        )
+        if (
+            self.fixed_random_drop_keep_probability is not None
+            and not 0.0 < self.fixed_random_drop_keep_probability <= 1.0
+        ):
+            raise ValueError(
+                "fixed_random_drop_keep_probability must be in (0, 1]"
+            )
+        if (
+            self.fixed_random_drop_keep_probability is not None
+            and self.dynamic_branch_gate_mode is not None
+        ):
+            raise ValueError(
+                "fixed random drop and an observation-conditioned gate cannot "
+                "be enabled together"
             )
         self._dynamic_branch_gate_t_env = 0
         self._dynamic_branch_gate_target_mode = False
@@ -9607,6 +9704,11 @@ class CleanHyperAgent(nn.Module):
             ),
             dynamic_branch_gate_budget_coef=(
                 self.dynamic_branch_gate_budget_coef
+            ),
+            fixed_random_drop_keep_probability=(
+                GRF_DUAL_BRANCH_FIXED_RANDOM_DROP_KEEP_BY_MODEL.get(
+                    self.model_type
+                )
             ),
         )
 
