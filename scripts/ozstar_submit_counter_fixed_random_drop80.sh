@@ -28,10 +28,25 @@ WANDB_MODE="${WANDB_MODE:-offline}"
 USE_CUDA="${USE_CUDA:-False}"
 RUN_SUFFIX="${RUN_SUFFIX:-}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+KEEP_PROBABILITY="${KEEP_PROBABILITY:-0.80}"
 
-JOB_NAME="grf_counter_fixed_random_drop_k80_s${SEED}${RUN_SUFFIX}"
-RUN_NAME="grf_counter_fixed_random_drop_k80_10m_s${SEED}${RUN_SUFFIX}"
-MODEL_TYPE="grf_abs_dual_branch_fixed_random_drop80_hypercond"
+case "$KEEP_PROBABILITY" in
+  0.8|0.80|.8|.80)
+    KEEP_LABEL="k80"
+    MODEL_TYPE="grf_abs_dual_branch_fixed_random_drop80_hypercond"
+    ;;
+  0.5|0.50|.5|.50)
+    KEEP_LABEL="k50"
+    MODEL_TYPE="grf_abs_dual_branch_fixed_random_drop50_hypercond"
+    ;;
+  *)
+    echo "ERROR: KEEP_PROBABILITY must be 0.80 or 0.50" >&2
+    exit 2
+    ;;
+esac
+
+JOB_NAME="grf_counter_fixed_random_drop_${KEEP_LABEL}_s${SEED}${RUN_SUFFIX}"
+RUN_NAME="grf_counter_fixed_random_drop_${KEEP_LABEL}_10m_s${SEED}${RUN_SUFFIX}"
 
 cd "$REPO_DIR"
 mkdir -p ozstar_logs wandb results

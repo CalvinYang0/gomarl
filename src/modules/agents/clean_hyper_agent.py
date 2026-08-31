@@ -520,6 +520,7 @@ GRF_MLP_L0_DROP_VARIANTS = {
 }
 GRF_DUAL_BRANCH_VARIANTS = {
     "grf_abs_dual_branch_relation_hypercond",
+    "grf_abs_dual_branch_fixed_random_drop50_hypercond",
     "grf_abs_dual_branch_fixed_random_drop80_hypercond",
     "grf_abs_dual_branch_td_benefit_drop_hypercond",
     "grf_abs_dual_branch_parameter_invariant_drop_hypercond",
@@ -580,6 +581,7 @@ GRF_DUAL_BRANCH_FIXED_RANDOM_DROP_KEEP_BY_MODEL = {
     # conditioned gate network and no KL/relation auxiliary.  The online
     # network samples a fresh mask with keep=0.8, the target network uses the
     # expectation, and deterministic evaluation keeps every slot.
+    "grf_abs_dual_branch_fixed_random_drop50_hypercond": 0.50,
     "grf_abs_dual_branch_fixed_random_drop80_hypercond": 0.80,
 }
 GRF_DUAL_BRANCH_GROUPED_PROPERTY_GATE_VARIANTS = {

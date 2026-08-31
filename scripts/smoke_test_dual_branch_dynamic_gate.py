@@ -176,9 +176,13 @@ def check_grf_transformer_only():
 
 def check_grf_fixed_random_drop80():
     model_name = "grf_abs_dual_branch_fixed_random_drop80_hypercond"
+    model_name_50 = "grf_abs_dual_branch_fixed_random_drop50_hypercond"
     assert model_name in GRF_DUAL_BRANCH_VARIANTS
+    assert model_name_50 in GRF_DUAL_BRANCH_VARIANTS
     assert model_name not in GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL
+    assert model_name_50 not in GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL
     assert GRF_DUAL_BRANCH_FIXED_RANDOM_DROP_KEEP_BY_MODEL[model_name] == 0.80
+    assert GRF_DUAL_BRANCH_FIXED_RANDOM_DROP_KEEP_BY_MODEL[model_name_50] == 0.50
 
     model = GRFPublicPrivateBiasTransformerCapturer(
         n_agents=4,
