@@ -2,8 +2,7 @@
 set -u
 
 # One-shot incremental W&B upload for every currently running Counter job in
-# this checkout.  Job start times and exact run names prevent an older run with
-# the same base name from being selected.
+# this checkout. Exact run names select the newest matching local directory.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
@@ -11,7 +10,6 @@ WANDB_ROOT="${WANDB_ROOT:-wandb}"
 WANDB_ENTITY="${WANDB_ENTITY:-hjh331-sjtu}"
 WANDB_PROJECT="${WANDB_PROJECT:-gomarl}"
 SYNC_TIMEOUT="${SYNC_TIMEOUT:-600}"
-START_GRACE_SECONDS="${START_GRACE_SECONDS:-300}"
 
 cd "$REPO_DIR" || exit 2
 
@@ -30,31 +28,27 @@ job_run_name() {
   return 1
 }
 
-run_dir_epoch() {
-  local base date_part time_part
-  base=$(basename "$1")
-  [[ "$base" =~ ^offline-run-([0-9]{8})_([0-9]{6})- ]] || return 1
-  date_part="${BASH_REMATCH[1]}"
-  time_part="${BASH_REMATCH[2]}"
-  date -d \
-    "${date_part:0:4}-${date_part:4:2}-${date_part:6:2} ${time_part:0:2}:${time_part:2:2}:${time_part:4:2}" \
-    +%s
-}
-
 find_current_run_dir() {
-  local run_name="$1" earliest="$2"
-  local config run_dir epoch best_dir="" best_epoch=0
-  while IFS= read -r -d '' config; do
-    grep -qF -- "$run_name" "$config" || continue
-    run_dir="${config%/files/config.yaml}"
-    epoch=$(run_dir_epoch "$run_dir") || continue
-    if (( epoch >= earliest && epoch > best_epoch )); then
+  local run_name="$1"
+  local run_dir run_file best_dir=""
+  while IFS= read -r -d '' run_dir; do
+    if [[ -f "$run_dir/files/config.yaml" ]] && \
+       grep -qF -- "$run_name" "$run_dir/files/config.yaml"; then
+      :
+    elif grep -RaqF -- "$run_name" \
+        "$run_dir/files" "$run_dir/logs" 2>/dev/null; then
+      :
+    else
+      run_file=$(find "$run_dir" -maxdepth 1 -type f \
+        -name 'run-*.wandb' -print -quit)
+      [[ -f "$run_file" ]] && grep -aqF -- "$run_name" "$run_file" || continue
+    fi
+    if [[ -z "$best_dir" || "$run_dir" > "$best_dir" ]]; then
       best_dir="$run_dir"
-      best_epoch=$epoch
     fi
   done < <(
-    find "$WANDB_ROOT" -maxdepth 3 -type f \
-      -path "$WANDB_ROOT/offline-run-*/files/config.yaml" -print0 2>/dev/null
+    find "$WANDB_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -name 'offline-run-*' -print0 2>/dev/null
   )
   [[ -n "$best_dir" ]] && printf '%s\n' "$best_dir"
 }
@@ -98,17 +92,11 @@ while IFS='|' read -r job_id job_name start_time; do
     failed=$((failed + 1))
     continue
   }
-  start_epoch=$(date -d "$start_time" +%s 2>/dev/null) || {
-    echo "ERROR: cannot parse start time for job=$job_id: $start_time" >&2
-    failed=$((failed + 1))
-    continue
-  }
-  earliest=$((start_epoch - START_GRACE_SECONDS))
   # W&B prints its exact local directory into the Slurm stream.  Prefer that
   # authoritative path; config-name lookup remains a fallback for older logs.
   run_dir=$(find_run_dir_from_job_logs "$job_record" || true)
   if [[ -z "$run_dir" ]]; then
-    run_dir=$(find_current_run_dir "$run_name" "$earliest")
+    run_dir=$(find_current_run_dir "$run_name")
   fi
   if [[ -z "$run_dir" ]]; then
     echo "ERROR: active offline run not found job=$job_id run=$run_name" >&2
