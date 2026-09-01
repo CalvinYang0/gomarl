@@ -59,6 +59,29 @@ find_current_run_dir() {
   [[ -n "$best_dir" ]] && printf '%s\n' "$best_dir"
 }
 
+find_run_dir_from_job_logs() {
+  local job_record="$1" log_file candidate
+  local stdout_file stderr_file
+  stdout_file=$(sed -n 's/.* StdOut=\([^ ]*\).*/\1/p' <<< "$job_record")
+  stderr_file=$(sed -n 's/.* StdErr=\([^ ]*\).*/\1/p' <<< "$job_record")
+  for log_file in "$stdout_file" "$stderr_file"; do
+    [[ -f "$log_file" ]] || continue
+    candidate=$(
+      grep -aoE '(/[^[:space:]]+)?wandb/offline-run-[0-9]{8}_[0-9]{6}-[[:alnum:]]+' \
+        "$log_file" 2>/dev/null | tail -1
+    )
+    [[ -n "$candidate" ]] || continue
+    if [[ "$candidate" != /* ]]; then
+      candidate="$REPO_DIR/$candidate"
+    fi
+    if [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 uploaded=0
 failed=0
 matched=0
@@ -81,7 +104,12 @@ while IFS='|' read -r job_id job_name start_time; do
     continue
   }
   earliest=$((start_epoch - START_GRACE_SECONDS))
-  run_dir=$(find_current_run_dir "$run_name" "$earliest")
+  # W&B prints its exact local directory into the Slurm stream.  Prefer that
+  # authoritative path; config-name lookup remains a fallback for older logs.
+  run_dir=$(find_run_dir_from_job_logs "$job_record" || true)
+  if [[ -z "$run_dir" ]]; then
+    run_dir=$(find_current_run_dir "$run_name" "$earliest")
+  fi
   if [[ -z "$run_dir" ]]; then
     echo "ERROR: active offline run not found job=$job_id run=$run_name" >&2
     failed=$((failed + 1))
