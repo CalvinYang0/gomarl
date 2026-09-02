@@ -181,6 +181,13 @@ class CleanMAC(BasicMAC):
         probabilities = getattr(
             self, "latest_dynamic_branch_probabilities_graph", None
         )
+        capturer = getattr(self.agent, "rpg_relation_capturer", None)
+        if probabilities is None and getattr(capturer, "counter_transformer_profile", None):
+            # No-gate baseline still has generated parameters. Do not gate its
+            # PCA capture on the existence of a learned-mask network.
+            probabilities = th.ones(
+                2, int(batch_size), int(self.n_agents), capturer.expected_obs_dim
+            )
         if probabilities is None or probabilities.dim() < 3:
             return
         probabilities = probabilities.detach()
@@ -229,8 +236,15 @@ class CleanMAC(BasicMAC):
             batch_size,
             probabilities.size(1),
         )
+        agent_probabilities = {
+            "linear": probabilities[0, env_index].cpu().tolist(),
+            "attention": probabilities[1, env_index].cpu().tolist(),
+        }
+        auxiliary_probability = getattr(capturer, "latest_kl80_auxiliary_probability", None)
+        if auxiliary_probability is not None:
+            agent_probabilities["auxiliary_kl80_attention"] = auxiliary_probability[1, env_index].cpu().tolist()
         self._test_gate_trajectory_rows.append(
-            (timestep, values[0], values[1], parameter_vector)
+            (timestep, values[0], values[1], parameter_vector, agent_probabilities)
         )
         self._test_gate_trajectory_last_t_ep = timestep
         if len(self._test_gate_trajectory_rows) >= self._test_gate_trajectory_max_steps:
@@ -261,6 +275,21 @@ class CleanMAC(BasicMAC):
                 ],
             },
         }
+        single_attention = getattr(relation_capturer, "relation_encoder_style", None) == "attention_only"
+        if single_attention:
+            trajectory["branches"].pop("linear")
+        if len(self._test_gate_trajectory_rows[0]) > 4:
+            branch_names = self._test_gate_trajectory_rows[0][4].keys()
+            trajectory["agent_probability_branches"] = {
+                name: [row[4][name] for row in self._test_gate_trajectory_rows]
+                for name in branch_names if not (single_attention and name == "linear")
+            }
+        profile = getattr(relation_capturer, "counter_transformer_profile", {})
+        trajectory["gate_note"] = (
+            "No gate: all slots kept" if profile.get("label") == "baseline"
+            else "Test mask bypassed: all slots kept; plotted values are learned probabilities"
+            if profile.get("test_open") else "Learned keep probabilities"
+        )
         parameter_vectors = [row[3] for row in self._test_gate_trajectory_rows]
         if parameter_vectors and all(
             vector is not None for vector in parameter_vectors

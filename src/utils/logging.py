@@ -171,6 +171,7 @@ class Logger:
         # Keep this diagnostic independent from the gate-probability figure:
         # either plot should still be uploaded if the other one fails.
         self._log_test_generated_parameter_pca(trajectory, t)
+        self._log_test_mask_probability_heatmaps(trajectory, t)
         try:
             import matplotlib.pyplot as plt
 
@@ -219,7 +220,9 @@ class Logger:
             )
             fig.suptitle(
                 "Test dynamic-gate trajectory "
-                "(dashed: drop threshold={:.2f})".format(threshold),
+                "(dashed: drop threshold={:.2f})\n{}".format(
+                    threshold, trajectory.get("gate_note", "")
+                ),
                 y=1.08,
             )
             fig.tight_layout()
@@ -233,6 +236,57 @@ class Logger:
             self.console_logger.warning(
                 "Failed to create test dynamic-gate trajectory: %s", exc
             )
+
+    def _log_test_mask_probability_heatmaps(self, trajectory, t):
+        """Plot keep probabilities, not sampled masks: white=0, red=1.
+
+        One panel per agent avoids hiding state/agent-specific selection behind
+        the mean used by the legacy line plot. Auxiliary gates are separate.
+        """
+        try:
+            import matplotlib.pyplot as plt
+            from matplotlib.colors import LinearSegmentedColormap
+
+            branches = trajectory.get("agent_probability_branches", {})
+            if not branches:
+                branches = {name: np.asarray(values)[:, None, :]
+                            for name, values in trajectory["branches"].items()}
+            timesteps = trajectory["timesteps"]
+            names = trajectory["slot_names"]
+            cmap = LinearSegmentedColormap.from_list("keep_white_red", ["white", "red"])
+            for branch, values in branches.items():
+                values = np.asarray(values, dtype=float)
+                if values.ndim != 3 or values.shape[0] != len(timesteps):
+                    raise ValueError("Expected heatmap probabilities [time, agent, slot]")
+                fig, axes = plt.subplots(
+                    1, values.shape[1], squeeze=False,
+                    figsize=(4.5 * values.shape[1], max(5.0, len(names) * 0.24)),
+                    constrained_layout=True,
+                )
+                try:
+                    for agent, axis in enumerate(axes[0]):
+                        pixels = axis.imshow(
+                            values[:, agent, :].T, aspect="auto", interpolation="nearest",
+                            cmap=cmap, vmin=0, vmax=1,
+                            extent=(timesteps[0] - 0.5, timesteps[-1] + 0.5, len(names) - 0.5, -0.5),
+                        )
+                        axis.set_yticks(np.arange(len(names)))
+                        axis.set_yticklabels(names, fontsize=6)
+                        axis.set_xlabel("timestep")
+                        axis.set_ylabel("slot")
+                        axis.set_title("{} / agent {}".format(branch, agent))
+                    fig.colorbar(pixels, ax=list(axes[0]), label="keep probability")
+                    note = ("Auxiliary gate probabilities (not applied in test)"
+                            if branch.startswith("auxiliary") else trajectory.get("gate_note", ""))
+                    fig.suptitle(note)
+                    self._update_wandb_buffer(
+                        "test_mask_probability_heatmap_" + branch,
+                        self.wandb_module.Image(fig), t,
+                    )
+                finally:
+                    plt.close(fig)
+        except Exception as exc:
+            self.console_logger.warning("Failed to create mask probability heatmap: %s", exc)
 
     def _log_test_generated_parameter_pca(self, trajectory, t):
         """Plot exact generated hypernetwork parameters from one test episode.

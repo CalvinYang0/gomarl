@@ -10,6 +10,7 @@ from torch.optim import Adam, RMSprop
 from components.episode_buffer import EpisodeBatch
 from modules.mixers.qmix import QMixer
 from modules.mixers.vdn import VDNMixer
+from modules.agents.counter_transformer_suite import profile_for
 from utils.rl_utils import build_td_lambda_targets
 
 
@@ -141,6 +142,7 @@ class CleanLearner:
             ),
         )
         model_type = getattr(self.mac.agent, "model_type", "")
+        self.counter_transformer_profile = profile_for(model_type)
         self.generated_parameter_stability_active = (
             model_type
             in {
@@ -242,6 +244,7 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_bayesg_kl80_threshold70_relation_hypercond",
             "grf_abs_dual_branch_binary_concrete_bayesg_kl80_keep_relation_hypercond",
         }
+        self.gate_regularization_active |= bool(self.counter_transformer_profile.get("kl"))
         self.perturbed_parameter_importance_active = model_type == (
             "grf_abs_dual_branch_binary_concrete_"
             "perturb_param_importance_hypercond"
@@ -278,6 +281,8 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_param_hypercond",
             "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_mask_hypercond",
         }
+        self.mask_parameter_relation_active |= bool(self.counter_transformer_profile.get("relation"))
+        self.temporal_param_stability_active |= bool(self.counter_transformer_profile.get("temporal"))
         self.mask_parameter_relation_group_distance = model_type == (
             "grf_abs_dual_branch_binary_concrete_"
             "temporal_relation_group_distance_hypercond"
@@ -306,6 +311,8 @@ class CleanLearner:
             "grf_abs_single_linear_branch_binary_concrete_gate_random_drop_aux_hypercond",
             "rpg_public_transformer_random_drop_aux_hypercond",
         }
+        self.random_drop_auxiliary_active |= bool(self.counter_transformer_profile.get("aux"))
+        self.kl80_random_drop_auxiliary = self.counter_transformer_profile.get("aux") == "kl80"
         self.random_drop_auxiliary_input_mask = model_type in {
             "grf_abs_mlp_relation_random_drop_aux_hypercond",
             "grf_abs_single_transformer_branch_random_drop_aux_hypercond",
@@ -547,6 +554,7 @@ class CleanLearner:
             "rpg_dual_branch_binary_concrete_temporal_param_stability_hypercond",
             "rpg_dual_branch_binary_concrete_temporal_param_small_change_hypercond",
         }
+        self.adaptive_auxiliary_ratio_active |= bool(self.counter_transformer_profile.get("kl"))
         self.adaptive_auxiliary_target_ratio = float(
             getattr(args, "clean_adaptive_auxiliary_target_ratio", 0.1)
         )
@@ -974,6 +982,11 @@ class CleanLearner:
                 current_probabilities
             )
         # [branch, batch, agent, raw-slot] -> [batch, agent]
+        if getattr(self, "counter_transformer_profile", {}).get("relation"):
+            # The unused Linear gate must neither dilute the metric nor learn
+            # to satisfy the relation loss without affecting the policy.
+            previous_probabilities = previous_probabilities[1:2]
+            current_probabilities = current_probabilities[1:2]
         mask_distance = (
             current_probabilities - previous_probabilities
         ).abs().mean(dim=(0, -1))
@@ -2306,6 +2319,8 @@ class CleanLearner:
             masked_td_error = td_error * td_mask
             td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
             random_drop_auxiliary_loss = td_loss.new_zeros(())
+            kl80_random_auxiliary_loss = td_loss.new_zeros(())
+            kl80_random_auxiliary_coef = 0.0
             random_drop_auxiliary_enabled = (
                 self.random_drop_auxiliary_active
                 and t_env >= self.importance_auxiliary_warmup_steps
@@ -2317,12 +2332,16 @@ class CleanLearner:
                     [] if self.relation_mixer_gate is not None else None
                 )
                 self.mac.init_hidden(batch.batch_size)
+                auxiliary_kl_terms = []
+                random_capturer = getattr(self.mac.agent, "rpg_relation_capturer", None)
                 try:
-                    if not self.random_drop_auxiliary_input_mask:
+                    if self.kl80_random_drop_auxiliary:
+                        random_capturer.kl80_auxiliary_enabled = True
+                    elif not self.random_drop_auxiliary_input_mask:
                         self.mac.set_dynamic_branch_gate_random_aux_combine_mode(
                             self.random_drop_auxiliary_combine_mode
                         )
-                    if self.random_drop_auxiliary_scope == "episode":
+                    if not self.kl80_random_drop_auxiliary and self.random_drop_auxiliary_scope == "episode":
                         keep_probability = td_loss.new_tensor(
                             self.random_drop_auxiliary_keep_probability
                         )
@@ -2335,7 +2354,7 @@ class CleanLearner:
                                 keep_probability
                             )
                     for t in range(batch.max_seq_length):
-                        if self.random_drop_auxiliary_scope == "timestep":
+                        if not self.kl80_random_drop_auxiliary and self.random_drop_auxiliary_scope == "timestep":
                             keep_probability = td_loss.new_tensor(
                                 self.random_drop_auxiliary_keep_probability
                             )
@@ -2348,6 +2367,8 @@ class CleanLearner:
                                     keep_probability
                                 )
                         random_mac_out.append(self.mac.forward(batch, t=t))
+                        if self.kl80_random_drop_auxiliary:
+                            auxiliary_kl_terms.append(random_capturer.latest_kl80_auxiliary_loss)
                         if random_relation_conditions is not None:
                             condition = getattr(self.mac, "latest_condition", None)
                             if condition is None:
@@ -2357,6 +2378,8 @@ class CleanLearner:
                                 )
                             random_relation_conditions.append(condition)
                 finally:
+                    if self.kl80_random_drop_auxiliary:
+                        random_capturer.kl80_auxiliary_enabled = False
                     if self.random_drop_auxiliary_input_mask:
                         self.mac.set_random_drop_auxiliary_input_keep_probability(None)
                     else:
@@ -2384,6 +2407,11 @@ class CleanLearner:
                     random_masked_td_error.pow(2).sum()
                     / td_mask.sum().clamp(min=1.0)
                 )
+                if auxiliary_kl_terms:
+                    kl80_random_auxiliary_loss = th.stack(auxiliary_kl_terms).mean()
+                    kl80_random_auxiliary_coef = self._adaptive_auxiliary_coefficient(
+                        td_loss, kl80_random_auxiliary_loss
+                    )
             perturbed_head_td_quality_loss = td_loss.new_zeros(())
             if perturbed_head_parameter_graphs is not None:
                 time_steps = len(perturbed_head_parameter_graphs)
@@ -2702,6 +2730,7 @@ class CleanLearner:
             loss = (
                 td_loss
                 + random_drop_auxiliary_coef * random_drop_auxiliary_loss
+                + kl80_random_auxiliary_coef * kl80_random_auxiliary_loss
                 + gate_auxiliary_coef * aux_loss
                 + float(
                     getattr(self.args, "clean_relation_teacher_td_coef", 0.0)
@@ -3022,6 +3051,10 @@ class CleanLearner:
                     t_env,
                 )
             if self.random_drop_auxiliary_active:
+                if self.kl80_random_drop_auxiliary:
+                    self.logger.log_stat("loss_kl80_random_auxiliary", kl80_random_auxiliary_loss.item(), t_env)
+                    self.logger.log_stat("kl80_random_auxiliary_coef", kl80_random_auxiliary_coef, t_env)
+                    self.logger.log_stat("weighted_loss_kl80_random_auxiliary", kl80_random_auxiliary_coef * kl80_random_auxiliary_loss.item(), t_env)
                 weighted_random_drop = (
                     random_drop_auxiliary_coef
                     * random_drop_auxiliary_loss.item()
@@ -3044,7 +3077,8 @@ class CleanLearner:
                 )
                 self.logger.log_stat(
                     "random_drop_auxiliary_keep_probability",
-                    self.random_drop_auxiliary_keep_probability,
+                    float(self.mac.agent.rpg_relation_capturer.latest_kl80_auxiliary_probability[1].mean().item())
+                    if self.kl80_random_drop_auxiliary else self.random_drop_auxiliary_keep_probability,
                     t_env,
                 )
                 self.logger.log_stat(
@@ -3058,6 +3092,12 @@ class CleanLearner:
                     temporal_param_auxiliary_coef
                     * temporal_param_auxiliary_loss.item()
                 )
+                if self.counter_transformer_profile.get("relation"):
+                    weighted_temporal_loss = (
+                        mask_parameter_combined_auxiliary_coef
+                        * self.mask_parameter_relation_temporal_coef
+                        * temporal_param_auxiliary_loss.item()
+                    )
                 self.logger.log_stat(
                     "loss_temporal_parameter",
                     temporal_param_auxiliary_loss.item(),
@@ -3090,6 +3130,17 @@ class CleanLearner:
                         t_env,
                     )
             if self.mask_parameter_relation_active:
+                if self.counter_transformer_profile:
+                    weighted_relation = (
+                        mask_parameter_combined_auxiliary_coef
+                        * self.mask_parameter_relation_coef
+                        * mask_parameter_relation_loss.item()
+                    )
+                    self.logger.log_stat("weighted_loss_mask_parameter_relation", weighted_relation, t_env)
+                    self.logger.log_stat(
+                        "mask_parameter_relation_only_to_td_ratio",
+                        weighted_relation / max(td_loss.item(), self.adaptive_auxiliary_eps), t_env,
+                    )
                 weighted_relation_bundle = (
                     mask_parameter_combined_auxiliary_coef
                     * (
@@ -3364,7 +3415,7 @@ class CleanLearner:
             th.save(self.relation_mixer_gate.state_dict(), "{}/relation_mixer_gate.th".format(path))
         if self.use_amp:
             th.save(self.amp_scaler.state_dict(), "{}/amp_scaler.th".format(path))
-        if self.adaptive_auxiliary_ratio_active:
+        if self.adaptive_auxiliary_ratio_active or self.kl80_random_drop_auxiliary:
             th.save(
                 {
                     "ema_td": self.adaptive_auxiliary_ema_td,
@@ -3390,7 +3441,7 @@ class CleanLearner:
         if self.use_amp and os.path.exists(amp_scaler_path):
             self.amp_scaler.load_state_dict(th.load(amp_scaler_path, map_location=lambda storage, loc: storage))
         adaptive_ema_path = "{}/adaptive_auxiliary_ema.th".format(path)
-        if self.adaptive_auxiliary_ratio_active and os.path.exists(adaptive_ema_path):
+        if (self.adaptive_auxiliary_ratio_active or self.kl80_random_drop_auxiliary) and os.path.exists(adaptive_ema_path):
             adaptive_state = th.load(
                 adaptive_ema_path, map_location=lambda storage, loc: storage
             )

@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from envs.starcraft.smac_maps import get_map_params
+from .counter_transformer_suite import MODEL_PROFILES, profile_for
 
 
 ACTION_EDGE_PUBLIC_PRED_SINGLE_HEAD_VARIANTS = {
@@ -772,6 +773,16 @@ GRF_SINGLE_LINEAR_BRANCH_VARIANTS = {
     "grf_abs_single_linear_branch_binary_concrete_gate_hypercond",
     "grf_abs_single_linear_branch_binary_concrete_gate_random_drop_aux_hypercond",
 }
+GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS.update(MODEL_PROFILES)
+GRF_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS.update(MODEL_PROFILES)
+GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL.update({
+    model: "binary_concrete" for model, flags in MODEL_PROFILES.items()
+    if flags.get("gate")
+})
+GRF_DUAL_BRANCH_GATE_REGULARIZER_BY_MODEL.update({
+    model: ("bernoulli_kl", 0.8) for model, flags in MODEL_PROFILES.items()
+    if flags.get("kl")
+})
 GRF_DECISION_MAKER_VARIANTS |= (
     GRF_MLP_RELATION_VARIANTS
     | GRF_DUAL_BRANCH_SPLIT_HEAD_VARIANTS
@@ -3016,6 +3027,9 @@ class PublicTransformerRelationCapturer(nn.Module):
                 if self.dynamic_branch_gate_regularizer == "bernoulli_kl":
                     eps = 1e-6
                     probability = raw_probabilities.clamp(eps, 1.0 - eps)
+                    if getattr(self, "counter_transformer_profile", None):
+                        # Only the attention branch is used by this suite.
+                        probability = probability[1:2]
                     prior = probability.new_tensor(
                         self.dynamic_branch_gate_prior_keep
                     ).clamp(eps, 1.0 - eps)
@@ -5713,9 +5727,26 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         attention_input = flat_obs
         if self.dynamic_branch_gate is not None:
             branch_gates = self._branch_keep_gates(flat_obs)
+            if getattr(self, "counter_transformer_profile", {}).get("test_open") and self._semantic_test_mode:
+                # Keep learned probabilities available for diagnostics; bypass
+                # only the applied mask, and only during evaluation.
+                branch_gates = th.ones_like(branch_gates)
+                self.latest_dynamic_branch_gates_graph = branch_gates
             attention_input = self._apply_branch_gate(
                 flat_obs, branch_gates, 1
             )
+        auxiliary_gate = getattr(self, "kl80_auxiliary_gate", None)
+        if auxiliary_gate is not None:
+            enabled = bool(getattr(self, "kl80_auxiliary_enabled", False)) and not self._semantic_test_mode
+            auxiliary_mask, auxiliary_probability = auxiliary_gate(flat_obs, sample=enabled)
+            self.latest_kl80_auxiliary_probability = auxiliary_probability.detach()
+            probability = auxiliary_probability[1:2].clamp(1e-6, 1.0 - 1e-6)
+            self.latest_kl80_auxiliary_loss = (
+                probability * (probability.log() - math.log(0.8))
+                + (1.0 - probability) * ((1.0 - probability).log() - math.log(0.2))
+            ).mean()
+            if enabled:
+                attention_input = attention_input * auxiliary_mask[1]
         next_relation_hidden = self._forward_full_obs_attention_branch(
             attention_input
         )
@@ -9713,6 +9744,19 @@ class CleanHyperAgent(nn.Module):
                 )
             ),
         )
+        suite_profile = profile_for(self.model_type)
+        if suite_profile:
+            capturer = self.rpg_relation_capturer
+            capturer.counter_transformer_profile = suite_profile
+            capturer.kl80_auxiliary_enabled = False
+            if suite_profile.get("aux") == "kl80":
+                capturer.kl80_auxiliary_gate = ObservationConditionedBranchGate(
+                    obs_dim=capturer.expected_obs_dim,
+                    hidden_dim=self.dynamic_branch_gate_hidden_dim,
+                    mode="binary_concrete",
+                    binary_concrete_temperature=self.binary_concrete_temperature,
+                    initial_keep_probability=self.hard_gate_initial_keep_probability,
+                )
 
     def _init_grf_decision_maker_head(self):
         if self.n_actions != 19:
