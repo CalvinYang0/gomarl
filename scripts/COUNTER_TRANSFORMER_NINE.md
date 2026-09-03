@@ -206,3 +206,33 @@ bash scripts/ozstar_submit_counter_linear_kl80aux.sh
 `ozstar_keep_kl_aux_three.py` 已保护此变体，加上之前的旧三项和新四项，共八个变体。
 预检 `smoke_test_counter_linear_kl80aux.py` 检查 linear 实际输入等于 obs×主 mask×辅助 mask、
 不执行 attention、辅助测试隔离、linear 分支梯度非零而未用分支梯度为零，以及实际更新和绘图。
+
+## tmux 每十分钟同步正在运行的实验
+
+在已登录的 OzSTAR 登录节点执行：
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+git pull --ff-only origin codex/dual-branch-benefit-drop
+bash scripts/ozstar_wandb_sync_tmux.sh start
+```
+
+启动独立 session `gomarl-wandb-sync` / window `wandb-sync`，立即同步一次，随后按
+600 秒启动间隔重复运行现有 `ozstar_sync_running_counter_once.sh`。一轮超过 600 秒时，
+等该轮结束再开始下一轮，不并发堆积。失败会输出警告并在下一轮重试，无运行任务时继续等待。
+只查询同仓库当前 RUNNING 的 Counter 任务并增量上传 W&B；不自动 git pull，不提交、
+取消或重启训练，不删除日志。不扫描历史已结束任务；任务结束后如需补齐最后的数据，需另行同步。
+
+- 查看窗口：`tmux attach -t gomarl-wandb-sync`，按 Ctrl-b 再按 d 脱离，循环继续。
+- 查看会话：`bash scripts/ozstar_wandb_sync_tmux.sh status`。
+- 停止同步：`bash scripts/ozstar_wandb_sync_tmux.sh stop`；只关闭该会话，不停止训练。
+- 重复 start 不创建重复会话；仓库锁阻止不同循环/手动同步重叠。
+- 默认间隔可在启动时用 `INTERVAL_SECONDS=600` 指定；已有会话需 stop 后再 start 才更新设置。
+
+tmux 属于具体登录节点：在 farnarkle1 启动，就回 farnarkle1 查看；SSH 断开后继续运行，
+但登录节点重启/会话被清理后需要重新 start。应遵守集群登录节点使用规则。
+输出保留在 tmux 的有限滚动历史中，不新增无限增长的循环输出文件。
+首次使用需要 tmux、flock、timeout、Slurm 命令可用，且已有可用的 W&B 登录凭证。
+
+本地验证：`python scripts/smoke_test_counter_sync_tmux.py`，模拟命令检查启动、去重、
+停止、立即同步、空队列、失败重试和互斥锁；不访问真实 Slurm/W&B。

@@ -18,6 +18,13 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   exit 2
 fi
 
+# Serialize manual and periodic uploads of this repository's active runs.
+exec 8>"$REPO_DIR/.wandb-counter-sync-once.lock"
+if ! flock -n 8; then
+  echo "Another Counter sync is in progress; skipping overlapping invocation"
+  exit 0
+fi
+
 job_run_name() {
   local job_name="$1"
   if [[ "$job_name" =~ ^(.+)_s([0-9]+)(.*)$ ]]; then
@@ -80,6 +87,11 @@ uploaded=0
 failed=0
 matched=0
 
+active_jobs=$(squeue -u "${USER:-kyang}" -h -t R -o '%A|%j|%S') || {
+  echo "ERROR: unable to query Slurm; no upload attempted" >&2
+  exit 1
+}
+
 while IFS='|' read -r job_id job_name start_time; do
   [[ "$job_name" == grf_counter_* ]] || continue
   job_record=$(scontrol show job -o "$job_id" 2>/dev/null || true)
@@ -124,7 +136,7 @@ while IFS='|' read -r job_id job_name start_time; do
   else
     failed=$((failed + 1))
   fi
-done < <(squeue -u "${USER:-kyang}" -h -t R -o '%A|%j|%S')
+done <<< "$active_jobs"
 
 echo "running Counter sync result: matched=$matched uploaded=$uploaded failed=$failed"
-(( matched > 0 && failed == 0 ))
+(( failed == 0 ))
