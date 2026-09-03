@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Keep relation KL80/50/30 auxiliary jobs; cancel only other jobs in this repo."""
+"""Keep the three ORIGINAL comparisons and protect all four new controls.
+
+The filename is retained so the previously supplied command is safe after pull.
+No submissions, restarts or log deletion are performed here.
+"""
 import json
 import os
 from pathlib import Path
@@ -8,7 +12,16 @@ import subprocess
 import time
 
 
-KEEP = re.compile(r"grf_counter_trans9_relation_kl(?:80|50|30)aux_s\d+(?:_[A-Za-z0-9_-]+)?")
+ORIGINAL_LABELS = ("baseline", "relation", "relation_kl80aux")
+NEW_LABELS = ("obs_gate_kl80aux", "relation_random80", "relation_kl50aux", "relation_kl30aux")
+
+
+def job_pattern(labels):
+    return re.compile(r"grf_counter_trans9_(?:" + "|".join(map(re.escape, labels))
+                      + r")_s\d+(?:_[A-Za-z0-9_-]+)?")
+
+
+KEEP = job_pattern(ORIGINAL_LABELS + NEW_LABELS)
 
 
 def read(argv):
@@ -47,6 +60,13 @@ def main():
         print("Dry run: no jobs cancelled")
         return
     if selection["cancel"]:
+        missing = [label for label in ORIGINAL_LABELS
+                   if not any(job_pattern((label,)).fullmatch(job["name"])
+                              for job in selection["keep"])]
+        if missing:
+            raise RuntimeError("Original keep targets missing from active queue: {}. "
+                               "Nothing cancelled; inspect accounting/checkpoints first.".format(
+                                   ", ".join(missing)))
         logdir = repo / "ozstar_logs"
         logdir.mkdir(exist_ok=True)
         manifest = logdir / ("keep_kl_aux_three_{}_{}.json".format(time.time_ns(), os.getpid()))
