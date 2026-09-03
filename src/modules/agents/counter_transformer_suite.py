@@ -29,6 +29,14 @@ ABLATION_PROFILES = {
     "relation_kl50aux": {"gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.5},
     "relation_kl30aux": {"gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.3},
     "linear_relation_kl80aux": {"gate": True, "relation": True, "aux": "kl80", "branch": "linear"},
+    # Auxiliary KL80 corruption is applied before the obs-conditioned main
+    # gate, so the latter learns from the already-masked observation.
+    "relation_kl80aux_klfirst": {
+        "gate": True,
+        "relation": True,
+        "aux": "kl80",
+        "aux_order": "kl_first",
+    },
 }
 ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 

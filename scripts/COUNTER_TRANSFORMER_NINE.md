@@ -203,9 +203,33 @@ bash scripts/ozstar_submit_counter_linear_kl80aux.sh
 ```
 
 仅追加此一个任务，不停止已有任务；同名活跃任务不会重复提交。
-`ozstar_keep_kl_aux_three.py` 已保护此变体，加上之前的旧三项和新四项，共八个变体。
+`ozstar_keep_kl_aux_three.py` 已保护此变体，加上之前的旧三项和新五项，共九个变体。
 预检 `smoke_test_counter_linear_kl80aux.py` 检查 linear 实际输入等于 obs×主 mask×辅助 mask、
 不执行 attention、辅助测试隔离、linear 分支梯度非零而未用分支梯度为零，以及实际更新和绘图。
+
+## 追加对照：KL80 辅助 mask 先于 obs 主 gate
+
+W&B 名字：`grf_counter_trans9_relation_kl80aux_klfirst_10m_s1`。
+它与 `relation_kl80aux` 只改变辅助 TD rollout 中的 mask 顺序：先由独立的
+obs-conditioned KL80 gate 采样并作用于原始 obs，再把这个已遮蔽的 obs 输入主
+obs-conditioned gate，最后应用主 gate 进行 relation 编码。形式上为
+`obs_aux = obs × m_kl80`，`obs_aux = obs_aux × m_main(obs_aux)`。
+
+该顺序切换只在辅助 TD 前向启用；主 TD、行为采集、relation 主路径、KL 正则和测试
+仍使用原始 `obs → m_main(obs)` 路径。两种 gate 仍各自记录概率、实际连续 mask 和
+乘积热力图，因此可以区分“先扰动输入再门控”与原来的“先门控再施加辅助扰动”。
+KL80 仍表示可学习的 Binary Concrete 概率门控及 Bernoulli(.8) KL 先验，不是固定
+全局 .8 mask。
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+git pull --ff-only origin codex/dual-branch-benefit-drop
+bash scripts/ozstar_submit_counter_klfirst.sh
+```
+
+该脚本只追加一个任务，不取消、重启或删除现有任务；同名且同仓库的活跃任务会复用。
+`smoke_test_counter_klfirst.py` 会捕获两个 gate 的真实前向输入，验证辅助路径确实是
+KL80 mask → 主 gate，并验证辅助关闭及测试模式下仍为 raw-obs 路径。
 
 ## tmux 每十分钟同步正在运行的实验
 

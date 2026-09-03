@@ -5727,18 +5727,31 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
 
     def _forward_attention_only_relation(self, obs):
         flat_obs = obs[..., : self.expected_obs_dim]
-        attention_input = flat_obs
+        # The KL-first ablation is deliberately scoped to the auxiliary TD
+        # rollout.  The ordinary/main TD path and semantic test path retain
+        # the original raw-obs -> main-gate ordering.
+        aux_before_main = (
+            getattr(self, "counter_transformer_profile", {}).get("aux_order") == "kl_first"
+            and bool(getattr(self, "kl80_auxiliary_enabled", False))
+            and not self._semantic_test_mode
+        )
+        attention_input = (
+            self._apply_kl_auxiliary_gate(flat_obs, flat_obs, 1)
+            if aux_before_main
+            else flat_obs
+        )
         if self.dynamic_branch_gate is not None:
-            branch_gates = self._branch_keep_gates(flat_obs)
+            branch_gates = self._branch_keep_gates(attention_input)
             if getattr(self, "counter_transformer_profile", {}).get("test_open") and self._semantic_test_mode:
                 # Keep learned probabilities available for diagnostics; bypass
                 # only the applied mask, and only during evaluation.
                 branch_gates = th.ones_like(branch_gates)
                 self.latest_dynamic_branch_gates_graph = branch_gates
             attention_input = self._apply_branch_gate(
-                flat_obs, branch_gates, 1
+                attention_input, branch_gates, 1
             )
-        attention_input = self._apply_kl_auxiliary_gate(flat_obs, attention_input, 1)
+        if not aux_before_main:
+            attention_input = self._apply_kl_auxiliary_gate(flat_obs, attention_input, 1)
         next_relation_hidden = self._forward_full_obs_attention_branch(
             attention_input
         )
@@ -5771,11 +5784,21 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
 
     def _forward_linear_only_relation(self, obs):
         flat_obs = obs[..., : self.expected_obs_dim]
-        linear_input = flat_obs
+        aux_before_main = (
+            getattr(self, "counter_transformer_profile", {}).get("aux_order") == "kl_first"
+            and bool(getattr(self, "kl80_auxiliary_enabled", False))
+            and not self._semantic_test_mode
+        )
+        linear_input = (
+            self._apply_kl_auxiliary_gate(flat_obs, flat_obs, 0)
+            if aux_before_main
+            else flat_obs
+        )
         if self.dynamic_branch_gate is not None:
-            branch_gates = self._branch_keep_gates(flat_obs)
-            linear_input = self._apply_branch_gate(flat_obs, branch_gates, 0)
-        linear_input = self._apply_kl_auxiliary_gate(flat_obs, linear_input, 0)
+            branch_gates = self._branch_keep_gates(linear_input)
+            linear_input = self._apply_branch_gate(linear_input, branch_gates, 0)
+        if not aux_before_main:
+            linear_input = self._apply_kl_auxiliary_gate(flat_obs, linear_input, 0)
         next_relation_hidden = self.dual_linear_encoder(linear_input)
         condition = (
             next_relation_hidden
