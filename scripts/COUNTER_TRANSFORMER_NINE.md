@@ -82,3 +82,26 @@ bash scripts/ozstar_submit_counter_kl80aux_no_relation.sh
 
 此脚本只追加一个任务，不取消、重启或删除现有任务/日志；相同名称且同一仓库的活跃任务会复用。
 原九模型脚本仍默认只选原九个，不要用它来提交此追加对照。
+
+## 追加对照：固定 random80 辅助
+
+W&B：`grf_counter_trans9_relation_random80_10m_s1`。
+与 `relation_kl80aux` 比较：保留 obs 主门控、1×relation、1×辅助 TD、乘法位置、
+逐 timestep 采样、250K 预热及全部训练/测试设置；仅把额外辅助概率固定为 p=.8，
+取消辅助概率学习及辅助 KL 正则。这里 80 指保留概率，不是丢弃概率。
+
+为避免混入硬/软采样差异，使用和 KL80 完全相同的 Binary Concrete 采样（温度 .5），
+不是 Bernoulli 0/1 遮蔽。为了匹配其余网络初始化，保留辅助模块的构造顺序，
+将其输出层固定为 logit(.8)，冻结整个辅助模块；它的概率不再依赖 obs。
+主 gate 仍正常训练。辅助 mask 不应用到行为采集或测试；辅助概率图单独命名为
+`test_mask_probability_heatmap_auxiliary_fixed80_attention`，不标为 learned KL80。
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+git pull --ff-only origin codex/dual-branch-benefit-drop
+bash scripts/ozstar_submit_counter_random80_aux.sh
+```
+
+只追加此一个对照，不停止其他任务；原九模型默认提交列表不变。
+这个实验比较“可学习且 KL 约束的辅助扰动”与“固定概率辅助扰动”，
+不能单独分离 KL 正则与概率可学习性各自的贡献。

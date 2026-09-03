@@ -5741,10 +5741,13 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             auxiliary_mask, auxiliary_probability = auxiliary_gate(flat_obs, sample=enabled)
             self.latest_kl80_auxiliary_probability = auxiliary_probability.detach()
             probability = auxiliary_probability[1:2].clamp(1e-6, 1.0 - 1e-6)
-            self.latest_kl80_auxiliary_loss = (
-                probability * (probability.log() - math.log(0.8))
-                + (1.0 - probability) * ((1.0 - probability).log() - math.log(0.2))
-            ).mean()
+            if self.counter_transformer_profile.get("aux") == "fixed_concrete":
+                self.latest_kl80_auxiliary_loss = probability.new_zeros(())
+            else:
+                self.latest_kl80_auxiliary_loss = (
+                    probability * (probability.log() - math.log(0.8))
+                    + (1.0 - probability) * ((1.0 - probability).log() - math.log(0.2))
+                ).mean()
             if enabled:
                 attention_input = attention_input * auxiliary_mask[1]
         next_relation_hidden = self._forward_full_obs_attention_branch(
@@ -9749,7 +9752,7 @@ class CleanHyperAgent(nn.Module):
             capturer = self.rpg_relation_capturer
             capturer.counter_transformer_profile = suite_profile
             capturer.kl80_auxiliary_enabled = False
-            if suite_profile.get("aux") == "kl80":
+            if suite_profile.get("aux") in {"kl80", "fixed_concrete"}:
                 capturer.kl80_auxiliary_gate = ObservationConditionedBranchGate(
                     obs_dim=capturer.expected_obs_dim,
                     hidden_dim=self.dynamic_branch_gate_hidden_dim,
@@ -9757,6 +9760,19 @@ class CleanHyperAgent(nn.Module):
                     binary_concrete_temperature=self.binary_concrete_temperature,
                     initial_keep_probability=self.hard_gate_initial_keep_probability,
                 )
+                if suite_profile.get("aux") == "fixed_concrete":
+                    # Keep construction/RNG consumption identical to KL80,
+                    # but freeze a constant p=.8. Reuse the exact Concrete
+                    # sampler, branch shapes and auxiliary injection point.
+                    fixed_gate = capturer.kl80_auxiliary_gate
+                    final_layer = (
+                        fixed_gate.gate_network[-1]
+                        if isinstance(fixed_gate.gate_network, nn.Sequential)
+                        else fixed_gate.gate_network
+                    )
+                    nn.init.zeros_(final_layer.weight)
+                    nn.init.constant_(final_layer.bias, math.log(0.8 / 0.2))
+                    fixed_gate.requires_grad_(False)
 
     def _init_grf_decision_maker_head(self):
         if self.n_actions != 19:

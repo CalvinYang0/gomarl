@@ -121,6 +121,10 @@ def check(label):
     logger.wandb_module = SimpleNamespace(Image=capture_image)
     logger.log_test_gate_probability_trajectory(trajectory, 300000)
     assert "test_mask_probability_heatmap_attention" in logger.wandb_current_data
+    if flags.get("aux") == "fixed_concrete":
+        assert "test_mask_probability_heatmap_auxiliary_fixed80_attention" in logger.wandb_current_data
+        assert "test_mask_probability_heatmap_auxiliary_kl80_attention" not in logger.wandb_current_data
+        assert not any(p.requires_grad for p in capturer.kl80_auxiliary_gate.parameters())
     assert any("parameter_pca" in key for key in logger.wandb_current_data)
     assert "test_dynamic_gate_trajectory" in logger.wandb_current_data
     print(label + ": learner forward/backward + flags + PCA + trajectory + heatmap OK", flush=True)

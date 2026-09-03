@@ -24,6 +24,7 @@ PROFILES = {
 # opt-in and submitted separately, without cancelling the original runs.
 ABLATION_PROFILES = {
     "obs_gate_kl80aux": {"gate": True, "aux": "kl80"},
+    "relation_random80": {"gate": True, "relation": True, "aux": "fixed_concrete"},
 }
 ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 
@@ -49,7 +50,9 @@ def experiment_overrides(label):
         "clean_mask_parameter_relation_perturbed_head_coef": 0.0,
         "clean_mask_parameter_relation_gate_regularization_coef": 0.0,
         "clean_random_drop_auxiliary_coef": float(bool(flags.get("aux"))),
-        "clean_random_drop_auxiliary_keep_probability": 0.5,
+        "clean_random_drop_auxiliary_keep_probability": (
+            0.8 if flags.get("aux") == "fixed_concrete" else 0.5
+        ),
         "clean_random_drop_auxiliary_scope": "timestep",
         "clean_random_drop_auxiliary_combine_mode": "multiply",
         "clean_hard_gate_initial_keep_probability": 0.95,

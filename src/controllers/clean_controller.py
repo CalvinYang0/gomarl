@@ -242,7 +242,12 @@ class CleanMAC(BasicMAC):
         }
         auxiliary_probability = getattr(capturer, "latest_kl80_auxiliary_probability", None)
         if auxiliary_probability is not None:
-            agent_probabilities["auxiliary_kl80_attention"] = auxiliary_probability[1, env_index].cpu().tolist()
+            auxiliary_name = (
+                "auxiliary_fixed80_attention"
+                if getattr(capturer, "counter_transformer_profile", {}).get("aux") == "fixed_concrete"
+                else "auxiliary_kl80_attention"
+            )
+            agent_probabilities[auxiliary_name] = auxiliary_probability[1, env_index].cpu().tolist()
         self._test_gate_trajectory_rows.append(
             (timestep, values[0], values[1], parameter_vector, agent_probabilities)
         )

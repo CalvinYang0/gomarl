@@ -313,6 +313,7 @@ class CleanLearner:
         }
         self.random_drop_auxiliary_active |= bool(self.counter_transformer_profile.get("aux"))
         self.kl80_random_drop_auxiliary = self.counter_transformer_profile.get("aux") == "kl80"
+        self.concrete_random_drop_auxiliary = self.counter_transformer_profile.get("aux") in {"kl80", "fixed_concrete"}
         self.random_drop_auxiliary_input_mask = model_type in {
             "grf_abs_mlp_relation_random_drop_aux_hypercond",
             "grf_abs_single_transformer_branch_random_drop_aux_hypercond",
@@ -2335,13 +2336,13 @@ class CleanLearner:
                 auxiliary_kl_terms = []
                 random_capturer = getattr(self.mac.agent, "rpg_relation_capturer", None)
                 try:
-                    if self.kl80_random_drop_auxiliary:
+                    if self.concrete_random_drop_auxiliary:
                         random_capturer.kl80_auxiliary_enabled = True
                     elif not self.random_drop_auxiliary_input_mask:
                         self.mac.set_dynamic_branch_gate_random_aux_combine_mode(
                             self.random_drop_auxiliary_combine_mode
                         )
-                    if not self.kl80_random_drop_auxiliary and self.random_drop_auxiliary_scope == "episode":
+                    if not self.concrete_random_drop_auxiliary and self.random_drop_auxiliary_scope == "episode":
                         keep_probability = td_loss.new_tensor(
                             self.random_drop_auxiliary_keep_probability
                         )
@@ -2354,7 +2355,7 @@ class CleanLearner:
                                 keep_probability
                             )
                     for t in range(batch.max_seq_length):
-                        if not self.kl80_random_drop_auxiliary and self.random_drop_auxiliary_scope == "timestep":
+                        if not self.concrete_random_drop_auxiliary and self.random_drop_auxiliary_scope == "timestep":
                             keep_probability = td_loss.new_tensor(
                                 self.random_drop_auxiliary_keep_probability
                             )
@@ -2378,7 +2379,7 @@ class CleanLearner:
                                 )
                             random_relation_conditions.append(condition)
                 finally:
-                    if self.kl80_random_drop_auxiliary:
+                    if self.concrete_random_drop_auxiliary:
                         random_capturer.kl80_auxiliary_enabled = False
                     if self.random_drop_auxiliary_input_mask:
                         self.mac.set_random_drop_auxiliary_input_keep_probability(None)

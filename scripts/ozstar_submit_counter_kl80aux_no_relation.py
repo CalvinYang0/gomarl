@@ -11,14 +11,14 @@ import time
 from ozstar_submit_counter_transformer_nine import build_plans, run
 
 
-def main():
+def main(label="obs_gate_kl80aux", smoke_script="smoke_test_counter_kl80aux_no_relation.py"):
     repo = Path(os.environ.get("REPO_DIR", "/home/kyang/code/gomarl-dual-branch")).resolve()
     os.chdir(repo)
-    plan, = build_plans(repo, ["obs_gate_kl80aux"])
+    plan, = build_plans(repo, [label])
     if os.environ.get("DRY_RUN") == "YES":
         print(json.dumps(plan, indent=2))
         return
-    subprocess.run([sys.executable, "scripts/smoke_test_counter_kl80aux_no_relation.py"], check=True)
+    subprocess.run([sys.executable, "scripts/" + smoke_script], check=True)
     user = run(["id", "-un"])
     active = run(["squeue", "-u", user, "-h", "-o", "%i|%j|%T"])
     for row in active.splitlines():
@@ -37,7 +37,7 @@ def main():
     subprocess.run(["sbatch", "--test-only"] + plan["sbatch_args"] +
                    ["scripts/ozstar_train_offline.sbatch"], env=env, check=True)
     record = dict(commit=run(["git", "rev-parse", "HEAD"]), plan=plan, job_id=None)
-    manifest = logdir / ("kl80aux_no_relation_{}_{}.json".format(time.strftime("%Y%m%d_%H%M%S"), os.getpid()))
+    manifest = logdir / ("counter_control_{}_{}_{}.json".format(label, time.strftime("%Y%m%d_%H%M%S"), os.getpid()))
     def persist():
         with manifest.open("w") as handle:
             json.dump(record, handle, indent=2)
