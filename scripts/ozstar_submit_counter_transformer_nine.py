@@ -45,7 +45,8 @@ def build_plans(repo, labels=None):
                        MAP_NAME="academy_counterattack_easy", MODEL_TYPE=model,
                        SEED=str(seed), RUN_NAME=run_name, GROUP_NAME=run_name,
                        T_MAX=os.environ.get("T_MAX", "10050000"),
-                       TEST_INTERVAL="50000", BATCH_SIZE_RUN="8", EXPECTED_BATCH_SIZE_RUN="8",
+                       # Match the imported Counter environment's evaluation cadence.
+                       TEST_INTERVAL="10000", BATCH_SIZE_RUN="8", EXPECTED_BATCH_SIZE_RUN="8",
                        BATCH_SIZE="128", BUFFER_SIZE="5000", USE_WANDB="True",
                        WANDB_MODE="offline", USE_CUDA="False",
                        OMP_NUM_THREADS=str(extra["torch_num_threads"]),
