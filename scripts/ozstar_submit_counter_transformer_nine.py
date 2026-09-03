@@ -19,9 +19,8 @@ def run(argv, **kwargs):
     return subprocess.check_output(argv, text=True, **kwargs).strip()
 
 
-def main():
-    repo = Path(os.environ.get("REPO_DIR", "/home/kyang/code/gomarl-dual-branch")).resolve()
-    os.chdir(repo)
+def build_plans(repo, labels=None):
+    """Share exact training/resource settings with separately submitted controls."""
     spec = importlib.util.spec_from_file_location("nine_profiles", repo / "src/modules/agents/counter_transformer_suite.py")
     profiles = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(profiles)
@@ -30,7 +29,7 @@ def main():
     if not re.fullmatch(r"[A-Za-z0-9_-]*", suffix):
         raise ValueError("RUN_SUFFIX must contain only letters, digits, _ or -")
     plans = []
-    for label in profiles.PROFILES:
+    for label in (profiles.PROFILES if labels is None else labels):
         job_name = "grf_counter_trans9_{}_s{}{}".format(label, seed, suffix)
         run_name = "grf_counter_trans9_{}_10m_s{}{}".format(label, seed, suffix)
         extra = profiles.experiment_overrides(label)
@@ -60,6 +59,13 @@ def main():
                 "--output=ozstar_logs/%x_%j.out", "--error=ozstar_logs/%x_%j.err", "--export=ALL"]
         plans.append(dict(label=label, job_name=job_name, run_name=run_name,
                           exports=exports, sbatch_args=args))
+    return plans
+
+
+def main():
+    repo = Path(os.environ.get("REPO_DIR", "/home/kyang/code/gomarl-dual-branch")).resolve()
+    os.chdir(repo)
+    plans = build_plans(repo)
     if os.environ.get("DRY_RUN") == "YES":
         print(json.dumps(plans, indent=2))
         return

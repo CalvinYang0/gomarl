@@ -65,3 +65,20 @@ bash scripts/ozstar_submit_counter_transformer_nine.sh
 `DRY_RUN=YES` 只打印配置，无 Slurm 调用、无取消或提交。
 
 预检使用合成 padded episodes，不替代真实 GRF 环境训练、集群内存测试或多 seed 效果验证。
+
+## 追加对照：仅去掉 relation
+
+W&B：`grf_counter_trans9_obs_gate_kl80aux_10m_s1`。
+对应 `relation_kl80aux`，仅关闭 relation（系数 1→0），保留同一网络结构、obs 主门控、
+独立 KL80 辅助 gate、权重 1 的辅助 TD、原有 KL 正则及其系数规则、预热、测试方式和全部诊断图。
+主 gate 仍受 TD 训练，不新增主路径 KL。配置中通用 Bernoulli keep=.5 字段不用于 KL80 辅助；
+该辅助由独立门控的概率和 .8 先验决定，与原版相同。
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+git pull --ff-only origin codex/dual-branch-benefit-drop
+bash scripts/ozstar_submit_counter_kl80aux_no_relation.sh
+```
+
+此脚本只追加一个任务，不取消、重启或删除现有任务/日志；相同名称且同一仓库的活跃任务会复用。
+原九模型脚本仍默认只选原九个，不要用它来提交此追加对照。

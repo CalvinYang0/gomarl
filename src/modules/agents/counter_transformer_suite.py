@@ -20,9 +20,16 @@ PROFILES = {
     "kl80_test_open": {"gate": True, "kl": True, "test_open": True},
 }
 
+# Keep the original nine-model submission unchanged. These controls are
+# opt-in and submitted separately, without cancelling the original runs.
+ABLATION_PROFILES = {
+    "obs_gate_kl80aux": {"gate": True, "aux": "kl80"},
+}
+ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
+
 MODEL_PROFILES = {
     "grf_abs_single_transformer_suite_{}_hypercond".format(label): dict(flags, label=label)
-    for label, flags in PROFILES.items()
+    for label, flags in ALL_PROFILES.items()
 }
 
 
@@ -32,7 +39,7 @@ def profile_for(model_type):
 
 def experiment_overrides(label):
     """Shared by actual submission and runtime tests; no model-name guessing."""
-    flags = PROFILES[label]
+    flags = ALL_PROFILES[label]
     return {
         "clean_model_type": "grf_abs_single_transformer_suite_{}_hypercond".format(label),
         "clean_mask_parameter_relation_coef": float(bool(flags.get("relation"))),

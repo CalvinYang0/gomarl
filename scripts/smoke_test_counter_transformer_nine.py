@@ -15,7 +15,7 @@ from components.episode_buffer import EpisodeBatch
 from components.transforms import OneHot
 from controllers.clean_controller import CleanMAC
 from learners.clean_learner import CleanLearner
-from modules.agents.counter_transformer_suite import PROFILES, experiment_overrides
+from modules.agents.counter_transformer_suite import ALL_PROFILES, PROFILES, experiment_overrides
 from utils.logging import Logger
 
 
@@ -53,7 +53,7 @@ def make_case(label):
 
 def check(label):
     th.manual_seed(7)
-    flags = PROFILES[label]
+    flags = ALL_PROFILES[label]
     mac, learner, batch, logger = make_case(label)
     capturer = mac.agent.rpg_relation_capturer
     assert capturer.relation_encoder_style == "attention_only"
@@ -88,6 +88,10 @@ def check(label):
         assert not capturer.kl80_auxiliary_enabled
         assert any(p.grad is not None and p.grad.abs().sum() > 0
                    for p in capturer.kl80_auxiliary_gate.parameters())
+        assert any(p.grad is not None and p.grad.abs().sum() > 0
+                   for p in capturer.dynamic_branch_gate.parameters())
+    if not flags.get("relation"):
+        assert not logger.stats.get("loss_mask_parameter_relation")
     # Evaluation capture is exercised through select_actions, including the
     # no-gate baseline. Every model must provide real generated-head vectors.
     mac.init_hidden(batch.batch_size)
