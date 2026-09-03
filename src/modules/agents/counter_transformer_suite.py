@@ -37,6 +37,14 @@ ABLATION_PROFILES = {
         "aux": "kl80",
         "aux_order": "kl_first",
     },
+    # Keep training unchanged, but use the learned keep probability as a
+    # deterministic soft mask during test execution instead of p>0.5.
+    "relation_kl80aux_softtest": {
+        "gate": True,
+        "relation": True,
+        "aux": "kl80",
+        "test_soft_gate": True,
+    },
 }
 ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 

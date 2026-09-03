@@ -14,7 +14,8 @@ import time
 
 ORIGINAL_LABELS = ("baseline", "relation", "relation_kl80aux")
 NEW_LABELS = ("obs_gate_kl80aux", "relation_random80", "relation_kl50aux", "relation_kl30aux",
-              "linear_relation_kl80aux", "relation_kl80aux_klfirst")
+              "linear_relation_kl80aux", "relation_kl80aux_klfirst",
+              "relation_kl80aux_softtest")
 
 
 def job_pattern(labels):

@@ -299,7 +299,9 @@ class CleanMAC(BasicMAC):
         trajectory["gate_note"] = (
             "No gate: all slots kept" if profile.get("label") == "baseline"
             else "Test mask bypassed: all slots kept; plotted values are learned probabilities"
-            if profile.get("test_open") else "Learned keep probabilities"
+            if profile.get("test_open")
+            else "Test applies learned probabilities as soft masks"
+            if profile.get("test_soft_gate") else "Learned keep probabilities"
         )
         parameter_vectors = [row[3] for row in self._test_gate_trajectory_rows]
         if parameter_vectors and all(

@@ -2932,12 +2932,20 @@ class PublicTransformerRelationCapturer(nn.Module):
                 and self._dynamic_branch_gate_t_env
                 >= self.dynamic_branch_gate_training_freeze_steps
             )
+            soft_test_gate = (
+                bool(getattr(self, "counter_transformer_profile", {}).get("test_soft_gate"))
+                and self._semantic_test_mode
+                and not self._dynamic_branch_gate_force_open
+            )
             gates, probabilities = self.dynamic_branch_gate(
                 reference,
                 sample=not self._semantic_test_mode and not training_gate_frozen,
                 deterministic_soft=(
-                    self._dynamic_branch_gate_target_mode
-                    and not training_gate_frozen
+                    (
+                        self._dynamic_branch_gate_target_mode
+                        and not training_gate_frozen
+                    )
+                    or soft_test_gate
                 ),
             )
             if training_gate_frozen:

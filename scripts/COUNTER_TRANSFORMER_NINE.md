@@ -203,7 +203,7 @@ bash scripts/ozstar_submit_counter_linear_kl80aux.sh
 ```
 
 仅追加此一个任务，不停止已有任务；同名活跃任务不会重复提交。
-`ozstar_keep_kl_aux_three.py` 已保护此变体，加上之前的旧三项和新五项，共九个变体。
+`ozstar_keep_kl_aux_three.py` 已保护此变体，加上之前的旧三项和新六项，共十个变体。
 预检 `smoke_test_counter_linear_kl80aux.py` 检查 linear 实际输入等于 obs×主 mask×辅助 mask、
 不执行 attention、辅助测试隔离、linear 分支梯度非零而未用分支梯度为零，以及实际更新和绘图。
 
@@ -230,6 +230,28 @@ bash scripts/ozstar_submit_counter_klfirst.sh
 该脚本只追加一个任务，不取消、重启或删除现有任务；同名且同仓库的活跃任务会复用。
 `smoke_test_counter_klfirst.py` 会捕获两个 gate 的真实前向输入，验证辅助路径确实是
 KL80 mask → 主 gate，并验证辅助关闭及测试模式下仍为 raw-obs 路径。
+
+## 追加对照：测试执行不使用 hard gate
+
+W&B 名字：`grf_counter_trans9_relation_kl80aux_softtest_10m_s1`。
+训练过程与 `relation_kl80aux` 完全一致；唯一改变是测试执行时不再使用
+`p > 0.5` 的 0/1 hard mask，而是直接将主 obs-gate 的预测保留概率 `p` 作为
+确定性 soft mask。也就是训练仍为随机 Binary Concrete，测试改为
+`obs_test = obs × p_main(obs)`。
+
+KL80 auxiliary mask 仍不进入行为采集或测试，只用于 learner 的辅助 TD；该对照专门
+检验测试阶段 hard threshold 是否造成 train/test gap。测试日志的 gate note 会标明
+“Test applies learned probabilities as soft masks”，概率热力图仍记录同一组 `p`。
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+git pull --ff-only origin codex/dual-branch-benefit-drop
+bash scripts/ozstar_submit_counter_softtest.sh
+```
+
+该脚本只追加一个任务，不取消、重启或删除现有任务；同名且同仓库的活跃任务会复用。
+预检会验证训练前向与原 `relation_kl80aux` 完全一致、普通测试仍为 hard mask、
+新测试实际使用连续概率 mask。
 
 ## tmux 每十分钟同步正在运行的实验
 
