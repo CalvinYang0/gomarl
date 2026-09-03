@@ -105,3 +105,42 @@ bash scripts/ozstar_submit_counter_random80_aux.sh
 只追加此一个对照，不停止其他任务；原九模型默认提交列表不变。
 这个实验比较“可学习且 KL 约束的辅助扰动”与“固定概率辅助扰动”，
 不能单独分离 KL 正则与概率可学习性各自的贡献。
+
+## KL-drop 训练诊断
+
+trans9 的主路径 KL80、KL80 辅助（包括无 relation 对照）、fixed80 辅助现在记录
+**learner 从 replay 抽取的训练 batch**，不是测试 probe，也不是行为采集时的 mask。
+诊断复用真实前向的张量，不额外采样，不改变损失、梯度、温度或测试策略。
+
+- `train_gate/main_attention_probability/*`：主门控预测保留概率。
+- `train_gate/main_attention_mask/*`：主 TD 前向实际应用的 mask（预热时可能全 1）。
+- `train_gate/aux_kl80_probability/*`：辅助门控预测概率 p。
+- `train_gate/aux_kl80_mask/*`：该辅助前向实际采样的连续 mask。
+- `train_gate/aux_kl80_main_mask/*`：同一次辅助前向的主 mask。
+- `train_gate/aux_kl80_combined_mask/*`：上面两个 mask 的实际乘积。
+- fixed80 对照使用 `aux_fixed80` 前缀，不混称 KL80。
+
+各项包含 mean/std/min/max、低于 .1/.5 和高于 .9 的比例、10 个等宽分布区间的比例、
+有效 slot 总数。`bin_0.0_0.1_fraction` 等是 [0,.1) 区间占比，最后一格包含 1。
+标量按 learner_log_interval 记录该次完整 batch 的有效 TD 状态，排除 padding 和末尾 bootstrap 状态；
+不是两次日志之间所有更新的滑动平均。连续 mask 的 `<.5` 比例不是精确置零比例；
+概率 p=.8 也不代表 Concrete 样本均值必须为 .8。
+
+`train_gate_heatmap/<上述名称>` 按 agent 分面，横轴 replay episode timestep，纵轴 slot，
+0 白、1 红。概率图和实际连续权重图分别标注。默认每 50K 环境步，在下一次标量日志时，
+选该 batch 有效长度最长的一个 episode，最多画前 200 个有效时刻；不是整个训练分布。
+辅助预热结束前没有辅助图。以下配置可控制开销：
+
+```yaml
+clean_train_gate_diagnostics: True
+clean_train_gate_image_interval: 50000
+clean_train_gate_image_max_steps: 200
+```
+
+已有 `loss_kl80_random_auxiliary`、`weighted_loss_kl80_random_auxiliary` 保留，
+`kl80_random_auxiliary_coef` 现在也通过 W&B 精简日志过滤器。
+新诊断需新启动的训练进程加载代码；git pull 不会让已运行的 Python 自动更新。
+W&B offline 文件仍需正常同步才能在网页看到。没有从旧测试图反推或补造训练数据。
+
+预检：`python scripts/smoke_test_train_gate_diagnostics.py`，检查 padding、实际乘积、
+热力图渲染/上传缓冲、图片间隔，以及启用/关闭诊断时优化结果和 Torch RNG 完全相同。

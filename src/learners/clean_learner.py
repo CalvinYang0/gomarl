@@ -12,6 +12,7 @@ from modules.mixers.qmix import QMixer
 from modules.mixers.vdn import VDNMixer
 from modules.agents.counter_transformer_suite import profile_for
 from utils.rl_utils import build_td_lambda_targets
+from utils.train_gate_diagnostics import TrainGateDiagnostics
 
 
 class CleanLearner:
@@ -1667,6 +1668,16 @@ class CleanLearner:
         terminated = batch["terminated"][:, :-1].float()
         mask = batch["filled"][:, :-1].float()
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
+        gate_diagnostics = None
+        if (getattr(self.args, "clean_train_gate_diagnostics", True)
+                and (self.counter_transformer_profile.get("kl") or self.concrete_random_drop_auxiliary)
+                and t_env - self.log_stats_t >= self.args.learner_log_interval):
+            image_interval = max(1, int(getattr(self.args, "clean_train_gate_image_interval", 50000)))
+            images = (self.logger.use_wandb and t_env - getattr(
+                self, "last_train_gate_image_t", -image_interval) >= image_interval)
+            gate_diagnostics = TrainGateDiagnostics(
+                mask, images=images,
+                max_steps=int(getattr(self.args, "clean_train_gate_image_max_steps", 200)))
         avail_actions = batch["avail_actions"]
         semantic_router = self._semantic_router(self.mac)
         branch_drop_capturer = self._branch_drop_capturer(self.mac)
@@ -1823,6 +1834,13 @@ class CleanLearner:
                         t in observation_probe_times
                     )
                 mac_out.append(self.mac.forward(batch, t=t))
+                if gate_diagnostics is not None:
+                    diagnostic_capturer = self.mac.agent.rpg_relation_capturer
+                    for suffix, attribute in (("probability", "latest_dynamic_branch_probabilities_graph"),
+                                              ("mask", "latest_dynamic_branch_gates_graph")):
+                        value = getattr(diagnostic_capturer, attribute, None)
+                        if value is not None:
+                            gate_diagnostics.add("main_attention_" + suffix, value[1], t)
                 if (
                     perturbed_head_parameter_graphs is not None
                     and t < mask.shape[1]
@@ -2368,6 +2386,14 @@ class CleanLearner:
                                     keep_probability
                                 )
                         random_mac_out.append(self.mac.forward(batch, t=t))
+                        if gate_diagnostics is not None and self.concrete_random_drop_auxiliary:
+                            prefix = "aux_kl80" if self.kl80_random_drop_auxiliary else "aux_fixed80"
+                            gate_diagnostics.add(prefix + "_probability", random_capturer.latest_kl80_auxiliary_probability[1], t)
+                            sampled = random_capturer.latest_kl80_auxiliary_mask[1]
+                            main_mask = random_capturer.latest_dynamic_branch_gates_graph[1].detach()
+                            gate_diagnostics.add(prefix + "_mask", sampled, t)
+                            gate_diagnostics.add(prefix + "_main_mask", main_mask, t)
+                            gate_diagnostics.add(prefix + "_combined_mask", main_mask * sampled, t)
                         if self.kl80_random_drop_auxiliary:
                             auxiliary_kl_terms.append(random_capturer.latest_kl80_auxiliary_loss)
                         if random_relation_conditions is not None:
@@ -2965,6 +2991,11 @@ class CleanLearner:
             self.last_target_update_episode = episode_num
 
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
+            if gate_diagnostics is not None:
+                gate_diagnostics.log(self.logger, t_env, getattr(
+                    self.mac.agent.rpg_relation_capturer, "semantic_names", ()))
+                if gate_diagnostics.trajectories:
+                    self.last_train_gate_image_t = t_env
             self.logger.log_stat("loss_td", td_loss.item(), t_env)
             if self.importance_alternating_training:
                 self.logger.log_stat(

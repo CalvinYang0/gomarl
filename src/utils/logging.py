@@ -38,6 +38,8 @@ class Logger:
             return True
         return (
             key.startswith("loss")
+            or key.startswith("train_gate/")
+            or key.startswith("kl80_random_auxiliary_")
             or key.startswith("weighted_loss")
             or key.endswith("_to_td_ratio")
         )
@@ -158,6 +160,49 @@ class Logger:
             else:
                 self.sacred_info["{}_T".format(key)] = [t]
                 self.sacred_info[key] = [value]
+
+    def log_train_gate_heatmaps(self, trajectories, slot_names, t, episode):
+        """One real replay episode from the diagnostic update; white=0, red=1."""
+        if not self.use_wandb:
+            return
+        try:
+            import matplotlib.pyplot as plt
+            from matplotlib.colors import LinearSegmentedColormap
+        except ImportError as exc:
+            self.console_logger.warning("Cannot render train gate heatmaps: %s", exc)
+            return
+
+        cmap = LinearSegmentedColormap.from_list("train_white_red", ["white", "red"])
+        for name, frames in trajectories.items():
+            fig = None
+            try:
+                times = [frame[0] for frame in frames]
+                values = th.stack([frame[1] for frame in frames]).numpy()
+                names = list(slot_names)
+                if len(names) != values.shape[-1]:
+                    names = ["slot_{}".format(i) for i in range(values.shape[-1])]
+                fig, axes = plt.subplots(1, values.shape[1], squeeze=False,
+                    figsize=(4.5 * values.shape[1], max(5., len(names) * .24)),
+                    constrained_layout=True)
+                for agent, axis in enumerate(axes[0]):
+                    pixels = axis.imshow(values[:, agent, :].T, aspect="auto",
+                        interpolation="nearest", cmap=cmap, vmin=0, vmax=1,
+                        extent=(times[0] - .5, times[-1] + .5, len(names) - .5, -.5))
+                    axis.set_yticks(np.arange(len(names)))
+                    axis.set_yticklabels(names, fontsize=6)
+                    axis.set_xlabel("replay episode timestep")
+                    axis.set_ylabel("slot")
+                    axis.set_title("agent {}".format(agent))
+                label = "keep probability p" if name.endswith("probability") else "applied continuous mask weight"
+                fig.colorbar(pixels, ax=list(axes[0]), label=label)
+                fig.suptitle("TRAIN learner replay episode {}: {}\nValid TD states only; first {} steps shown".format(
+                    episode, name, len(times)))
+                self._update_wandb_buffer("train_gate_heatmap/" + name, self.wandb_module.Image(fig), t)
+            except Exception as exc:
+                self.console_logger.warning("Failed to create train gate heatmap %s: %s", name, exc)
+            finally:
+                if fig is not None:
+                    plt.close(fig)
 
     def log_test_gate_probability_trajectory(self, trajectory, t):
         """Log one test trajectory as a compact W&B image.

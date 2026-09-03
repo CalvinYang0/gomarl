@@ -5740,6 +5740,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             enabled = bool(getattr(self, "kl80_auxiliary_enabled", False)) and not self._semantic_test_mode
             auxiliary_mask, auxiliary_probability = auxiliary_gate(flat_obs, sample=enabled)
             self.latest_kl80_auxiliary_probability = auxiliary_probability.detach()
+            # A detached view of the actual draw, not a second diagnostic draw.
+            self.latest_kl80_auxiliary_mask = auxiliary_mask.detach() if enabled else None
             probability = auxiliary_probability[1:2].clamp(1e-6, 1.0 - 1e-6)
             if self.counter_transformer_profile.get("aux") == "fixed_concrete":
                 self.latest_kl80_auxiliary_loss = probability.new_zeros(())
