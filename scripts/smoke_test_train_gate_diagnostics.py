@@ -58,7 +58,7 @@ def run(label, enabled):
             assert all(frame[1].shape == (4, 30) for frame in history)
             assert "train_gate_heatmap/" + name in logger.wandb_current_data
         if label != "kl80":
-            prefix = "aux_fixed80" if label == "relation_random80" else "aux_kl80"
+            prefix = "aux_fixed80" if label == "relation_random80" else "aux_" + learner.kl_auxiliary_tag
             for (_, main), (_, sampled), (_, combined) in zip(
                     frames[prefix + "_main_mask"], frames[prefix + "_mask"], frames[prefix + "_combined_mask"]):
                 assert th.equal(main * sampled, combined)
@@ -76,7 +76,7 @@ def run(label, enabled):
 if __name__ == "__main__":
     th.set_num_threads(1)
     check_collector()
-    for label in ("kl80", "relation_kl80aux", "relation_random80"):
+    for label in ("kl80", "relation_kl80aux", "relation_random80", "relation_kl50aux", "relation_kl30aux"):
         plain, plain_rng = run(label, False)
         logged, logged_rng = run(label, True)
         assert th.equal(plain_rng, logged_rng), label

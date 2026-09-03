@@ -1003,3 +1003,6 @@ name: "clean_hyper_baseline"
 clean_train_gate_diagnostics: True
 clean_train_gate_image_interval: 50000
 clean_train_gate_image_max_steps: 200
+
+# Learned auxiliary gate's Bernoulli KL prior (keep probability, not drop).
+clean_kl_auxiliary_prior: 0.8

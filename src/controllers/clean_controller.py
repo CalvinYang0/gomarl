@@ -245,7 +245,7 @@ class CleanMAC(BasicMAC):
             auxiliary_name = (
                 "auxiliary_fixed80_attention"
                 if getattr(capturer, "counter_transformer_profile", {}).get("aux") == "fixed_concrete"
-                else "auxiliary_kl80_attention"
+                else "auxiliary_{}_attention".format(capturer.kl_auxiliary_tag)
             )
             agent_probabilities[auxiliary_name] = auxiliary_probability[1, env_index].cpu().tolist()
         self._test_gate_trajectory_rows.append(

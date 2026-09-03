@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from envs.starcraft.smac_maps import get_map_params
-from .counter_transformer_suite import MODEL_PROFILES, profile_for
+from .counter_transformer_suite import MODEL_PROFILES, profile_for, kl_auxiliary_tag
 
 
 ACTION_EDGE_PUBLIC_PRED_SINGLE_HEAD_VARIANTS = {
@@ -5747,8 +5747,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
                 self.latest_kl80_auxiliary_loss = probability.new_zeros(())
             else:
                 self.latest_kl80_auxiliary_loss = (
-                    probability * (probability.log() - math.log(0.8))
-                    + (1.0 - probability) * ((1.0 - probability).log() - math.log(0.2))
+                    probability * (probability.log() - math.log(self.kl_auxiliary_prior))
+                    + (1.0 - probability) * ((1.0 - probability).log() - math.log(1.0 - self.kl_auxiliary_prior))
                 ).mean()
             if enabled:
                 attention_input = attention_input * auxiliary_mask[1]
@@ -9755,6 +9755,9 @@ class CleanHyperAgent(nn.Module):
             capturer.counter_transformer_profile = suite_profile
             capturer.kl80_auxiliary_enabled = False
             if suite_profile.get("aux") in {"kl80", "fixed_concrete"}:
+                capturer.kl_auxiliary_prior = float(getattr(
+                    self.args, "clean_kl_auxiliary_prior", suite_profile.get("aux_prior", 0.8)))
+                capturer.kl_auxiliary_tag = kl_auxiliary_tag(capturer.kl_auxiliary_prior)
                 capturer.kl80_auxiliary_gate = ObservationConditionedBranchGate(
                     obs_dim=capturer.expected_obs_dim,
                     hidden_dim=self.dynamic_branch_gate_hidden_dim,

@@ -150,3 +150,31 @@ W&B offline 文件仍需正常同步才能在网页看到。没有从旧测试�
 
 预检：`python scripts/smoke_test_train_gate_diagnostics.py`，检查 padding、实际乘积、
 热力图渲染/上传缓冲、图片间隔，以及启用/关闭诊断时优化结果和 Torch RNG 完全相同。
+
+## 追加 KL50 / KL30 辅助先验对照
+
+- `grf_counter_trans9_relation_kl50aux_10m_s1`
+- `grf_counter_trans9_relation_kl30aux_10m_s1`
+
+以 `relation_kl80aux` 为对照，仅将辅助门控的 KL 目标先验由 Bernoulli(.8)
+改为 Bernoulli(.5) / Bernoulli(.3)，配置键为 `clean_kl_auxiliary_prior`。
+数字指**保留概率先验**，不是固定保留率，更不是丢弃率。
+仍由 obs 预测 p，用 Binary Concrete 温度 .5 逐 timestep 采样；初始 p=.95、
+250K 预热、relation 权重 1、辅助 TD 权重 1、原自适应 KL 系数规则不变。
+主门控没有新增 KL；辅助 mask 仍只乘在辅助 TD 路径，行为采集和测试不应用它。
+沿用每 10K 步测试 32 局及全部参数图、轨迹图、训练诊断。
+
+新日志分别使用 `loss_kl50_random_auxiliary` / `loss_kl30_random_auxiliary`、
+`train_gate/aux_kl50_*` / `train_gate/aux_kl30_*`、
+`test_mask_probability_heatmap_auxiliary_kl50_attention` / `...kl30_attention`；
+原 KL80 日志和内部 checkpoint 参数名保持兼容。先验本身也记录在 `train_gate/aux_klXX/keep_prior`。
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+git pull --ff-only origin codex/dual-branch-benefit-drop
+bash scripts/ozstar_submit_counter_kl50_kl30_aux.sh
+```
+
+仅追加这两个，不取消现有任务；复用同名同目录的活跃任务，原九模型默认列表不变。
+每个新增任务提交前通过合成 learner 预检和 Slurm test-only；逐个记录提交清单。
+`DRY_RUN=YES` 只打印这两个配置，不提交、不取消、不写运行日志。

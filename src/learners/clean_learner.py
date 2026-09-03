@@ -10,7 +10,7 @@ from torch.optim import Adam, RMSprop
 from components.episode_buffer import EpisodeBatch
 from modules.mixers.qmix import QMixer
 from modules.mixers.vdn import VDNMixer
-from modules.agents.counter_transformer_suite import profile_for
+from modules.agents.counter_transformer_suite import profile_for, kl_auxiliary_tag
 from utils.rl_utils import build_td_lambda_targets
 from utils.train_gate_diagnostics import TrainGateDiagnostics
 
@@ -314,6 +314,8 @@ class CleanLearner:
         }
         self.random_drop_auxiliary_active |= bool(self.counter_transformer_profile.get("aux"))
         self.kl80_random_drop_auxiliary = self.counter_transformer_profile.get("aux") == "kl80"
+        self.kl_auxiliary_tag = kl_auxiliary_tag(float(getattr(
+            args, "clean_kl_auxiliary_prior", self.counter_transformer_profile.get("aux_prior", 0.8))))
         self.concrete_random_drop_auxiliary = self.counter_transformer_profile.get("aux") in {"kl80", "fixed_concrete"}
         self.random_drop_auxiliary_input_mask = model_type in {
             "grf_abs_mlp_relation_random_drop_aux_hypercond",
@@ -2387,7 +2389,7 @@ class CleanLearner:
                                 )
                         random_mac_out.append(self.mac.forward(batch, t=t))
                         if gate_diagnostics is not None and self.concrete_random_drop_auxiliary:
-                            prefix = "aux_kl80" if self.kl80_random_drop_auxiliary else "aux_fixed80"
+                            prefix = "aux_" + self.kl_auxiliary_tag if self.kl80_random_drop_auxiliary else "aux_fixed80"
                             gate_diagnostics.add(prefix + "_probability", random_capturer.latest_kl80_auxiliary_probability[1], t)
                             sampled = random_capturer.latest_kl80_auxiliary_mask[1]
                             main_mask = random_capturer.latest_dynamic_branch_gates_graph[1].detach()
@@ -3084,9 +3086,12 @@ class CleanLearner:
                 )
             if self.random_drop_auxiliary_active:
                 if self.kl80_random_drop_auxiliary:
-                    self.logger.log_stat("loss_kl80_random_auxiliary", kl80_random_auxiliary_loss.item(), t_env)
-                    self.logger.log_stat("kl80_random_auxiliary_coef", kl80_random_auxiliary_coef, t_env)
-                    self.logger.log_stat("weighted_loss_kl80_random_auxiliary", kl80_random_auxiliary_coef * kl80_random_auxiliary_loss.item(), t_env)
+                    kl_name = self.kl_auxiliary_tag + "_random_auxiliary"
+                    self.logger.log_stat("loss_" + kl_name, kl80_random_auxiliary_loss.item(), t_env)
+                    self.logger.log_stat(kl_name + "_coef", kl80_random_auxiliary_coef, t_env)
+                    self.logger.log_stat("weighted_loss_" + kl_name, kl80_random_auxiliary_coef * kl80_random_auxiliary_loss.item(), t_env)
+                    self.logger.log_stat("train_gate/aux_" + self.kl_auxiliary_tag + "/keep_prior",
+                                         self.mac.agent.rpg_relation_capturer.kl_auxiliary_prior, t_env)
                 weighted_random_drop = (
                     random_drop_auxiliary_coef
                     * random_drop_auxiliary_loss.item()

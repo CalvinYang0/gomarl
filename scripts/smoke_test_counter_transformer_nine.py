@@ -84,7 +84,7 @@ def check(label):
         assert logger.stats["loss_random_drop_td_auxiliary"][-1][1] > 0
         assert learner.random_drop_auxiliary_coef == 1.0
     if flags.get("aux") == "kl80":
-        assert logger.stats["loss_kl80_random_auxiliary"][-1][1] > 0
+        assert logger.stats["loss_" + learner.kl_auxiliary_tag + "_random_auxiliary"][-1][1] > 0
         assert not capturer.kl80_auxiliary_enabled
         assert any(p.grad is not None and p.grad.abs().sum() > 0
                    for p in capturer.kl80_auxiliary_gate.parameters())
@@ -121,6 +121,8 @@ def check(label):
     logger.wandb_module = SimpleNamespace(Image=capture_image)
     logger.log_test_gate_probability_trajectory(trajectory, 300000)
     assert "test_mask_probability_heatmap_attention" in logger.wandb_current_data
+    if flags.get("aux") == "kl80":
+        assert "test_mask_probability_heatmap_auxiliary_{}_attention".format(learner.kl_auxiliary_tag) in logger.wandb_current_data
     if flags.get("aux") == "fixed_concrete":
         assert "test_mask_probability_heatmap_auxiliary_fixed80_attention" in logger.wandb_current_data
         assert "test_mask_probability_heatmap_auxiliary_kl80_attention" not in logger.wandb_current_data

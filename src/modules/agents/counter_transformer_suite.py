@@ -25,6 +25,9 @@ PROFILES = {
 ABLATION_PROFILES = {
     "obs_gate_kl80aux": {"gate": True, "aux": "kl80"},
     "relation_random80": {"gate": True, "relation": True, "aux": "fixed_concrete"},
+    # "kl80" is the legacy auxiliary implementation kind; the prior is separate.
+    "relation_kl50aux": {"gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.5},
+    "relation_kl30aux": {"gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.3},
 }
 ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 
@@ -36,6 +39,12 @@ MODEL_PROFILES = {
 
 def profile_for(model_type):
     return MODEL_PROFILES.get(model_type, {})
+
+
+def kl_auxiliary_tag(prior):
+    if not 0.0 < prior < 1.0:
+        raise ValueError("KL auxiliary keep prior must lie strictly between 0 and 1")
+    return "kl{:g}".format(prior * 100)
 
 
 def experiment_overrides(label):
@@ -50,6 +59,7 @@ def experiment_overrides(label):
         "clean_mask_parameter_relation_perturbed_head_coef": 0.0,
         "clean_mask_parameter_relation_gate_regularization_coef": 0.0,
         "clean_random_drop_auxiliary_coef": float(bool(flags.get("aux"))),
+        "clean_kl_auxiliary_prior": flags.get("aux_prior", 0.8),
         "clean_random_drop_auxiliary_keep_probability": (
             0.8 if flags.get("aux") == "fixed_concrete" else 0.5
         ),

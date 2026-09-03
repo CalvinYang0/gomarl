@@ -40,6 +40,8 @@ class Logger:
             key.startswith("loss")
             or key.startswith("train_gate/")
             or key.startswith("kl80_random_auxiliary_")
+            or key.startswith("kl50_random_auxiliary_")
+            or key.startswith("kl30_random_auxiliary_")
             or key.startswith("weighted_loss")
             or key.endswith("_to_td_ratio")
         )
