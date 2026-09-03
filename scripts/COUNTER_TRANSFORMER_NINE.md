@@ -178,3 +178,31 @@ bash scripts/ozstar_submit_counter_kl50_kl30_aux.sh
 仅追加这两个，不取消现有任务；复用同名同目录的活跃任务，原九模型默认列表不变。
 每个新增任务提交前通过合成 learner 预检和 Slurm test-only；逐个记录提交清单。
 `DRY_RUN=YES` 只打印这两个配置，不提交、不取消、不写运行日志。
+
+## 追加单分支 linear + relation + KL80 辅助
+
+W&B 名字：`grf_counter_trans9_linear_relation_kl80aux_10m_s1`。
+其中 trans9 仅表示实验系列；此模型实际是 linear_only，不执行 Transformer 或双分支融合。
+使用现有单 linear 分支定义：遮蔽后的 30 维 obs 经 `nn.Linear(30, relation_dim)` 生成条件，
+保留超网络 Q-head 和 QMIX，并非 fixed-Q-head/no-hyper 版本，也不是额外新增多层 MLP。
+
+相对 `relation_kl80aux`，仅切换编码分支；保留 obs 主门控、权重 1 的 param–mask relation、
+固定 relation 配对、KL 保留先验 .8、连续随机采样温度 .5、250K 预热、乘法辅助 TD 权重 1、
+自适应 KL 系数和测试主门控阈值 .5。辅助 mask 只在辅助 TD 更新中应用，不用于采集/测试。
+relation 距离和辅助 KL 只计算 linear 对应的有效门控，避免无效 attention 槽位影响损失。
+
+测试仍每 10K 环境步、32 局，CPU/内存/总训练步数等复用同系列设置。
+主训练日志为 `train_gate/main_linear_*`，辅助统计仍为 `train_gate/aux_kl80_*`；
+测试热力图使用 `test_mask_probability_heatmap_linear` 和
+`test_mask_probability_heatmap_auxiliary_kl80_linear`，保留生成参数 PCA 和 gate trajectory。
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+git pull --ff-only origin codex/dual-branch-benefit-drop
+bash scripts/ozstar_submit_counter_linear_kl80aux.sh
+```
+
+仅追加此一个任务，不停止已有任务；同名活跃任务不会重复提交。
+`ozstar_keep_kl_aux_three.py` 已保护此变体，加上之前的旧三项和新四项，共八个变体。
+预检 `smoke_test_counter_linear_kl80aux.py` 检查 linear 实际输入等于 obs×主 mask×辅助 mask、
+不执行 attention、辅助测试隔离、linear 分支梯度非零而未用分支梯度为零，以及实际更新和绘图。

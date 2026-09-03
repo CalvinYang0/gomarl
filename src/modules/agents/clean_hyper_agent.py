@@ -773,7 +773,10 @@ GRF_SINGLE_LINEAR_BRANCH_VARIANTS = {
     "grf_abs_single_linear_branch_binary_concrete_gate_hypercond",
     "grf_abs_single_linear_branch_binary_concrete_gate_random_drop_aux_hypercond",
 }
-GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS.update(MODEL_PROFILES)
+GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS.update(
+    model for model, flags in MODEL_PROFILES.items() if flags.get("branch") != "linear")
+GRF_SINGLE_LINEAR_BRANCH_VARIANTS.update(
+    model for model, flags in MODEL_PROFILES.items() if flags.get("branch") == "linear")
 GRF_DUAL_BRANCH_GENERATED_PARAMETER_VARIANTS.update(MODEL_PROFILES)
 GRF_DUAL_BRANCH_DYNAMIC_GATE_MODE_BY_MODEL.update({
     model: "binary_concrete" for model, flags in MODEL_PROFILES.items()
@@ -5735,23 +5738,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             attention_input = self._apply_branch_gate(
                 flat_obs, branch_gates, 1
             )
-        auxiliary_gate = getattr(self, "kl80_auxiliary_gate", None)
-        if auxiliary_gate is not None:
-            enabled = bool(getattr(self, "kl80_auxiliary_enabled", False)) and not self._semantic_test_mode
-            auxiliary_mask, auxiliary_probability = auxiliary_gate(flat_obs, sample=enabled)
-            self.latest_kl80_auxiliary_probability = auxiliary_probability.detach()
-            # A detached view of the actual draw, not a second diagnostic draw.
-            self.latest_kl80_auxiliary_mask = auxiliary_mask.detach() if enabled else None
-            probability = auxiliary_probability[1:2].clamp(1e-6, 1.0 - 1e-6)
-            if self.counter_transformer_profile.get("aux") == "fixed_concrete":
-                self.latest_kl80_auxiliary_loss = probability.new_zeros(())
-            else:
-                self.latest_kl80_auxiliary_loss = (
-                    probability * (probability.log() - math.log(self.kl_auxiliary_prior))
-                    + (1.0 - probability) * ((1.0 - probability).log() - math.log(1.0 - self.kl_auxiliary_prior))
-                ).mean()
-            if enabled:
-                attention_input = attention_input * auxiliary_mask[1]
+        attention_input = self._apply_kl_auxiliary_gate(flat_obs, attention_input, 1)
         next_relation_hidden = self._forward_full_obs_attention_branch(
             attention_input
         )
@@ -5762,12 +5749,33 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         )
         return condition, next_relation_hidden
 
+    def _apply_kl_auxiliary_gate(self, flat_obs, branch_input, branch_index):
+        auxiliary_gate = getattr(self, "kl80_auxiliary_gate", None)
+        if auxiliary_gate is not None:
+            enabled = bool(getattr(self, "kl80_auxiliary_enabled", False)) and not self._semantic_test_mode
+            auxiliary_mask, auxiliary_probability = auxiliary_gate(flat_obs, sample=enabled)
+            self.latest_kl80_auxiliary_probability = auxiliary_probability.detach()
+            # A detached view of the actual draw, not a second diagnostic draw.
+            self.latest_kl80_auxiliary_mask = auxiliary_mask.detach() if enabled else None
+            probability = auxiliary_probability[branch_index:branch_index + 1].clamp(1e-6, 1.0 - 1e-6)
+            if self.counter_transformer_profile.get("aux") == "fixed_concrete":
+                self.latest_kl80_auxiliary_loss = probability.new_zeros(())
+            else:
+                self.latest_kl80_auxiliary_loss = (
+                    probability * (probability.log() - math.log(self.kl_auxiliary_prior))
+                    + (1.0 - probability) * ((1.0 - probability).log() - math.log(1.0 - self.kl_auxiliary_prior))
+                ).mean()
+            if enabled:
+                branch_input = branch_input * auxiliary_mask[branch_index]
+        return branch_input
+
     def _forward_linear_only_relation(self, obs):
         flat_obs = obs[..., : self.expected_obs_dim]
         linear_input = flat_obs
         if self.dynamic_branch_gate is not None:
             branch_gates = self._branch_keep_gates(flat_obs)
             linear_input = self._apply_branch_gate(flat_obs, branch_gates, 0)
+        linear_input = self._apply_kl_auxiliary_gate(flat_obs, linear_input, 0)
         next_relation_hidden = self.dual_linear_encoder(linear_input)
         condition = (
             next_relation_hidden

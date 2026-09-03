@@ -144,6 +144,8 @@ class CleanLearner:
         )
         model_type = getattr(self.mac.agent, "model_type", "")
         self.counter_transformer_profile = profile_for(model_type)
+        self.counter_branch_index = 0 if self.counter_transformer_profile.get("branch") == "linear" else 1
+        self.counter_branch_name = "linear" if self.counter_branch_index == 0 else "attention"
         self.generated_parameter_stability_active = (
             model_type
             in {
@@ -987,10 +989,11 @@ class CleanLearner:
             )
         # [branch, batch, agent, raw-slot] -> [batch, agent]
         if getattr(self, "counter_transformer_profile", {}).get("relation"):
-            # The unused Linear gate must neither dilute the metric nor learn
+            # The unused branch gate must neither dilute the metric nor learn
             # to satisfy the relation loss without affecting the policy.
-            previous_probabilities = previous_probabilities[1:2]
-            current_probabilities = current_probabilities[1:2]
+            index = self.counter_branch_index
+            previous_probabilities = previous_probabilities[index:index + 1]
+            current_probabilities = current_probabilities[index:index + 1]
         mask_distance = (
             current_probabilities - previous_probabilities
         ).abs().mean(dim=(0, -1))
@@ -1842,7 +1845,8 @@ class CleanLearner:
                                               ("mask", "latest_dynamic_branch_gates_graph")):
                         value = getattr(diagnostic_capturer, attribute, None)
                         if value is not None:
-                            gate_diagnostics.add("main_attention_" + suffix, value[1], t)
+                            gate_diagnostics.add("main_" + self.counter_branch_name + "_" + suffix,
+                                                 value[self.counter_branch_index], t)
                 if (
                     perturbed_head_parameter_graphs is not None
                     and t < mask.shape[1]
@@ -2390,9 +2394,9 @@ class CleanLearner:
                         random_mac_out.append(self.mac.forward(batch, t=t))
                         if gate_diagnostics is not None and self.concrete_random_drop_auxiliary:
                             prefix = "aux_" + self.kl_auxiliary_tag if self.kl80_random_drop_auxiliary else "aux_fixed80"
-                            gate_diagnostics.add(prefix + "_probability", random_capturer.latest_kl80_auxiliary_probability[1], t)
-                            sampled = random_capturer.latest_kl80_auxiliary_mask[1]
-                            main_mask = random_capturer.latest_dynamic_branch_gates_graph[1].detach()
+                            gate_diagnostics.add(prefix + "_probability", random_capturer.latest_kl80_auxiliary_probability[self.counter_branch_index], t)
+                            sampled = random_capturer.latest_kl80_auxiliary_mask[self.counter_branch_index]
+                            main_mask = random_capturer.latest_dynamic_branch_gates_graph[self.counter_branch_index].detach()
                             gate_diagnostics.add(prefix + "_mask", sampled, t)
                             gate_diagnostics.add(prefix + "_main_mask", main_mask, t)
                             gate_diagnostics.add(prefix + "_combined_mask", main_mask * sampled, t)
@@ -3114,7 +3118,7 @@ class CleanLearner:
                 )
                 self.logger.log_stat(
                     "random_drop_auxiliary_keep_probability",
-                    float(self.mac.agent.rpg_relation_capturer.latest_kl80_auxiliary_probability[1].mean().item())
+                    float(self.mac.agent.rpg_relation_capturer.latest_kl80_auxiliary_probability[self.counter_branch_index].mean().item())
                     if self.kl80_random_drop_auxiliary else self.random_drop_auxiliary_keep_probability,
                     t_env,
                 )

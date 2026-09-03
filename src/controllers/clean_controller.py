@@ -242,12 +242,14 @@ class CleanMAC(BasicMAC):
         }
         auxiliary_probability = getattr(capturer, "latest_kl80_auxiliary_probability", None)
         if auxiliary_probability is not None:
+            auxiliary_branch = "linear" if capturer.relation_encoder_style == "linear_only" else "attention"
+            auxiliary_index = 0 if auxiliary_branch == "linear" else 1
             auxiliary_name = (
                 "auxiliary_fixed80_attention"
                 if getattr(capturer, "counter_transformer_profile", {}).get("aux") == "fixed_concrete"
-                else "auxiliary_{}_attention".format(capturer.kl_auxiliary_tag)
+                else "auxiliary_{}_{}".format(capturer.kl_auxiliary_tag, auxiliary_branch)
             )
-            agent_probabilities[auxiliary_name] = auxiliary_probability[1, env_index].cpu().tolist()
+            agent_probabilities[auxiliary_name] = auxiliary_probability[auxiliary_index, env_index].cpu().tolist()
         self._test_gate_trajectory_rows.append(
             (timestep, values[0], values[1], parameter_vector, agent_probabilities)
         )
@@ -281,13 +283,17 @@ class CleanMAC(BasicMAC):
             },
         }
         single_attention = getattr(relation_capturer, "relation_encoder_style", None) == "attention_only"
+        single_linear = getattr(relation_capturer, "relation_encoder_style", None) == "linear_only"
         if single_attention:
             trajectory["branches"].pop("linear")
+        if single_linear:
+            trajectory["branches"].pop("attention")
         if len(self._test_gate_trajectory_rows[0]) > 4:
             branch_names = self._test_gate_trajectory_rows[0][4].keys()
             trajectory["agent_probability_branches"] = {
                 name: [row[4][name] for row in self._test_gate_trajectory_rows]
-                for name in branch_names if not (single_attention and name == "linear")
+                for name in branch_names if not ((single_attention and name == "linear")
+                                                or (single_linear and name == "attention"))
             }
         profile = getattr(relation_capturer, "counter_transformer_profile", {})
         trajectory["gate_note"] = (

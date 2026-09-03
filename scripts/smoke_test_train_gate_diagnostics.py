@@ -50,8 +50,9 @@ def run(label, enabled):
     rng = th.get_rng_state().clone()
     state = {key: tensor.detach().clone() for key, tensor in mac.agent.state_dict().items()}
     if enabled:
-        assert logger.stats["train_gate/main_attention_mask/valid_slot_count"][-1][1] == 840
-        assert "train_gate/main_attention_mask/mean" in logger.wandb_current_data
+        main_name = "main_" + learner.counter_branch_name + "_mask"
+        assert logger.stats["train_gate/" + main_name + "/valid_slot_count"][-1][1] == 840
+        assert "train_gate/" + main_name + "/mean" in logger.wandb_current_data
         assert rendered and len(rendered) == len(frames)
         for name, history in frames.items():
             assert [frame[0] for frame in history] == [0, 1, 2, 3]
@@ -76,7 +77,7 @@ def run(label, enabled):
 if __name__ == "__main__":
     th.set_num_threads(1)
     check_collector()
-    for label in ("kl80", "relation_kl80aux", "relation_random80", "relation_kl50aux", "relation_kl30aux"):
+    for label in ("kl80", "relation_kl80aux", "relation_random80", "relation_kl50aux", "relation_kl30aux", "linear_relation_kl80aux"):
         plain, plain_rng = run(label, False)
         logged, logged_rng = run(label, True)
         assert th.equal(plain_rng, logged_rng), label

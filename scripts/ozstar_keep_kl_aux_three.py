@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep the three ORIGINAL comparisons and protect all four new controls.
+"""Keep the three ORIGINAL comparisons and protect all newly requested controls.
 
 The filename is retained so the previously supplied command is safe after pull.
 No submissions, restarts or log deletion are performed here.
@@ -13,7 +13,8 @@ import time
 
 
 ORIGINAL_LABELS = ("baseline", "relation", "relation_kl80aux")
-NEW_LABELS = ("obs_gate_kl80aux", "relation_random80", "relation_kl50aux", "relation_kl30aux")
+NEW_LABELS = ("obs_gate_kl80aux", "relation_random80", "relation_kl50aux", "relation_kl30aux",
+              "linear_relation_kl80aux")
 
 
 def job_pattern(labels):

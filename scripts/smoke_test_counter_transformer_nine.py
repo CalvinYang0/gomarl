@@ -56,7 +56,8 @@ def check(label):
     flags = ALL_PROFILES[label]
     mac, learner, batch, logger = make_case(label)
     capturer = mac.agent.rpg_relation_capturer
-    assert capturer.relation_encoder_style == "attention_only"
+    branch = "linear" if flags.get("branch") == "linear" else "attention"
+    assert capturer.relation_encoder_style == branch + "_only"
     assert (capturer.dynamic_branch_gate is not None) == bool(flags.get("gate"))
     assert learner.mask_parameter_relation_active == bool(flags.get("relation"))
     assert learner.temporal_param_auxiliary_active == bool(flags.get("temporal"))
@@ -102,8 +103,8 @@ def check(label):
     trajectory = mac.pop_test_gate_probability_trajectory()
     assert trajectory is not None
     assert trajectory["generated_parameter_vectors"].shape[0] == 5
-    assert set(trajectory["branches"]) == {"attention"}
-    heatmap = th.tensor(trajectory["agent_probability_branches"]["attention"])
+    assert set(trajectory["branches"]) == {branch}
+    heatmap = th.tensor(trajectory["agent_probability_branches"][branch])
     assert heatmap.shape == (5, 4, 30)
     assert ((heatmap >= 0) & (heatmap <= 1)).all()
     if label == "baseline":
@@ -120,9 +121,9 @@ def check(label):
         return "rendered"
     logger.wandb_module = SimpleNamespace(Image=capture_image)
     logger.log_test_gate_probability_trajectory(trajectory, 300000)
-    assert "test_mask_probability_heatmap_attention" in logger.wandb_current_data
+    assert "test_mask_probability_heatmap_" + branch in logger.wandb_current_data
     if flags.get("aux") == "kl80":
-        assert "test_mask_probability_heatmap_auxiliary_{}_attention".format(learner.kl_auxiliary_tag) in logger.wandb_current_data
+        assert "test_mask_probability_heatmap_auxiliary_{}_{}".format(learner.kl_auxiliary_tag, branch) in logger.wandb_current_data
     if flags.get("aux") == "fixed_concrete":
         assert "test_mask_probability_heatmap_auxiliary_fixed80_attention" in logger.wandb_current_data
         assert "test_mask_probability_heatmap_auxiliary_kl80_attention" not in logger.wandb_current_data

@@ -28,11 +28,19 @@ ABLATION_PROFILES = {
     # "kl80" is the legacy auxiliary implementation kind; the prior is separate.
     "relation_kl50aux": {"gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.5},
     "relation_kl30aux": {"gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.3},
+    "linear_relation_kl80aux": {"gate": True, "relation": True, "aux": "kl80", "branch": "linear"},
 }
 ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 
+
+def model_type_for(label):
+    branch = ALL_PROFILES[label].get("branch", "transformer")
+    variant = label[len("linear_"):] if branch == "linear" else label
+    return "grf_abs_single_{}_suite_{}_hypercond".format(branch, variant)
+
+
 MODEL_PROFILES = {
-    "grf_abs_single_transformer_suite_{}_hypercond".format(label): dict(flags, label=label)
+    model_type_for(label): dict(flags, label=label)
     for label, flags in ALL_PROFILES.items()
 }
 
@@ -51,7 +59,7 @@ def experiment_overrides(label):
     """Shared by actual submission and runtime tests; no model-name guessing."""
     flags = ALL_PROFILES[label]
     return {
-        "clean_model_type": "grf_abs_single_transformer_suite_{}_hypercond".format(label),
+        "clean_model_type": model_type_for(label),
         "clean_mask_parameter_relation_coef": float(bool(flags.get("relation"))),
         "clean_mask_parameter_relation_pairing": "fixed",
         "clean_mask_parameter_relation_mask_source": "probability",
