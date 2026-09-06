@@ -65,7 +65,7 @@ def check(label):
     learner.train(batch, t_env=10, episode_num=1)
     learner.train(batch, t_env=300000, episode_num=2)
     assert all(th.isfinite(parameter).all() for parameter in mac.parameters())
-    assert logger.stats["loss"][-1][1] >= 0
+    assert logger.stats["loss_td"][-1][1] >= 0
     assert not logger.stats.get("loss_mask_parameter_relation")
     assert not logger.stats.get("loss_random_drop_td_auxiliary")
     print(label + ": condition semantics + two TD/QMIX updates OK", flush=True)
