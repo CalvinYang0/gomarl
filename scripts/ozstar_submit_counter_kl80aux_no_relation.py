@@ -18,7 +18,8 @@ def main(label="obs_gate_kl80aux", smoke_script="smoke_test_counter_kl80aux_no_r
     if os.environ.get("DRY_RUN") == "YES":
         print(json.dumps(plan, indent=2))
         return
-    subprocess.run([sys.executable, "scripts/" + smoke_script], check=True)
+    if smoke_script:
+        subprocess.run([sys.executable, "scripts/" + smoke_script], check=True)
     user = run(["id", "-un"])
     active = run(["squeue", "-u", user, "-h", "-o", "%i|%j|%T"])
     for row in active.splitlines():

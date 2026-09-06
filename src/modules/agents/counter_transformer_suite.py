@@ -45,11 +45,23 @@ ABLATION_PROFILES = {
         "aux": "kl80",
         "test_soft_gate": True,
     },
+    # Matched hypernetwork baselines.  They share the recurrent policy encoder,
+    # generated two-layer Q head and QMIX learner; only the hypernetwork
+    # condition source changes.
+    "hyper_hypermarl_id": {"hyper_condition": "agent_id"},
+    "hyper_cash_obs_type": {"hyper_condition": "obs_agent_type"},
+    "hyper_rpg_relation": {"hyper_condition": "rpg_relation"},
 }
 ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 
 
-def model_type_for(label):
+def model_type_for(label, domain="grf"):
+    if domain not in {"grf", "smac"}:
+        raise ValueError("Unknown suite domain: " + domain)
+    if domain == "smac":
+        if label not in {"baseline", "relation_kl80aux"}:
+            raise ValueError("SMAC suite currently supports baseline and relation_kl80aux")
+        return "smac_single_transformer_suite_{}_hypercond".format(label)
     branch = ALL_PROFILES[label].get("branch", "transformer")
     variant = label[len("linear_"):] if branch == "linear" else label
     return "grf_abs_single_{}_suite_{}_hypercond".format(branch, variant)
@@ -59,6 +71,10 @@ MODEL_PROFILES = {
     model_type_for(label): dict(flags, label=label)
     for label, flags in ALL_PROFILES.items()
 }
+MODEL_PROFILES.update({
+    model_type_for(label, "smac"): dict(ALL_PROFILES[label], label=label, domain="smac")
+    for label in ("baseline", "relation_kl80aux")
+})
 
 
 def profile_for(model_type):
@@ -71,11 +87,11 @@ def kl_auxiliary_tag(prior):
     return "kl{:g}".format(prior * 100)
 
 
-def experiment_overrides(label):
+def experiment_overrides(label, domain="grf"):
     """Shared by actual submission and runtime tests; no model-name guessing."""
     flags = ALL_PROFILES[label]
-    return {
-        "clean_model_type": model_type_for(label),
+    overrides = {
+        "clean_model_type": model_type_for(label, domain),
         "clean_mask_parameter_relation_coef": float(bool(flags.get("relation"))),
         "clean_mask_parameter_relation_pairing": "fixed",
         "clean_mask_parameter_relation_mask_source": "probability",
@@ -105,3 +121,6 @@ def experiment_overrides(label):
         "clean_test_gate_trajectory_max_steps": 1000,
         "wandb_test_parameter_pca": True,
     }
+    if flags.get("hyper_condition") == "agent_id":
+        overrides["clean_apply_hypermarl_init"] = True
+    return overrides

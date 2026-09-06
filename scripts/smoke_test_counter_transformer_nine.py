@@ -19,42 +19,58 @@ from modules.agents.counter_transformer_suite import ALL_PROFILES, PROFILES, exp
 from utils.logging import Logger
 
 
-def make_case(label):
+def make_case(label, scene="academy_counterattack_easy", env_overrides=None):
     config = {}
-    for filename in ("default.yaml", "envs/academy_counterattack_easy.yaml", "algs/clean_hyper.yaml"):
+    smac = not scene.startswith("academy_")
+    env_config = "sc2" if smac else scene
+    for filename in ("default.yaml", "envs/" + env_config + ".yaml", "algs/clean_hyper.yaml"):
         config.update(yaml.safe_load((ROOT / "src/config" / filename).read_text()))
-    config.update(experiment_overrides(label))
-    config.update(n_agents=4, n_actions=19, state_shape=30, obs_shape=30,
+    config["env_args"].update(env_overrides or {})
+    if smac:
+        from envs.starcraft import StarCraft2Env
+        config["env_args"]["map_name"] = scene
+        # Construction exposes the real wrapper's dimensions; reset/launch is
+        # deliberately not called in the simulator-free learner preflight.
+        env = StarCraft2Env(**config["env_args"])
+        info = env.get_env_info()
+        n_agents, n_actions = info["n_agents"], info["n_actions"]
+        obs_dim, state_dim = info["obs_shape"], info["state_shape"]
+        env.close()
+    else:
+        n_agents, n_actions = config["env_args"]["n_agents"], 19
+        obs_dim = state_dim = config["env_args"]["obs_dim"]
+    config.update(experiment_overrides(label, "smac" if smac else "grf"))
+    config.update(n_agents=n_agents, n_actions=n_actions, state_shape=state_dim, obs_shape=obs_dim,
                   rnn_hidden_dim=16, hypernet_embed=16, clean_condition_dim=16,
                   use_cuda=False, device="cpu", batch_size=2, batch_size_run=2,
                   obs_last_action=False, obs_agent_id=False, learner_log_interval=1)
     args = SimpleNamespace(**config)
     scheme = {
-        "obs": {"vshape": 30, "group": "agents"},
-        "state": {"vshape": 30},
+        "obs": {"vshape": obs_dim, "group": "agents"},
+        "state": {"vshape": state_dim},
         "actions": {"vshape": (1,), "group": "agents", "dtype": th.long},
-        "avail_actions": {"vshape": (19,), "group": "agents", "dtype": th.int},
+        "avail_actions": {"vshape": (n_actions,), "group": "agents", "dtype": th.int},
         "reward": {"vshape": (1,)},
         "terminated": {"vshape": (1,), "dtype": th.uint8},
     }
-    batch = EpisodeBatch(scheme, {"agents": 4}, 2, 5,
-                         preprocess={"actions": ("actions_onehot", [OneHot(19)])})
-    batch.update({"obs": th.randn(2, 5, 4, 30), "state": th.randn(2, 5, 30),
-                  "actions": th.randint(0, 19, (2, 5, 4, 1)),
-                  "avail_actions": th.ones(2, 5, 4, 19, dtype=th.int),
+    batch = EpisodeBatch(scheme, {"agents": n_agents}, 2, 5,
+                         preprocess={"actions": ("actions_onehot", [OneHot(n_actions)])})
+    batch.update({"obs": th.randn(2, 5, n_agents, obs_dim), "state": th.randn(2, 5, state_dim),
+                  "actions": th.randint(0, n_actions, (2, 5, n_agents, 1)),
+                  "avail_actions": th.ones(2, 5, n_agents, n_actions, dtype=th.int),
                   "reward": th.rand(2, 5, 1), "terminated": th.zeros(2, 5, 1, dtype=th.uint8)})
     batch["terminated"][1, 2] = 1
     batch["filled"][1, 3:] = 0
     logger = Logger(logging.getLogger("transformer-nine-test"))
-    mac = CleanMAC(batch.scheme, {"agents": 4}, args)
+    mac = CleanMAC(batch.scheme, {"agents": n_agents}, args)
     learner = CleanLearner(mac, batch.scheme, logger, args)
     return mac, learner, batch, logger
 
 
-def check(label):
+def check(label, scene="academy_counterattack_easy"):
     th.manual_seed(7)
     flags = ALL_PROFILES[label]
-    mac, learner, batch, logger = make_case(label)
+    mac, learner, batch, logger = make_case(label, scene)
     capturer = mac.agent.rpg_relation_capturer
     branch = "linear" if flags.get("branch") == "linear" else "attention"
     assert capturer.relation_encoder_style == branch + "_only"
@@ -105,7 +121,7 @@ def check(label):
     assert trajectory["generated_parameter_vectors"].shape[0] == 5
     assert set(trajectory["branches"]) == {branch}
     heatmap = th.tensor(trajectory["agent_probability_branches"][branch])
-    assert heatmap.shape == (5, 4, 30)
+    assert heatmap.shape == (5, mac.args.n_agents, mac.args.obs_shape)
     assert ((heatmap >= 0) & (heatmap <= 1)).all()
     if label == "baseline":
         assert (heatmap == 1).all()
@@ -130,7 +146,7 @@ def check(label):
         assert not any(p.requires_grad for p in capturer.kl80_auxiliary_gate.parameters())
     assert any("parameter_pca" in key for key in logger.wandb_current_data)
     assert "test_dynamic_gate_trajectory" in logger.wandb_current_data
-    print(label + ": learner forward/backward + flags + PCA + trajectory + heatmap OK", flush=True)
+    print(scene + "/" + label + ": learner forward/backward + flags + PCA + trajectory + heatmap OK", flush=True)
 
 
 def check_test_open_and_auxiliary_isolation():

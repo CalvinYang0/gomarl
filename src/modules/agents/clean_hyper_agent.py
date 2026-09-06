@@ -773,6 +773,8 @@ GRF_SINGLE_LINEAR_BRANCH_VARIANTS = {
     "grf_abs_single_linear_branch_binary_concrete_gate_hypercond",
     "grf_abs_single_linear_branch_binary_concrete_gate_random_drop_aux_hypercond",
 }
+# The suite shares the same dynamic-Q-head execution path across domains;
+# SMAC selects its own observation adapter in _init_grf_relation_capturer.
 GRF_SINGLE_TRANSFORMER_BRANCH_VARIANTS.update(
     model for model, flags in MODEL_PROFILES.items() if flags.get("branch") != "linear")
 GRF_SINGLE_LINEAR_BRANCH_VARIANTS.update(
@@ -5165,6 +5167,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         dynamic_branch_gate_entropy_coef=1.0,
         dynamic_branch_gate_budget_coef=10.0,
         fixed_random_drop_keep_probability=None,
+        observation_dim=None,
     ):
         nn.Module.__init__(self)
         self.n_agents = n_agents
@@ -5173,7 +5176,9 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.num_heads = num_heads
         self.use_absolute_public = use_absolute_public
         self.n_opponents = 2
-        self.expected_obs_dim = 4 * n_agents + 14
+        self.expected_obs_dim = (
+            4 * n_agents + 14 if observation_dim is None else int(observation_dim)
+        )
         self.semantic_router_mode = semantic_router_mode
         self.semantic_router_inverse = False
         self.semantic_router_learnable_threshold = bool(
@@ -8090,6 +8095,102 @@ class GlobalHeteroGATRelationEncoder(nn.Module):
         return self.output_encoder(updated[:, :n_agents])
 
 
+class SMACSingleTransformerCapturer(GRFPublicPrivateBiasTransformerCapturer):
+    """SMAC raw-observation adapter for the *same* single-branch suite.
+
+    Reuse main/aux sampling, KL and condition generation; replace only the
+    football layout/tokenisation. Visibility is taken BEFORE either mask.
+    """
+
+    def __init__(self, observation_layout, **kwargs):
+        self.observation_layout = dict(observation_layout)
+        layout = self.observation_layout
+        obs_dim = (layout["move_dim"] + layout["own_dim"]
+                   + layout["n_enemies"] * layout["enemy_feat_dim"]
+                   + layout["n_allies"] * layout["ally_feat_dim"])
+        if kwargs.get("relation_encoder_style") != "attention_only":
+            raise ValueError("SMAC suite adapter requires attention_only")
+        super().__init__(observation_dim=obs_dim, **kwargs)
+        self.n_opponents = layout["n_enemies"]
+        self.self_encoder = self._make_encoder(layout["move_dim"] + layout["own_dim"])
+        self.ally_encoder = self._make_encoder(layout["ally_feat_dim"])
+        self.opponent_encoder = self._make_encoder(layout["enemy_feat_dim"])
+
+    def _build_semantic_slot_layout(self):
+        layout = self.observation_layout
+        # Exactly the simulator's flattened order: move, enemies, allies, own.
+        names = ["self_move_{}".format(i) for i in range(layout["move_dim"])]
+        fields = ["move"] * len(names)
+        for side in ("enemy", "ally"):
+            attributes = ["visible_or_attackable", "distance", "relative_x", "relative_y"]
+            if layout["obs_all_health"]:
+                attributes += ["health"]
+                if layout["shield_bits_" + side]:
+                    attributes += ["shield"]
+            attributes += ["unit_type_{}".format(i) for i in range(layout["unit_type_bits"])]
+            if side == "ally" and layout["obs_last_action"]:
+                attributes += ["last_action_{}".format(i) for i in range(
+                    layout["ally_feat_dim"] - len(attributes))]
+            count = layout["n_enemies" if side == "enemy" else "n_allies"]
+            if len(attributes) != layout[side + "_feat_dim"]:
+                raise ValueError("SMAC entity feature layout mismatch")
+            for entity in range(count):
+                names.extend("{}_{}_{}".format(side, entity, attr) for attr in attributes)
+                fields.extend(attributes)
+        own = []
+        if layout["obs_own_health"]:
+            own += ["health"]
+            if layout["shield_bits_ally"]:
+                own += ["shield"]
+        own += ["unit_type_{}".format(i) for i in range(layout["unit_type_bits"])]
+        if layout["obs_timestep_number"]:
+            own += ["timestep"]
+        if len(own) != layout["own_dim"]:
+            raise ValueError("SMAC own feature layout mismatch")
+        names.extend("self_" + attr for attr in own)
+        fields.extend(own)
+        if len(names) != self.expected_obs_dim:
+            raise ValueError("SMAC observation size mismatch")
+        return tuple(names), tuple(fields), th.ones(len(names))
+
+    def _split_smac_obs(self, obs):
+        layout = self.observation_layout
+        leading = obs.shape[:-1]
+        move, enemies, allies, own = th.split(obs, [
+            layout["move_dim"], layout["n_enemies"] * layout["enemy_feat_dim"],
+            layout["n_allies"] * layout["ally_feat_dim"], layout["own_dim"]], dim=-1)
+        return (th.cat([move, own], dim=-1),
+                allies.reshape(*leading, layout["n_allies"], layout["ally_feat_dim"]),
+                enemies.reshape(*leading, layout["n_enemies"], layout["enemy_feat_dim"]))
+
+    def forward(self, obs, prev_relation_hidden):
+        if obs.shape[-2:] != (self.n_agents, self.expected_obs_dim):
+            raise ValueError("SMAC suite received incompatible observation shape: " + str(obs.shape))
+        _, allies, enemies = self._split_smac_obs(obs)
+        # An enemy's attackable flag can be zero even when it is visible.
+        ally_valid = allies.abs().sum(dim=-1) > 0
+        enemy_valid = enemies.abs().sum(dim=-1) > 0
+        self._smac_entity_mask = th.cat([
+            th.ones_like(obs[..., :1], dtype=th.bool), ally_valid, enemy_valid], dim=-1)
+        return super().forward(obs, prev_relation_hidden)
+
+    def _forward_full_obs_attention_branch(self, attention_input):
+        own, allies, enemies = self._split_smac_obs(attention_input)
+        tokens = th.cat([self.self_encoder(own).unsqueeze(-2),
+                         self.ally_encoder(allies), self.opponent_encoder(enemies)], dim=-2)
+        batch_size, n_agents, count, width = tokens.shape
+        flat = tokens.reshape(batch_size * n_agents, count, width)
+        mask = self._smac_entity_mask.reshape(batch_size * n_agents, count)
+        for layer in self.transformer_layers:
+            flat = layer(flat, mask)
+        encoded = flat.reshape(batch_size, n_agents, count, width)
+        self.latest_self_token = encoded[:, :, 0]
+        self.latest_ally_tokens = encoded[:, :, 1:self.n_agents]
+        self.latest_opponent_tokens = encoded[:, :, self.n_agents:]
+        self.latest_context_token = self.latest_self_token
+        return self.latest_self_token
+
+
 class CleanHyperAgent(nn.Module):
     MODEL_SPECS = {
         "baseline": {"uses_hypernet": True, "execution_scope": "ctde"},
@@ -8496,6 +8597,8 @@ class CleanHyperAgent(nn.Module):
         else:
             self.rpg_relation_capturer = None
             self.rpg_obs_layout = None
+
+        self._init_counter_hyper_condition()
 
         if self.model_type in {"hypermarl_id", "hypermarl_fullnet"}:
             self.id_embeddings = nn.Embedding(self.n_agents, self.id_embed_dim)
@@ -9635,7 +9738,9 @@ class CleanHyperAgent(nn.Module):
         )
 
     def _init_grf_relation_capturer(self):
-        if getattr(self.args, "env", None) not in {
+        suite_profile = profile_for(self.model_type)
+        smac_suite = profile_for(self.model_type).get("domain") == "smac"
+        if not smac_suite and getattr(self.args, "env", None) not in {
             "academy_pass_and_shoot_with_keeper",
             "academy_3_vs_1_with_keeper",
             "academy_counterattack_easy",
@@ -9643,8 +9748,15 @@ class CleanHyperAgent(nn.Module):
             raise ValueError(
                 "{} currently supports GoMARL GRF academy envs only.".format(self.model_type)
             )
-        self.rpg_obs_layout = None
-        self.rpg_relation_capturer = GRFPublicPrivateBiasTransformerCapturer(
+        self.rpg_obs_layout = self._build_rpg_obs_layout() if smac_suite else None
+        capturer_class = (
+            SMACSingleTransformerCapturer
+            if smac_suite
+            else GRFPublicPrivateBiasTransformerCapturer
+        )
+        adapter_args = {"observation_layout": self.rpg_obs_layout} if smac_suite else {}
+        self.rpg_relation_capturer = capturer_class(
+            **adapter_args,
             n_agents=self.n_agents,
             relation_dim=self.rpg_relation_dim,
             output_dim=self.cond_dim,
@@ -9788,7 +9900,8 @@ class CleanHyperAgent(nn.Module):
                 )
             ),
         )
-        suite_profile = profile_for(self.model_type)
+        if smac_suite and self.rpg_relation_capturer.expected_obs_dim != self.obs_dim:
+            raise ValueError("SMAC environment observation dimension disagrees with configured layout")
         if suite_profile:
             capturer = self.rpg_relation_capturer
             capturer.counter_transformer_profile = suite_profile
@@ -9817,6 +9930,79 @@ class CleanHyperAgent(nn.Module):
                     nn.init.zeros_(final_layer.weight)
                     nn.init.constant_(final_layer.bias, math.log(0.8 / 0.2))
                     fixed_gate.requires_grad_(False)
+
+    def _init_counter_hyper_condition(self):
+        """Initialise the condition adapter for matched hypernetwork controls."""
+        source = profile_for(self.model_type).get("hyper_condition")
+        self.counter_hyper_condition_source = source
+        self.counter_id_condition_encoder = None
+        self.counter_cash_condition_encoder = None
+        self.counter_rpg_condition_encoder = None
+        self.counter_transformer_policy_projection = None
+        if source is not None:
+            # The Transformer representation is always the generated head's
+            # data input. Only the parameter-generating condition differs.
+            self.counter_transformer_policy_projection = nn.Linear(
+                self.cond_dim, self.hidden_dim
+            )
+        if source == "agent_id":
+            self.counter_id_condition_encoder = nn.Sequential(
+                nn.Linear(self.n_agents, self.cond_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.cond_dim, self.cond_dim),
+            )
+        elif source == "obs_agent_type":
+            raw_types = getattr(self.args, "clean_counter_agent_types", "0,1,2,2")
+            if isinstance(raw_types, str):
+                agent_types = [int(value.strip()) for value in raw_types.split(",") if value.strip()]
+            else:
+                agent_types = [int(value) for value in raw_types]
+            if len(agent_types) != self.n_agents:
+                raise ValueError(
+                    "clean_counter_agent_types must provide one type per agent; "
+                    "got {} for {} agents".format(agent_types, self.n_agents)
+                )
+            if min(agent_types) < 0:
+                raise ValueError("clean_counter_agent_types cannot contain negative values")
+            n_types = max(agent_types) + 1
+            self.register_buffer(
+                "counter_agent_types",
+                th.tensor(agent_types, dtype=th.long),
+                persistent=True,
+            )
+            self.counter_cash_condition_encoder = nn.Sequential(
+                nn.Linear(self.obs_dim + n_types, self.cond_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.cond_dim, self.cond_dim),
+            )
+        elif source == "rpg_relation":
+            # RPG's task-conditioned decision makers are adapted to this
+            # single-task comparison as an observation-conditioned generator.
+            self.counter_rpg_condition_encoder = nn.Sequential(
+                nn.Linear(self.obs_dim, self.cond_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.cond_dim, self.cond_dim),
+            )
+
+    def _counter_hyper_condition(self, hidden, context):
+        source = self.counter_hyper_condition_source
+        batch_size = hidden.size(0)
+        if source == "agent_id":
+            ids = th.eye(self.n_agents, device=hidden.device, dtype=hidden.dtype)
+            return self.counter_id_condition_encoder(ids.unsqueeze(0).expand(batch_size, -1, -1))
+        if source == "obs_agent_type":
+            obs = context["obs"][:, :, : self.obs_dim]
+            types = F.one_hot(
+                self.counter_agent_types,
+                num_classes=self.counter_cash_condition_encoder[0].in_features - self.obs_dim,
+            ).to(device=hidden.device, dtype=hidden.dtype)
+            types = types.unsqueeze(0).expand(batch_size, -1, -1)
+            return self.counter_cash_condition_encoder(th.cat([obs, types], dim=-1))
+        if source == "rpg_relation":
+            return self.counter_rpg_condition_encoder(
+                context["obs"][:, :, : self.obs_dim]
+            )
+        raise RuntimeError("Unknown Counter hypernetwork condition source: {}".format(source))
 
     def _init_grf_decision_maker_head(self):
         if self.n_actions != 19:
@@ -12368,9 +12554,18 @@ class CleanHyperAgent(nn.Module):
                 q = self._apply_rpg_structured_maker(hidden, condition, enemy_tokens, enemy_mask)
                 next_hidden = hidden
             elif self.model_type in GRF_PUBLIC_TRANSFORMER_VARIANTS:
+                suite_condition_source = getattr(
+                    self, "counter_hyper_condition_source", None
+                )
                 relation_condition, next_relation_hidden = self.rpg_relation_capturer(
                     context["obs"], relation_hidden_state
                 )
+                transformer_policy_hidden = hidden
+                if suite_condition_source is not None:
+                    transformer_policy_hidden = self.counter_transformer_policy_projection(
+                        relation_condition
+                    )
+                    relation_condition = self._counter_hyper_condition(hidden, context)
                 capturer_aux_loss = getattr(
                     self.rpg_relation_capturer, "latest_aux_loss", None
                 )
@@ -12434,7 +12629,9 @@ class CleanHyperAgent(nn.Module):
                 elif self.model_type in GRF_LINEAR_HEAD_VARIANTS:
                     q = self._apply_grf_linear_head(hidden, relation_condition)
                 else:
-                    q = self._apply_dynamic_head(hidden, relation_condition)
+                    q = self._apply_dynamic_head(
+                        transformer_policy_hidden, relation_condition
+                    )
                 next_hidden = th.cat([hidden, next_relation_hidden], dim=-1)
             elif self.model_type in {
                 "rpg_action_edge_graph_hypercond",

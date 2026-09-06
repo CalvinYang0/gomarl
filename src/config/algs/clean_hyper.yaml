@@ -807,6 +807,9 @@ hypernet_layers: 2
 clean_model_type: "baseline"
 clean_apply_hypermarl_init: False
 clean_condition_dim: 64
+# Counter CASH control: tactical-role ids for the four controlled players.
+# Override this comma-separated list if the scenario/player ordering changes.
+clean_counter_agent_types: "0,1,2,2"
 clean_id_embed_dim: 64
 clean_hyper_mlp_hidden_dim: 64
 clean_rpg_interaction_hidden_dim: 16
