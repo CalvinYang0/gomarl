@@ -24,6 +24,9 @@ PROFILES = {
 # opt-in and submitted separately, without cancelling the original runs.
 ABLATION_PROFILES = {
     "obs_gate_kl80aux": {"gate": True, "aux": "kl80"},
+    # Pure Transformer-only individual network.  The only intervention is an
+    # auxiliary Binary-Concrete KL80 drop over agent utilities before QMIX.
+    "mixer_kl80aux": {"mixer_aux": "kl80"},
     "relation_random80": {"gate": True, "relation": True, "aux": "fixed_concrete"},
     # "kl80" is the legacy auxiliary implementation kind; the prior is separate.
     "relation_kl50aux": {"gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.5},
@@ -104,6 +107,9 @@ def experiment_overrides(label, domain="grf"):
         "clean_mask_parameter_relation_perturbed_head_coef": 0.0,
         "clean_mask_parameter_relation_gate_regularization_coef": 0.0,
         "clean_random_drop_auxiliary_coef": float(bool(flags.get("aux"))),
+        "clean_mixer_kl80_auxiliary_coef": float(bool(flags.get("mixer_aux"))),
+        "clean_mixer_kl80_prior": 0.8,
+        "clean_mixer_kl80_temperature": 0.5,
         "clean_kl_auxiliary_prior": flags.get("aux_prior", 0.8),
         "clean_random_drop_auxiliary_keep_probability": (
             0.8 if flags.get("aux") == "fixed_concrete" else 0.5

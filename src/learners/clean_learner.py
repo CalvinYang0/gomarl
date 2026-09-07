@@ -1,4 +1,5 @@
 import copy
+import math
 import os
 from contextlib import nullcontext
 
@@ -24,6 +25,10 @@ class CleanLearner:
         if hasattr(self.target_mac.agent, "set_dynamic_branch_gate_target_mode"):
             self.target_mac.agent.set_dynamic_branch_gate_target_mode(True)
         self.logger = logger
+        model_type = getattr(self.mac.agent, "model_type", "")
+        self.counter_transformer_profile = profile_for(model_type)
+        self.counter_branch_index = 0 if self.counter_transformer_profile.get("branch") == "linear" else 1
+        self.counter_branch_name = "linear" if self.counter_branch_index == 0 else "attention"
         self.params = [
             parameter
             for name, parameter in self.mac.agent.named_parameters()
@@ -59,6 +64,52 @@ class CleanLearner:
             self.target_mixer = None
         else:
             raise ValueError("Unsupported mixer={} for CleanLearner.".format(mixer_name))
+
+        self.mixer_kl80_auxiliary_active = (
+            self.counter_transformer_profile.get("mixer_aux") == "kl80"
+        )
+        self.mixer_kl80_auxiliary_coef = float(
+            getattr(args, "clean_mixer_kl80_auxiliary_coef", 1.0)
+        )
+        self.mixer_kl80_prior = float(
+            getattr(args, "clean_mixer_kl80_prior", 0.8)
+        )
+        self.mixer_kl80_temperature = float(
+            getattr(args, "clean_mixer_kl80_temperature", 0.5)
+        )
+        if self.mixer_kl80_auxiliary_coef < 0.0:
+            raise ValueError("clean_mixer_kl80_auxiliary_coef must be non-negative")
+        if not 0.0 < self.mixer_kl80_prior < 1.0:
+            raise ValueError("clean_mixer_kl80_prior must lie strictly between 0 and 1")
+        if self.mixer_kl80_temperature <= 0.0:
+            raise ValueError("clean_mixer_kl80_temperature must be positive")
+        self.mixer_kl80_gate = None
+        self.mixer_kl80_state_dim = None
+        self.latest_mixer_kl80_probability = None
+        self.latest_mixer_kl80_mask = None
+        if self.mixer_kl80_auxiliary_active:
+            if self.mixer is None:
+                raise ValueError("Mixer KL80 auxiliary requires a value mixer")
+            state_shape = args.state_shape
+            state_dim = (
+                math.prod(state_shape)
+                if isinstance(state_shape, (tuple, list))
+                else int(state_shape)
+            )
+            self.mixer_kl80_state_dim = state_dim
+            hidden_dim = int(getattr(args, "mixing_embed_dim", 32))
+            self.mixer_kl80_gate = nn.Sequential(
+                nn.Linear(state_dim, hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(hidden_dim, args.n_agents),
+            )
+            final = self.mixer_kl80_gate[-1]
+            nn.init.zeros_(final.weight)
+            nn.init.constant_(
+                final.bias,
+                math.log(self.mixer_kl80_prior / (1.0 - self.mixer_kl80_prior)),
+            )
+            self.params += list(self.mixer_kl80_gate.parameters())
 
         if getattr(args, "optimizer", "adam") == "adam":
             self.optimiser = Adam(self.params, lr=args.lr)
@@ -142,10 +193,6 @@ class CleanLearner:
                 )
             ),
         )
-        model_type = getattr(self.mac.agent, "model_type", "")
-        self.counter_transformer_profile = profile_for(model_type)
-        self.counter_branch_index = 0 if self.counter_transformer_profile.get("branch") == "linear" else 1
-        self.counter_branch_name = "linear" if self.counter_branch_index == 0 else "attention"
         self.generated_parameter_stability_active = (
             model_type
             in {
@@ -2332,17 +2379,59 @@ class CleanLearner:
                     self.args.td_lambda,
                 )
 
+            chosen_agent_qvals = None
             if self.mixer is not None:
                 if self.relation_mixer_gate is not None:
                     chosen_action_qvals = self._apply_relation_gate(
                         chosen_action_qvals, relation_conditions[:, :-1], target=False
                     )
+                chosen_agent_qvals = chosen_action_qvals
                 chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])
 
             td_error = chosen_action_qvals - targets.detach()
             td_mask = mask.expand_as(td_error)
             masked_td_error = td_error * td_mask
             td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
+            mixer_kl80_td_loss = td_loss.new_zeros(())
+            mixer_kl80_prior_loss = td_loss.new_zeros(())
+            mixer_kl80_prior_coef = 0.0
+            mixer_kl80_enabled = (
+                self.mixer_kl80_auxiliary_active
+                and t_env >= self.importance_auxiliary_warmup_steps
+                and self.mixer_kl80_auxiliary_coef > 0.0
+            )
+            if mixer_kl80_enabled:
+                mixer_gate, mixer_probability = self._sample_mixer_kl80_gate(
+                    batch["state"][:, :-1]
+                )
+                # Inverted-prior scaling keeps the expected utility magnitude
+                # matched to the unmasked Transformer-only/QMIX path at init.
+                dropped_agent_qvals = (
+                    chosen_agent_qvals * mixer_gate / self.mixer_kl80_prior
+                )
+                dropped_qtot = self.mixer(
+                    dropped_agent_qvals, batch["state"][:, :-1]
+                )
+                dropped_td_error = (dropped_qtot - targets.detach()) * td_mask
+                mixer_kl80_td_loss = (
+                    dropped_td_error.pow(2).sum()
+                    / td_mask.sum().clamp(min=1.0)
+                )
+                probability = mixer_probability.clamp(1e-6, 1.0 - 1e-6)
+                prior = self.mixer_kl80_prior
+                kl_per_agent = (
+                    probability * (probability.log() - math.log(prior))
+                    + (1.0 - probability)
+                    * ((1.0 - probability).log() - math.log(1.0 - prior))
+                )
+                valid_agents = mask.expand(-1, -1, self.args.n_agents)
+                mixer_kl80_prior_loss = (
+                    (kl_per_agent * valid_agents).sum()
+                    / valid_agents.sum().clamp(min=1.0)
+                )
+                mixer_kl80_prior_coef = self._adaptive_auxiliary_coefficient(
+                    td_loss, mixer_kl80_prior_loss
+                )
             random_drop_auxiliary_loss = td_loss.new_zeros(())
             kl80_random_auxiliary_loss = td_loss.new_zeros(())
             kl80_random_auxiliary_coef = 0.0
@@ -2601,7 +2690,7 @@ class CleanLearner:
                 if random_drop_auxiliary_enabled
                 else 0.0
             )
-            adaptive_auxiliary_enabled = False
+            adaptive_auxiliary_enabled = mixer_kl80_enabled
             if self.mask_parameter_relation_active:
                 # Relation-family experiments use independently interpretable
                 # fixed weights. A shared EMA coefficient allowed the larger
@@ -2762,6 +2851,8 @@ class CleanLearner:
                 )
             loss = (
                 td_loss
+                + self.mixer_kl80_auxiliary_coef * mixer_kl80_td_loss
+                + mixer_kl80_prior_coef * mixer_kl80_prior_loss
                 + random_drop_auxiliary_coef * random_drop_auxiliary_loss
                 + kl80_random_auxiliary_coef * kl80_random_auxiliary_loss
                 + gate_auxiliary_coef * aux_loss
@@ -3003,6 +3094,58 @@ class CleanLearner:
                 if gate_diagnostics.trajectories:
                     self.last_train_gate_image_t = t_env
             self.logger.log_stat("loss_td", td_loss.item(), t_env)
+            if self.mixer_kl80_auxiliary_active:
+                weighted_mixer_td = (
+                    self.mixer_kl80_auxiliary_coef * mixer_kl80_td_loss.item()
+                )
+                self.logger.log_stat(
+                    "loss_mixer_kl80_td_auxiliary", mixer_kl80_td_loss.item(), t_env
+                )
+                self.logger.log_stat(
+                    "weighted_loss_mixer_kl80_td_auxiliary", weighted_mixer_td, t_env
+                )
+                self.logger.log_stat(
+                    "loss_mixer_kl80_prior", mixer_kl80_prior_loss.item(), t_env
+                )
+                self.logger.log_stat(
+                    "mixer_kl80_prior_coef", mixer_kl80_prior_coef, t_env
+                )
+                self.logger.log_stat(
+                    "weighted_loss_mixer_kl80_prior",
+                    mixer_kl80_prior_coef * mixer_kl80_prior_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "mixer_kl80_keep_prior", self.mixer_kl80_prior, t_env
+                )
+                if self.latest_mixer_kl80_probability is not None:
+                    self.logger.log_stat(
+                        "mixer_kl80_probability_mean",
+                        self.latest_mixer_kl80_probability.mean().item(),
+                        t_env,
+                    )
+                    self.logger.log_stat(
+                        "mixer_kl80_probability_std",
+                        self.latest_mixer_kl80_probability.std(unbiased=False).item(),
+                        t_env,
+                    )
+                    for agent_id in range(self.args.n_agents):
+                        self.logger.log_stat(
+                            "mixer_kl80_probability_agent_{}".format(agent_id),
+                            self.latest_mixer_kl80_probability[..., agent_id].mean().item(),
+                            t_env,
+                        )
+                if self.latest_mixer_kl80_mask is not None:
+                    self.logger.log_stat(
+                        "mixer_kl80_sample_mean",
+                        self.latest_mixer_kl80_mask.mean().item(),
+                        t_env,
+                    )
+                    self.logger.log_stat(
+                        "mixer_kl80_sample_std",
+                        self.latest_mixer_kl80_mask.std(unbiased=False).item(),
+                        t_env,
+                    )
             if self.importance_alternating_training:
                 self.logger.log_stat(
                     "importance_alternating_gate_phase",
@@ -3430,6 +3573,21 @@ class CleanLearner:
             self.latest_relation_gate_std = gates.std(unbiased=False).item()
         return agent_qs * gates
 
+    def _sample_mixer_kl80_gate(self, states):
+        flat_states = states.reshape(-1, self.mixer_kl80_state_dim)
+        logits = self.mixer_kl80_gate(flat_states).view(
+            states.shape[0], states.shape[1], self.args.n_agents
+        )
+        probability = th.sigmoid(logits)
+        uniform = th.rand_like(logits).clamp_(1e-8, 1.0 - 1e-8)
+        logistic_noise = th.log(uniform) - th.log1p(-uniform)
+        gate = th.sigmoid(
+            (logits + logistic_noise) / self.mixer_kl80_temperature
+        )
+        self.latest_mixer_kl80_probability = probability.detach()
+        self.latest_mixer_kl80_mask = gate.detach()
+        return gate, probability
+
     def _update_targets(self):
         self.target_mac.load_state(self.mac)
         if self.mixer is not None:
@@ -3447,6 +3605,8 @@ class CleanLearner:
         if self.relation_mixer_gate is not None:
             self.relation_mixer_gate.cuda()
             self.target_relation_mixer_gate.cuda()
+        if self.mixer_kl80_gate is not None:
+            self.mixer_kl80_gate.cuda()
 
     def save_models(self, path):
         self.mac.save_models(path)
@@ -3454,9 +3614,12 @@ class CleanLearner:
             th.save(self.mixer.state_dict(), "{}/mixer.th".format(path))
         if self.relation_mixer_gate is not None:
             th.save(self.relation_mixer_gate.state_dict(), "{}/relation_mixer_gate.th".format(path))
+        if self.mixer_kl80_gate is not None:
+            th.save(self.mixer_kl80_gate.state_dict(), "{}/mixer_kl80_gate.th".format(path))
         if self.use_amp:
             th.save(self.amp_scaler.state_dict(), "{}/amp_scaler.th".format(path))
-        if self.adaptive_auxiliary_ratio_active or self.kl80_random_drop_auxiliary:
+        if (self.adaptive_auxiliary_ratio_active or self.kl80_random_drop_auxiliary
+                or self.mixer_kl80_auxiliary_active):
             th.save(
                 {
                     "ema_td": self.adaptive_auxiliary_ema_td,
@@ -3477,12 +3640,17 @@ class CleanLearner:
                 th.load("{}/relation_mixer_gate.th".format(path), map_location=lambda storage, loc: storage)
             )
             self.target_relation_mixer_gate.load_state_dict(self.relation_mixer_gate.state_dict())
+        if self.mixer_kl80_gate is not None:
+            self.mixer_kl80_gate.load_state_dict(
+                th.load("{}/mixer_kl80_gate.th".format(path), map_location=lambda storage, loc: storage)
+            )
         self.optimiser.load_state_dict(th.load("{}/opt.th".format(path), map_location=lambda storage, loc: storage))
         amp_scaler_path = "{}/amp_scaler.th".format(path)
         if self.use_amp and os.path.exists(amp_scaler_path):
             self.amp_scaler.load_state_dict(th.load(amp_scaler_path, map_location=lambda storage, loc: storage))
         adaptive_ema_path = "{}/adaptive_auxiliary_ema.th".format(path)
-        if (self.adaptive_auxiliary_ratio_active or self.kl80_random_drop_auxiliary) and os.path.exists(adaptive_ema_path):
+        if (self.adaptive_auxiliary_ratio_active or self.kl80_random_drop_auxiliary
+                or self.mixer_kl80_auxiliary_active) and os.path.exists(adaptive_ema_path):
             adaptive_state = th.load(
                 adaptive_ema_path, map_location=lambda storage, loc: storage
             )
