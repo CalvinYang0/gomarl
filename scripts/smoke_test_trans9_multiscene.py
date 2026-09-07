@@ -5,10 +5,11 @@ import torch as th
 
 from smoke_test_counter_transformer_nine import check, make_case
 from ozstar_submit_trans9_multiscene import LABELS, SCENES
+from modules.agents.counter_transformer_suite import SMAC_PROFILES
 
 
-def check_smac_semantics(scene):
-    mac, _, batch, _ = make_case("relation_kl80aux", scene)
+def check_smac_semantics(scene, label):
+    mac, _, batch, _ = make_case(label, scene)
     capturer = mac.agent.rpg_relation_capturer
     layout = capturer.observation_layout
     obs = batch["obs"][:, 0].clone()
@@ -73,15 +74,19 @@ def main():
     selected = os.environ.get("SCENES", " ".join(SCENES)).split()
     if not selected or set(selected) - set(SCENES):
         raise ValueError("SCENES must select from " + " ".join(SCENES))
+    labels = os.environ.get("LABELS", " ".join(LABELS)).split()
+    if not labels or len(set(labels)) != len(labels) or set(labels) - set(SMAC_PROFILES):
+        raise ValueError("LABELS must select from " + " ".join(SMAC_PROFILES))
     for key in selected:
         scene, domain, _ = SCENES[key]
-        for label in LABELS:
+        for label in labels:
             check(label, scene)
-        if domain == "smac":
-            check_smac_semantics(scene)
+            if domain == "smac" and label != "baseline":
+                check_smac_semantics(scene, label)
     # Optional observation features must also preserve runtime dimensions.
     if "3s5z" in selected:
-        mac, _, batch, _ = make_case("relation_kl80aux", "3s5z_vs_3s6z", {
+        probe_label = next((label for label in labels if label != "baseline"), labels[0])
+        mac, _, batch, _ = make_case(probe_label, "3s5z_vs_3s6z", {
             "obs_last_action": True, "obs_timestep_number": True,
             "obs_pathing_grid": True, "obs_terrain_height": True})
         mac.init_hidden(batch.batch_size)

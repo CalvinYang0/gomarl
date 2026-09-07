@@ -32,10 +32,15 @@ def build_plans(repo):
     selected = os.environ.get("SCENES", " ".join(SCENES)).split()
     if not selected or len(set(selected)) != len(selected) or set(selected) - set(SCENES):
         raise ValueError("SCENES must select unique keys from " + " ".join(SCENES))
+    labels = os.environ.get("LABELS", " ".join(LABELS)).split()
+    supported = set(profiles.SMAC_PROFILES)
+    if not labels or len(set(labels)) != len(labels) or set(labels) - supported:
+        raise ValueError("LABELS must select unique SMAC-supported labels from "
+                         + " ".join(profiles.SMAC_PROFILES))
     plans = []
     for scene in selected:
         map_name, domain, memory = SCENES[scene]
-        for plan in counter_plans(repo, LABELS):
+        for plan in counter_plans(repo, labels):
             prefix = "{}_{}_trans9_".format(domain, scene)
             for key in ("job_name", "run_name"):
                 plan[key] = plan[key].replace("grf_counter_trans9_", prefix)

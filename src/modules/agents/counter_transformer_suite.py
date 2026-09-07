@@ -54,13 +54,18 @@ ABLATION_PROFILES = {
 }
 ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 
+# Variants whose observation-gate semantics have an explicit SMAC adapter and
+# simulator-free regression coverage.  Keep this list narrow: accepting an
+# arbitrary GRF ablation here can silently apply the wrong entity layout.
+SMAC_PROFILES = ("baseline", "relation_kl80aux", "obs_gate_kl80aux")
+
 
 def model_type_for(label, domain="grf"):
     if domain not in {"grf", "smac"}:
         raise ValueError("Unknown suite domain: " + domain)
     if domain == "smac":
-        if label not in {"baseline", "relation_kl80aux"}:
-            raise ValueError("SMAC suite currently supports baseline and relation_kl80aux")
+        if label not in SMAC_PROFILES:
+            raise ValueError("SMAC suite currently supports " + ", ".join(SMAC_PROFILES))
         return "smac_single_transformer_suite_{}_hypercond".format(label)
     branch = ALL_PROFILES[label].get("branch", "transformer")
     variant = label[len("linear_"):] if branch == "linear" else label
@@ -73,7 +78,7 @@ MODEL_PROFILES = {
 }
 MODEL_PROFILES.update({
     model_type_for(label, "smac"): dict(ALL_PROFILES[label], label=label, domain="smac")
-    for label in ("baseline", "relation_kl80aux")
+    for label in SMAC_PROFILES
 })
 
 
