@@ -22,6 +22,10 @@ if [[ "$ACTION" == "--loop" ]]; then
   trap 'echo "Sync loop stopping; training jobs are untouched"; exit 0' INT TERM
   while true; do
     round_started=$SECONDS
+    if [[ -f "$REPO_DIR/scripts/ozstar_finalize_wandb.py" ]]; then
+      CLEAN_SYNCED=YES "$PYTHON_BIN" "$REPO_DIR/scripts/ozstar_finalize_wandb.py" || \
+        echo "Final upload/cleanup incomplete; retained unverified data for retry"
+    fi
     printf '\n[%s] Starting incremental Counter W&B sync\n' "$(date -Is)"
     if bash "$REPO_DIR/scripts/ozstar_sync_running_counter_once.sh"; then
       echo "Round complete"

@@ -1,8 +1,8 @@
 #!/bin/bash
 set -u
 
-# One-shot incremental W&B upload for every currently running Counter job in
-# this checkout. Exact run names select the newest matching local directory.
+# One-shot incremental W&B upload for every currently running training job in
+# this checkout. WorkDir, rather than a job-name prefix, defines the scope.
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
@@ -93,21 +93,16 @@ active_jobs=$(squeue -u "${USER:-kyang}" -h -t R -o '%A|%j|%S') || {
 }
 
 while IFS='|' read -r job_id job_name start_time; do
-  [[ "$job_name" == grf_counter_* ]] || continue
   job_record=$(scontrol show job -o "$job_id" 2>/dev/null || true)
   work_dir=$(sed -n 's/.* WorkDir=\([^ ]*\).*/\1/p' <<< "$job_record")
   [[ "$work_dir" == "$REPO_DIR" ]] || continue
   matched=$((matched + 1))
 
-  run_name=$(job_run_name "$job_name") || {
-    echo "ERROR: cannot infer W&B run name for job=$job_id name=$job_name" >&2
-    failed=$((failed + 1))
-    continue
-  }
+  run_name=$(job_run_name "$job_name" || true)
   # W&B prints its exact local directory into the Slurm stream.  Prefer that
   # authoritative path; config-name lookup remains a fallback for older logs.
   run_dir=$(find_run_dir_from_job_logs "$job_record" || true)
-  if [[ -z "$run_dir" ]]; then
+  if [[ -z "$run_dir" && -n "$run_name" ]]; then
     run_dir=$(find_current_run_dir "$run_name")
   fi
   if [[ -z "$run_dir" ]]; then
@@ -138,5 +133,5 @@ while IFS='|' read -r job_id job_name start_time; do
   fi
 done <<< "$active_jobs"
 
-echo "running Counter sync result: matched=$matched uploaded=$uploaded failed=$failed"
+echo "running repository sync result: matched=$matched uploaded=$uploaded failed=$failed"
 (( failed == 0 ))
