@@ -1009,3 +1009,9 @@ clean_train_gate_image_max_steps: 200
 
 # Learned auxiliary gate's Bernoulli KL prior (keep probability, not drop).
 clean_kl_auxiliary_prior: 0.8
+# Optional Transformer-only value-decomposition auxiliary.  A state-conditioned
+# Binary-Concrete gate drops agent utilities before the auxiliary QMIX pass;
+# the ordinary online and target TD paths remain unmasked.
+clean_mixer_kl80_auxiliary_coef: 0.0
+clean_mixer_kl80_prior: 0.8
+clean_mixer_kl80_temperature: 0.5

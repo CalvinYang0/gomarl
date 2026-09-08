@@ -3,9 +3,11 @@
 from pathlib import Path
 
 import torch as th
+import yaml
 
 from ozstar_submit_counter_transformer_nine import build_plans
 from smoke_test_counter_transformer_nine import check, make_case
+from modules.agents.counter_transformer_suite import experiment_overrides
 
 
 def main():
@@ -13,6 +15,13 @@ def main():
     repo = Path(__file__).resolve().parents[1]
     baseline_plan, auxiliary_plan = build_plans(
         repo, ["baseline", "mixer_kl80aux"]
+    )
+    sacred_config = yaml.safe_load(
+        (repo / "src/config/algs/clean_hyper.yaml").read_text()
+    )
+    missing = set(experiment_overrides("mixer_kl80aux")) - set(sacred_config)
+    assert not missing, "Sacred config is missing override keys: {}".format(
+        sorted(missing)
     )
     for key in baseline_plan["exports"]:
         if key not in {"MODEL_TYPE", "RUN_NAME", "GROUP_NAME", "EXTRA_ARGS"}:
