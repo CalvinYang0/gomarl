@@ -27,6 +27,19 @@ ABLATION_PROFILES = {
     # Pure Transformer-only individual network.  The only intervention is an
     # auxiliary Binary-Concrete KL80 drop over agent utilities before QMIX.
     "mixer_kl80aux": {"mixer_aux": "kl80"},
+    "relation_kl90aux": {
+        "gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.9,
+    },
+    "relation_kl80aux_mixer": {
+        "gate": True, "relation": True, "aux": "kl80", "mixer_aux": "kl80",
+    },
+    "relation_kl80aux_adjrand_agreement": {
+        "gate": True,
+        "relation": True,
+        "aux": "kl80",
+        "relation_pairing": "adjacent_random",
+        "relation_objective": "agreement",
+    },
     "relation_random80": {"gate": True, "relation": True, "aux": "fixed_concrete"},
     # "kl80" is the legacy auxiliary implementation kind; the prior is separate.
     "relation_kl50aux": {"gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.5},
@@ -60,7 +73,12 @@ ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 # Variants whose observation-gate semantics have an explicit SMAC adapter and
 # simulator-free regression coverage.  Keep this list narrow: accepting an
 # arbitrary GRF ablation here can silently apply the wrong entity layout.
-SMAC_PROFILES = ("baseline", "relation_kl80aux", "obs_gate_kl80aux")
+SMAC_PROFILES = (
+    "baseline",
+    "relation_kl80aux",
+    "obs_gate_kl80aux",
+    "relation_kl80aux_mixer",
+)
 
 
 def model_type_for(label, domain="grf"):
@@ -101,7 +119,12 @@ def experiment_overrides(label, domain="grf"):
     overrides = {
         "clean_model_type": model_type_for(label, domain),
         "clean_mask_parameter_relation_coef": float(bool(flags.get("relation"))),
-        "clean_mask_parameter_relation_pairing": "fixed",
+        "clean_mask_parameter_relation_pairing": flags.get(
+            "relation_pairing", "fixed"
+        ),
+        "clean_mask_parameter_relation_objective": flags.get(
+            "relation_objective", "l1"
+        ),
         "clean_mask_parameter_relation_mask_source": "probability",
         "clean_mask_parameter_relation_temporal_coef": float(bool(flags.get("temporal"))),
         "clean_mask_parameter_relation_perturbed_head_coef": 0.0,

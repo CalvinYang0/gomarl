@@ -43,7 +43,10 @@ def check_prior(prior):
     expected = .6 * math.log(.6 / prior) + .4 * math.log(.4 / (1 - prior))
     assert abs(loss.item() - expected) < 1e-6
     grad, = th.autograd.grad(loss, gate.gate_network[-1].bias)
-    assert grad.min() >= 0 and grad.max() > 0  # Gradient descent moves .6 toward .5/.3.
+    if prior < 0.6:
+        assert grad.min() >= 0 and grad.max() > 0
+    else:
+        assert grad.max() <= 0 and grad.min() < 0
     capturer.kl80_auxiliary_enabled = False
     print(label + ": matched initialization/sampler and exact KL gradient OK")
     check(label)
@@ -53,8 +56,10 @@ if __name__ == "__main__":
     th.set_num_threads(1)
     repo = Path(__file__).resolve().parents[1]
     assert len(build_plans(repo)) == 9
-    plans = build_plans(repo, ["relation_kl50aux", "relation_kl30aux"])
+    plans = build_plans(
+        repo, ["relation_kl90aux", "relation_kl50aux", "relation_kl30aux"]
+    )
     assert all(plan["exports"]["TEST_INTERVAL"] == "10000" for plan in plans)
-    for prior in (.5, .3):
+    for prior in (.9, .5, .3):
         check_prior(prior)
-    print("2/2 KL prior controls passed (synthetic episodes, no Slurm/simulator)")
+    print("3/3 KL prior controls passed (synthetic episodes, no Slurm/simulator)")

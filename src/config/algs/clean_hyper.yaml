@@ -940,6 +940,9 @@ clean_mask_parameter_relation_scale: 0.1
 # fixed: adjacent + deterministic non-local pairs; episode_random: random
 # pairs within each episode; global_random: random pairs across the replay batch.
 clean_mask_parameter_relation_pairing: fixed
+# l1 matches the two continuous distances. agreement minimizes
+# a(1-b)+(1-a)b, rewarding jointly high or jointly low distances.
+clean_mask_parameter_relation_objective: l1
 # probability compares sigmoid keep probabilities; sampled_gate compares the
 # stochastic Binary-Concrete values actually applied to the observation.
 clean_mask_parameter_relation_mask_source: probability

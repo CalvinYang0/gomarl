@@ -78,8 +78,14 @@ def check(label, scene="academy_counterattack_easy"):
     assert learner.mask_parameter_relation_active == bool(flags.get("relation"))
     assert learner.temporal_param_auxiliary_active == bool(flags.get("temporal"))
     assert learner.random_drop_auxiliary_active == bool(flags.get("aux"))
+    assert learner.mixer_kl80_auxiliary_active == bool(flags.get("mixer_aux"))
     assert learner.gate_regularization_active == bool(flags.get("kl"))
-    assert learner.mask_parameter_relation_pairing == "fixed"
+    assert learner.mask_parameter_relation_pairing == flags.get(
+        "relation_pairing", "fixed"
+    )
+    assert learner.mask_parameter_relation_objective == flags.get(
+        "relation_objective", "l1"
+    )
     assert learner.mask_parameter_relation_mask_source == "probability"
     # Both before warmup and after warmup must execute actual optimiser steps.
     learner.train(batch, t_env=10, episode_num=1)
@@ -107,6 +113,14 @@ def check(label, scene="academy_counterattack_easy"):
                    for p in capturer.kl80_auxiliary_gate.parameters())
         assert any(p.grad is not None and p.grad.abs().sum() > 0
                    for p in capturer.dynamic_branch_gate.parameters())
+    if flags.get("mixer_aux") == "kl80":
+        assert logger.stats["loss_mixer_kl80_td_auxiliary"][-1][1] > 0
+        assert logger.stats["loss_mixer_kl80_prior"][-1][1] >= 0
+        assert logger.stats["mixer_kl80_probability_mean"][-1][1] > 0
+        assert any(
+            p.grad is not None and p.grad.abs().sum() > 0
+            for p in learner.mixer_kl80_gate.parameters()
+        )
     if not flags.get("relation"):
         assert not logger.stats.get("loss_mask_parameter_relation")
     # Evaluation capture is exercised through select_actions, including the

@@ -496,6 +496,9 @@ class CleanLearner:
         self.mask_parameter_relation_pairing = str(
             getattr(args, "clean_mask_parameter_relation_pairing", "fixed")
         ).strip().lower()
+        self.mask_parameter_relation_objective = str(
+            getattr(args, "clean_mask_parameter_relation_objective", "l1")
+        ).strip().lower()
         self.mask_parameter_relation_mask_source = str(
             getattr(
                 args,
@@ -505,12 +508,17 @@ class CleanLearner:
         ).strip().lower()
         if self.mask_parameter_relation_pairing not in {
             "fixed",
+            "adjacent_random",
             "episode_random",
             "global_random",
         }:
             raise ValueError(
                 "clean_mask_parameter_relation_pairing must be one of "
-                "fixed, episode_random, or global_random"
+                "fixed, adjacent_random, episode_random, or global_random"
+            )
+        if self.mask_parameter_relation_objective not in {"l1", "agreement"}:
+            raise ValueError(
+                "clean_mask_parameter_relation_objective must be l1 or agreement"
             )
         if self.mask_parameter_relation_mask_source not in {
             "probability",
@@ -633,6 +641,9 @@ class CleanLearner:
         self.adaptive_auxiliary_ema_td = None
         self.adaptive_auxiliary_ema_aux = None
         self.latest_adaptive_auxiliary_stats = {}
+        self.mixer_kl80_ema_td = None
+        self.mixer_kl80_ema_aux = None
+        self.latest_mixer_kl80_adaptive_stats = {}
 
     def _amp_context(self):
         return th.cuda.amp.autocast(enabled=True) if self.use_amp else nullcontext()
@@ -688,6 +699,47 @@ class CleanLearner:
                 "adaptive_auxiliary_weighted_loss": weighted_value,
                 "adaptive_auxiliary_weighted_to_td_ratio": actual_ratio,
                 "adaptive_auxiliary_target_ratio": self.adaptive_auxiliary_target_ratio,
+            }
+        return coefficient
+
+    def _mixer_kl80_auxiliary_coefficient(self, td_loss, auxiliary_loss):
+        """Keep mixer KL scaling independent from observation-gate KL state."""
+        with th.no_grad():
+            td_value = float(td_loss.detach().float().item())
+            auxiliary_value = float(auxiliary_loss.detach().float().item())
+            if auxiliary_value <= self.adaptive_auxiliary_eps:
+                self.latest_mixer_kl80_adaptive_stats = {
+                    "mixer_kl80_adaptive_effective_coef": 0.0,
+                    "mixer_kl80_adaptive_weighted_to_td_ratio": 0.0,
+                }
+                return 0.0
+            if self.mixer_kl80_ema_td is None:
+                self.mixer_kl80_ema_td = td_value
+                self.mixer_kl80_ema_aux = auxiliary_value
+            else:
+                decay = self.adaptive_auxiliary_ema_decay
+                self.mixer_kl80_ema_td = (
+                    decay * self.mixer_kl80_ema_td + (1.0 - decay) * td_value
+                )
+                self.mixer_kl80_ema_aux = (
+                    decay * self.mixer_kl80_ema_aux
+                    + (1.0 - decay) * auxiliary_value
+                )
+            coefficient = min(
+                self.adaptive_auxiliary_target_ratio
+                * self.mixer_kl80_ema_td
+                / max(self.mixer_kl80_ema_aux, self.adaptive_auxiliary_eps),
+                self.adaptive_auxiliary_max_coef,
+            )
+            weighted = coefficient * auxiliary_value
+            self.latest_mixer_kl80_adaptive_stats = {
+                "mixer_kl80_adaptive_ema_td": self.mixer_kl80_ema_td,
+                "mixer_kl80_adaptive_ema_loss": self.mixer_kl80_ema_aux,
+                "mixer_kl80_adaptive_effective_coef": coefficient,
+                "mixer_kl80_adaptive_weighted_loss": weighted,
+                "mixer_kl80_adaptive_weighted_to_td_ratio": (
+                    weighted / max(td_value, self.adaptive_auxiliary_eps)
+                ),
             }
         return coefficient
 
@@ -1054,8 +1106,22 @@ class CleanLearner:
                 parameter_change.detach()
                 / (parameter_change.detach() + self.mask_parameter_relation_scale)
             )
-        pair_loss = (mask_distance - parameter_target).abs()
-        return (pair_loss * valid).sum(), valid.sum(), mask_distance, parameter_target
+        if getattr(self, "mask_parameter_relation_objective", "l1") == "agreement":
+            # 1 - [ab + (1-a)(1-b)]: disagreement between two soft binary
+            # change indicators.  b is detached above, so the generated head
+            # cannot move merely to satisfy this auxiliary objective.
+            pair_loss = (
+                mask_distance * (1.0 - parameter_target)
+                + (1.0 - mask_distance) * parameter_target
+            )
+        else:
+            pair_loss = (mask_distance - parameter_target).abs()
+        return (
+            (pair_loss * valid).sum(),
+            valid.sum(),
+            (mask_distance * valid).sum(),
+            (parameter_target * valid).sum(),
+        )
 
     @staticmethod
     def _random_relation_pair_indices(valid_steps, pairing):
@@ -2230,17 +2296,21 @@ class CleanLearner:
                 semantic_router.capture_semantic_observation_score = False
             mask_parameter_relation_sum = None
             mask_parameter_relation_count = mask.new_zeros(())
+            mask_parameter_distance_sum = mask.new_zeros(())
+            generated_parameter_target_sum = mask.new_zeros(())
             mask_parameter_pair_count = 0
             if relation_parameters is not None and len(relation_parameters) > 1:
-                if self.mask_parameter_relation_pairing == "fixed":
+                if self.mask_parameter_relation_pairing in {
+                    "fixed", "adjacent_random"
+                }:
                     pair_indices = set()
                     for current_index in range(1, len(relation_parameters)):
                         pair_indices.add((current_index - 1, current_index))
-                        # A non-local pair keeps revisited/different behavior modes
-                        # visible without the O(T^2) cost of every trajectory pair.
-                        anchor_index = current_index // 2
-                        if anchor_index < current_index - 1:
-                            pair_indices.add((anchor_index, current_index))
+                        if self.mask_parameter_relation_pairing == "fixed":
+                            # Legacy deterministic non-local partner.
+                            anchor_index = current_index // 2
+                            if anchor_index < current_index - 1:
+                                pair_indices.add((anchor_index, current_index))
                     for previous_index, current_index in sorted(pair_indices):
                         pair_valid = (
                             relation_valid_steps[previous_index]
@@ -2249,8 +2319,8 @@ class CleanLearner:
                         (
                             pair_sum,
                             pair_count,
-                            _,
-                            _,
+                            mask_distance_sum,
+                            parameter_target_sum,
                         ) = self._mask_parameter_relation_pair(
                             relation_parameters[previous_index],
                             relation_parameters[current_index],
@@ -2268,9 +2338,22 @@ class CleanLearner:
                         mask_parameter_relation_count = (
                             mask_parameter_relation_count + pair_count
                         )
+                        mask_parameter_distance_sum = (
+                            mask_parameter_distance_sum + mask_distance_sum
+                        )
+                        generated_parameter_target_sum = (
+                            generated_parameter_target_sum + parameter_target_sum
+                        )
                         mask_parameter_pair_count += 1
-                else:
+                if self.mask_parameter_relation_pairing in {
+                    "adjacent_random", "episode_random", "global_random"
+                }:
                     valid_steps = th.stack(relation_valid_steps, dim=1)
+                    random_pairing = (
+                        "episode_random"
+                        if self.mask_parameter_relation_pairing == "adjacent_random"
+                        else self.mask_parameter_relation_pairing
+                    )
                     (
                         previous_batch,
                         previous_time,
@@ -2278,7 +2361,7 @@ class CleanLearner:
                         current_time,
                     ) = self._random_relation_pair_indices(
                         valid_steps,
-                        self.mask_parameter_relation_pairing,
+                        random_pairing,
                     )
                     random_pair_count = previous_batch.numel()
                     if random_pair_count > 0:
@@ -2308,10 +2391,10 @@ class CleanLearner:
                             device=mask.device,
                         )
                         (
-                            mask_parameter_relation_sum,
-                            mask_parameter_relation_count,
-                            _,
-                            _,
+                            random_relation_sum,
+                            random_relation_count,
+                            random_mask_distance_sum,
+                            random_parameter_target_sum,
                         ) = self._mask_parameter_relation_pair(
                             previous_parameters,
                             current_parameters,
@@ -2321,7 +2404,22 @@ class CleanLearner:
                             random_pair_count,
                             self.args.n_agents,
                         )
-                        mask_parameter_pair_count = random_pair_count
+                        mask_parameter_relation_sum = (
+                            random_relation_sum
+                            if mask_parameter_relation_sum is None
+                            else mask_parameter_relation_sum + random_relation_sum
+                        )
+                        mask_parameter_relation_count = (
+                            mask_parameter_relation_count + random_relation_count
+                        )
+                        mask_parameter_distance_sum = (
+                            mask_parameter_distance_sum + random_mask_distance_sum
+                        )
+                        generated_parameter_target_sum = (
+                            generated_parameter_target_sum
+                            + random_parameter_target_sum
+                        )
+                        mask_parameter_pair_count += random_pair_count
 
             mac_out = th.stack(mac_out, dim=1)
             teacher_mac_out = (
@@ -2429,7 +2527,7 @@ class CleanLearner:
                     (kl_per_agent * valid_agents).sum()
                     / valid_agents.sum().clamp(min=1.0)
                 )
-                mixer_kl80_prior_coef = self._adaptive_auxiliary_coefficient(
+                mixer_kl80_prior_coef = self._mixer_kl80_auxiliary_coefficient(
                     td_loss, mixer_kl80_prior_loss
                 )
             random_drop_auxiliary_loss = td_loss.new_zeros(())
@@ -2690,7 +2788,7 @@ class CleanLearner:
                 if random_drop_auxiliary_enabled
                 else 0.0
             )
-            adaptive_auxiliary_enabled = mixer_kl80_enabled
+            adaptive_auxiliary_enabled = False
             if self.mask_parameter_relation_active:
                 # Relation-family experiments use independently interpretable
                 # fixed weights. A shared EMA coefficient allowed the larger
@@ -3146,6 +3244,8 @@ class CleanLearner:
                         self.latest_mixer_kl80_mask.std(unbiased=False).item(),
                         t_env,
                     )
+                for stat_name, stat_value in self.latest_mixer_kl80_adaptive_stats.items():
+                    self.logger.log_stat(stat_name, float(stat_value), t_env)
             if self.importance_alternating_training:
                 self.logger.log_stat(
                     "importance_alternating_gate_phase",
@@ -3369,6 +3469,17 @@ class CleanLearner:
                 self.logger.log_stat(
                     "mask_parameter_relation_pair_count",
                     float(mask_parameter_pair_count),
+                    t_env,
+                )
+                relation_valid_count = mask_parameter_relation_count.clamp(min=1.0)
+                self.logger.log_stat(
+                    "mask_parameter_relation_mask_distance_mean",
+                    (mask_parameter_distance_sum / relation_valid_count).item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "mask_parameter_relation_parameter_target_mean",
+                    (generated_parameter_target_sum / relation_valid_count).item(),
                     t_env,
                 )
             for stat_name, values in aux_stat_values.items():
@@ -3624,6 +3735,8 @@ class CleanLearner:
                 {
                     "ema_td": self.adaptive_auxiliary_ema_td,
                     "ema_aux": self.adaptive_auxiliary_ema_aux,
+                    "mixer_kl80_ema_td": self.mixer_kl80_ema_td,
+                    "mixer_kl80_ema_aux": self.mixer_kl80_ema_aux,
                 },
                 "{}/adaptive_auxiliary_ema.th".format(path),
             )
@@ -3656,3 +3769,5 @@ class CleanLearner:
             )
             self.adaptive_auxiliary_ema_td = adaptive_state.get("ema_td")
             self.adaptive_auxiliary_ema_aux = adaptive_state.get("ema_aux")
+            self.mixer_kl80_ema_td = adaptive_state.get("mixer_kl80_ema_td")
+            self.mixer_kl80_ema_aux = adaptive_state.get("mixer_kl80_ema_aux")
