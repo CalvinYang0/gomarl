@@ -33,12 +33,17 @@ ABLATION_PROFILES = {
     "relation_kl80aux_mixer": {
         "gate": True, "relation": True, "aux": "kl80", "mixer_aux": "kl80",
     },
-    "relation_kl80aux_adjrand_agreement": {
+    "relation_kl80aux_adjrand": {
         "gate": True,
         "relation": True,
         "aux": "kl80",
         "relation_pairing": "adjacent_random",
-        "relation_objective": "agreement",
+    },
+    "relation_kl80aux_centered_product": {
+        "gate": True,
+        "relation": True,
+        "aux": "kl80",
+        "relation_objective": "centered_product",
     },
     "relation_random80": {"gate": True, "relation": True, "aux": "fixed_concrete"},
     # "kl80" is the legacy auxiliary implementation kind; the prior is separate.

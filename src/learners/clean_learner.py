@@ -516,9 +516,13 @@ class CleanLearner:
                 "clean_mask_parameter_relation_pairing must be one of "
                 "fixed, adjacent_random, episode_random, or global_random"
             )
-        if self.mask_parameter_relation_objective not in {"l1", "agreement"}:
+        if self.mask_parameter_relation_objective not in {
+            "l1",
+            "centered_product",
+        }:
             raise ValueError(
-                "clean_mask_parameter_relation_objective must be l1 or agreement"
+                "clean_mask_parameter_relation_objective must be l1 or "
+                "centered_product"
             )
         if self.mask_parameter_relation_mask_source not in {
             "probability",
@@ -1106,14 +1110,16 @@ class CleanLearner:
                 parameter_change.detach()
                 / (parameter_change.detach() + self.mask_parameter_relation_scale)
             )
-        if getattr(self, "mask_parameter_relation_objective", "l1") == "agreement":
-            # 1 - [ab + (1-a)(1-b)]: disagreement between two soft binary
-            # change indicators.  b is detached above, so the generated head
-            # cannot move merely to satisfy this auxiliary objective.
-            pair_loss = (
-                mask_distance * (1.0 - parameter_target)
-                + (1.0 - mask_distance) * parameter_target
-            )
+        if (
+            getattr(self, "mask_parameter_relation_objective", "l1")
+            == "centered_product"
+        ):
+            # Maximize a * (b - mean(b)).  Parameter target b is detached, so
+            # above-average parameter changes increase mask change while
+            # below-average changes reduce it without moving the hypernetwork.
+            valid_count = valid.sum().clamp(min=1.0)
+            parameter_center = (parameter_target * valid).sum() / valid_count
+            pair_loss = -mask_distance * (parameter_target - parameter_center)
         else:
             pair_loss = (mask_distance - parameter_target).abs()
         return (

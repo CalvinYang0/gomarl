@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preflight and submit the five requested KL/relation/mixer follow-ups.
+"""Preflight and submit the six requested KL/relation/mixer follow-ups.
 
 The command never cancels jobs.  Rerunning it retains an active same-name job
 from this worktree and submits only the missing experiments.
@@ -19,12 +19,14 @@ from ozstar_submit_trans9_multiscene import build_plans as multiscene_plans
 COUNTER_LABELS = (
     "relation_kl90aux",
     "relation_kl80aux_mixer",
-    "relation_kl80aux_adjrand_agreement",
+    "relation_kl80aux_adjrand",
+    "relation_kl80aux_centered_product",
 )
 EXPECTED = (
     ("counter", "relation_kl90aux"),
     ("counter", "relation_kl80aux_mixer"),
-    ("counter", "relation_kl80aux_adjrand_agreement"),
+    ("counter", "relation_kl80aux_adjrand"),
+    ("counter", "relation_kl80aux_centered_product"),
     ("mmm2", "relation_kl80aux_mixer"),
     ("3s5z", "relation_kl80aux_mixer"),
 )
@@ -63,9 +65,9 @@ def build_selected_plans(repo):
 
     actual = tuple((plan["scene"], plan["label"]) for plan in plans)
     if actual != EXPECTED:
-        raise RuntimeError("Five-job selection changed: {}".format(actual))
+        raise RuntimeError("Six-job selection changed: {}".format(actual))
     if len({plan["job_name"] for plan in plans}) != len(EXPECTED):
-        raise RuntimeError("Five-job plan contains duplicate Slurm names")
+        raise RuntimeError("Six-job plan contains duplicate Slurm names")
     return plans
 
 
@@ -119,7 +121,7 @@ def main():
                 check=True,
             )
 
-    manifest = logdir / "relation_followups_five_{}_{}.json".format(
+    manifest = logdir / "relation_followups_six_{}_{}.json".format(
         time.strftime("%Y%m%d_%H%M%S"), os.getpid()
     )
     record = {

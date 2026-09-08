@@ -92,9 +92,12 @@ def check(label, scene="academy_counterattack_easy"):
     learner.train(batch, t_env=300000, episode_num=2)
     assert all(th.isfinite(p).all() for p in mac.parameters())
     if flags.get("relation"):
-        assert logger.stats["loss_mask_parameter_relation"][-1][1] > 0
+        relation_loss = logger.stats["loss_mask_parameter_relation"][-1][1]
+        assert math.isfinite(relation_loss)
+        if flags.get("relation_objective", "l1") == "l1":
+            assert relation_loss > 0
         assert learner.mask_parameter_relation_coef == 1.0
-        assert logger.stats["weighted_loss_mask_parameter_relation"][-1][1] == logger.stats["loss_mask_parameter_relation"][-1][1]
+        assert logger.stats["weighted_loss_mask_parameter_relation"][-1][1] == relation_loss
         assert any(p.grad is not None and p.grad.abs().sum() > 0
                    for p in capturer.dynamic_branch_gate.parameters())
     if flags.get("temporal"):

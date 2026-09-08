@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for the five KL/relation/mixer follow-up runs."""
+"""Regression checks for the six KL/relation/mixer follow-up runs."""
 import math
 from pathlib import Path
 import sys
@@ -49,11 +49,11 @@ def check_combined_mixer():
     check("relation_kl80aux_mixer")
 
 
-def check_adjacent_random_agreement():
-    label = "relation_kl80aux_adjrand_agreement"
+def check_adjacent_random():
+    label = "relation_kl80aux_adjrand"
     overrides = experiment_overrides(label)
     assert overrides["clean_mask_parameter_relation_pairing"] == "adjacent_random"
-    assert overrides["clean_mask_parameter_relation_objective"] == "agreement"
+    assert overrides["clean_mask_parameter_relation_objective"] == "l1"
 
     _, learner, batch, logger = make_case(label)
     learner.train(batch, t_env=300000, episode_num=1)
@@ -61,29 +61,42 @@ def check_adjacent_random_agreement():
     assert "mask_parameter_relation_mask_distance_mean" in logger.stats
     assert "mask_parameter_relation_parameter_target_mean" in logger.stats
 
+    check(label)
+
+
+def check_centered_product():
+    label = "relation_kl80aux_centered_product"
+    overrides = experiment_overrides(label)
+    assert overrides["clean_mask_parameter_relation_pairing"] == "fixed"
+    assert overrides["clean_mask_parameter_relation_objective"] == "centered_product"
+    _, learner, _, _ = make_case(label)
     probe = type(learner).__new__(type(learner))
     probe.mask_parameter_relation_scale = 0.1
     probe.temporal_param_scale_eps = 1e-6
     probe.mask_parameter_relation_group_distance = False
     probe.mask_parameter_relation_group_ids = None
     probe.mask_parameter_relation_stop_side = "parameter"
-    probe.mask_parameter_relation_objective = "agreement"
+    probe.mask_parameter_relation_objective = "centered_product"
     probe.counter_transformer_profile = {"relation": True}
     probe.counter_branch_index = 1
-    previous_parameter = th.zeros(1, 2, requires_grad=True)
-    current_parameter = th.ones(1, 2, requires_grad=True)
+    previous_parameter = th.ones(2, 2, requires_grad=True)
+    current_parameter = th.tensor(
+        [[1.05, 1.05], [2.0, 2.0]], requires_grad=True
+    )
     previous_logits = th.full((2, 1, 1, 2), math.log(0.2 / 0.8), requires_grad=True)
     current_logits = th.full((2, 1, 1, 2), math.log(0.4 / 0.6), requires_grad=True)
     total, count, a_sum, b_sum = probe._mask_parameter_relation_pair(
         (previous_parameter,), (current_parameter,),
         previous_logits.sigmoid(), current_logits.sigmoid(),
-        th.tensor([True]), 1, 1,
+        th.tensor([True, True]), 2, 1,
     )
-    a, b = a_sum / count, b_sum / count
-    assert b.item() > 0.5
-    assert th.allclose(total / count, a * (1.0 - b) + (1.0 - a) * b)
+    assert count.item() == 2
+    assert b_sum.item() > 0
     (total / count).backward()
-    assert current_logits.grad[1].max() < 0
+    # The larger-b sample should be pushed toward a larger mask distance and
+    # the smaller-b sample toward a smaller distance.
+    assert current_logits.grad[1, 0, 0, 1] < 0
+    assert current_logits.grad[1, 0, 0, 0] > 0
     assert previous_parameter.grad is None and current_parameter.grad is None
     check(label)
 
@@ -94,11 +107,13 @@ if __name__ == "__main__":
     labels = (
         "relation_kl90aux",
         "relation_kl80aux_mixer",
-        "relation_kl80aux_adjrand_agreement",
+        "relation_kl80aux_adjrand",
+        "relation_kl80aux_centered_product",
     )
     check_registered(repo, labels)
-    assert len(build_plans(repo, labels)) == 3
+    assert len(build_plans(repo, labels)) == 4
     check_prior(0.9)
     check_combined_mixer()
-    check_adjacent_random_agreement()
-    print("KL90, combined mixer, and adjacent-random agreement controls passed")
+    check_adjacent_random()
+    check_centered_product()
+    print("KL90, combined mixer, pairing, and objective controls passed")
