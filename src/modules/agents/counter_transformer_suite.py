@@ -27,6 +27,12 @@ ABLATION_PROFILES = {
     # Pure Transformer-only individual network.  The only intervention is an
     # auxiliary Binary-Concrete KL80 drop over agent utilities before QMIX.
     "mixer_kl80aux": {"mixer_aux": "kl80"},
+    "mixer_kl80aux_coef01": {
+        "mixer_aux": "kl80", "mixer_aux_coef": 0.1,
+    },
+    "mixer_kl80aux_coef001": {
+        "mixer_aux": "kl80", "mixer_aux_coef": 0.01,
+    },
     "relation_kl90aux": {
         "gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.9,
     },
@@ -135,7 +141,9 @@ def experiment_overrides(label, domain="grf"):
         "clean_mask_parameter_relation_perturbed_head_coef": 0.0,
         "clean_mask_parameter_relation_gate_regularization_coef": 0.0,
         "clean_random_drop_auxiliary_coef": float(bool(flags.get("aux"))),
-        "clean_mixer_kl80_auxiliary_coef": float(bool(flags.get("mixer_aux"))),
+        "clean_mixer_kl80_auxiliary_coef": flags.get(
+            "mixer_aux_coef", float(bool(flags.get("mixer_aux")))
+        ),
         "clean_mixer_kl80_prior": 0.8,
         "clean_mixer_kl80_temperature": 0.5,
         "clean_kl_auxiliary_prior": flags.get("aux_prior", 0.8),
