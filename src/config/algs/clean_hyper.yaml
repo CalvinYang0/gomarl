@@ -891,6 +891,12 @@ clean_dynamic_branch_gate_hidden_dim: 64
 clean_cstg_gate_sigma: 0.5
 clean_bayesg_gate_temperature: 0.5
 clean_binary_concrete_temperature: 0.5
+# By default the learned slot logits are observation-conditioned and their
+# deterministic probabilities use sigmoid(logit). Static controls replace the
+# gate network with one global logit per slot; probability_temperature < 1
+# sharpens sigmoid(logit / temperature).
+clean_dynamic_branch_gate_static: false
+clean_dynamic_branch_gate_probability_temperature: 1.0
 # This intentionally matches BayesG's GraphMaskGenerator implementation.
 clean_bayesg_gate_eval_threshold: 0.08
 # Sparse binary-concrete experiments: KL80 can be evaluated with a 0.7 hard

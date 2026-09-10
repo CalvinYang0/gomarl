@@ -24,6 +24,21 @@ PROFILES = {
 # opt-in and submitted separately, without cancelling the original runs.
 ABLATION_PROFILES = {
     "obs_gate_kl80aux": {"gate": True, "aux": "kl80"},
+    # Observation-independent learned masks: one global logit per raw slot,
+    # shared by every agent and timestep. These retain the matched KL80
+    # robustness auxiliary from obs_gate_kl80aux.
+    "static_gate_kl80aux_thr05": {
+        "gate": True, "aux": "kl80", "static_gate": True,
+        "gate_threshold": 0.5,
+    },
+    "static_gate_kl80aux_thr08": {
+        "gate": True, "aux": "kl80", "static_gate": True,
+        "gate_threshold": 0.8,
+    },
+    "static_gate_kl80aux_sharp_thr05": {
+        "gate": True, "aux": "kl80", "static_gate": True,
+        "gate_threshold": 0.5, "gate_probability_temperature": 0.5,
+    },
     # Pure Transformer-only individual network.  The only intervention is an
     # auxiliary Binary-Concrete KL80 drop over agent utilities before QMIX.
     "mixer_kl80aux": {"mixer_aux": "kl80"},
@@ -174,6 +189,11 @@ def experiment_overrides(label, domain="grf"):
         "clean_random_drop_auxiliary_scope": "timestep",
         "clean_random_drop_auxiliary_combine_mode": "multiply",
         "clean_hard_gate_initial_keep_probability": 0.95,
+        "clean_hard_gate_threshold": flags.get("gate_threshold", 0.5),
+        "clean_dynamic_branch_gate_static": bool(flags.get("static_gate")),
+        "clean_dynamic_branch_gate_probability_temperature": flags.get(
+            "gate_probability_temperature", 1.0
+        ),
         "clean_binary_concrete_temperature": 0.5,
         "clean_dynamic_branch_gate_warmup_steps": 250000,
         "clean_importance_auxiliary_warmup_steps": 250000,

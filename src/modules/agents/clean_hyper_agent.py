@@ -1113,7 +1113,7 @@ def _neg_inf_like(tensor):
 
 
 class ObservationConditionedBranchGate(nn.Module):
-    """Generate independent Linear/Attention slot gates from the current obs."""
+    """Generate per-slot gates, optionally as observation-independent logits."""
 
     def __init__(
         self,
@@ -1131,6 +1131,8 @@ class ObservationConditionedBranchGate(nn.Module):
         aggregate_group_inputs=False,
         hard_concrete_gamma=-0.1,
         hard_concrete_zeta=1.1,
+        observation_independent=False,
+        probability_temperature=1.0,
     ):
         super().__init__()
         if mode not in {
@@ -1150,6 +1152,8 @@ class ObservationConditionedBranchGate(nn.Module):
             raise ValueError("bayesg_temperature must be positive")
         if binary_concrete_temperature <= 0.0:
             raise ValueError("binary_concrete_temperature must be positive")
+        if probability_temperature <= 0.0:
+            raise ValueError("probability_temperature must be positive")
         if not 0.0 <= bayesg_eval_threshold <= 1.0:
             raise ValueError("bayesg_eval_threshold must be in [0, 1]")
         if not 0.0 < hard_threshold < 1.0:
@@ -1184,6 +1188,8 @@ class ObservationConditionedBranchGate(nn.Module):
         self.hard_threshold = float(hard_threshold)
         self.hard_concrete_gamma = float(hard_concrete_gamma)
         self.hard_concrete_zeta = float(hard_concrete_zeta)
+        self.observation_independent = bool(observation_independent)
+        self.probability_temperature = float(probability_temperature)
         if not self.hard_concrete_gamma < 0.0 < self.hard_concrete_zeta:
             raise ValueError("hard_concrete_gamma/zeta must straddle zero")
         hidden_dim = int(hidden_dim)
@@ -1193,23 +1199,33 @@ class ObservationConditionedBranchGate(nn.Module):
             else 2 * self.group_count
         )
         gate_input_dim = self.group_count if self.aggregate_group_inputs else self.obs_dim
-        if hidden_dim > 0:
+        initial_logit = math.log(
+            initial_keep_probability / (1.0 - initial_keep_probability)
+        ) * self.probability_temperature
+        if self.observation_independent:
+            self.gate_network = None
+            self.static_logits = nn.Parameter(
+                th.full((output_dim,), initial_logit)
+            )
+        elif hidden_dim > 0:
             self.gate_network = nn.Sequential(
                 nn.Linear(gate_input_dim, hidden_dim),
                 nn.ReLU(inplace=True),
                 nn.Linear(hidden_dim, output_dim),
             )
+            self.static_logits = None
         else:
             self.gate_network = nn.Linear(gate_input_dim, output_dim)
+            self.static_logits = None
 
-        if self.mode in {"hard_st", "binary_concrete", "hard_concrete"}:
+        if (
+            not self.observation_independent
+            and self.mode in {"hard_st", "binary_concrete", "hard_concrete"}
+        ):
             final_layer = (
                 self.gate_network[-1]
                 if isinstance(self.gate_network, nn.Sequential)
                 else self.gate_network
-            )
-            initial_logit = math.log(
-                initial_keep_probability / (1.0 - initial_keep_probability)
             )
             nn.init.zeros_(final_layer.weight)
             nn.init.constant_(final_layer.bias, initial_logit)
@@ -1219,7 +1235,7 @@ class ObservationConditionedBranchGate(nn.Module):
 
     def forward(self, obs, sample=True, deterministic_soft=False):
         gate_input = obs
-        if self.aggregate_group_inputs:
+        if self.aggregate_group_inputs and not self.observation_independent:
             # Mean-pool repeated ally/opponent attributes before predicting
             # group gates. Reordering entities inside one semantic group then
             # leaves both the gate input and expanded output unchanged.
@@ -1235,7 +1251,12 @@ class ObservationConditionedBranchGate(nn.Module):
                 obs.new_ones(self.obs_dim),
             )
             gate_input = gate_input / counts.clamp(min=1.0)
-        logits = self.gate_network(gate_input)
+        if self.observation_independent:
+            logits = self.static_logits.view(
+                *((1,) * (obs.dim() - 1)), self.static_logits.numel()
+            ).expand(*obs.shape[:-1], self.static_logits.numel())
+        else:
+            logits = self.gate_network(gate_input)
         if self.gate_scope == "shared":
             logits = logits.unsqueeze(-2).expand(
                 *obs.shape[:-1], 2, self.group_count
@@ -1246,7 +1267,8 @@ class ObservationConditionedBranchGate(nn.Module):
         # entity-type attribute (for example every opponent direction_x), then
         # expands it back to the original scalar layout. x/y are never merged.
         logits = logits.index_select(-1, self.slot_group_ids)
-        probability = th.sigmoid(logits)
+        effective_logits = logits / self.probability_temperature
+        probability = th.sigmoid(effective_logits)
         expected_l0 = None
 
         if self.mode == "cstg":
@@ -1263,7 +1285,7 @@ class ObservationConditionedBranchGate(nn.Module):
             uniform = th.rand_like(logits).clamp_(1e-8, 1.0 - 1e-8)
             gumbel = -th.log(-th.log(uniform))
             gate = th.sigmoid(
-                (logits + gumbel) / self.bayesg_temperature
+                (effective_logits + gumbel) / self.bayesg_temperature
             )
         elif self.mode == "bayesg":
             gate = (probability > self.bayesg_eval_threshold).to(obs.dtype)
@@ -1280,14 +1302,14 @@ class ObservationConditionedBranchGate(nn.Module):
                 uniform = th.rand_like(logits).clamp_(1e-8, 1.0 - 1e-8)
                 logistic_noise = th.log(uniform) - th.log1p(-uniform)
                 gate = th.sigmoid(
-                    (logits + logistic_noise) / self.binary_concrete_temperature
+                    (effective_logits + logistic_noise) / self.binary_concrete_temperature
                 )
             else:
                 # Evaluation remains an exact scalar mask.
                 gate = (probability > self.hard_threshold).to(obs.dtype)
         elif self.mode == "hard_concrete":
             expected_l0 = th.sigmoid(
-                logits
+                effective_logits
                 - self.binary_concrete_temperature
                 * math.log(-self.hard_concrete_gamma / self.hard_concrete_zeta)
             )
@@ -1297,7 +1319,7 @@ class ObservationConditionedBranchGate(nn.Module):
                 uniform = th.rand_like(logits).clamp_(1e-8, 1.0 - 1e-8)
                 logistic_noise = th.log(uniform) - th.log1p(-uniform)
                 concrete = th.sigmoid(
-                    (logits + logistic_noise)
+                    (effective_logits + logistic_noise)
                     / self.binary_concrete_temperature
                 )
             else:
@@ -1314,7 +1336,7 @@ class ObservationConditionedBranchGate(nn.Module):
             hard_gate = (probability > self.hard_threshold).to(obs.dtype)
             gate = hard_gate.detach() - probability.detach() + probability
 
-        self.latest_logits = logits.movedim(-2, 0)
+        self.latest_logits = effective_logits.movedim(-2, 0)
         self.latest_probability = probability.movedim(-2, 0)
         self.latest_expected_l0 = (
             None if expected_l0 is None else expected_l0.movedim(-2, 0)
@@ -1917,6 +1939,8 @@ class PublicTransformerRelationCapturer(nn.Module):
         dynamic_branch_gate_scope="both",
         dynamic_branch_gate_group_properties=False,
         dynamic_branch_gate_group_input=False,
+        dynamic_branch_gate_static=False,
+        dynamic_branch_gate_probability_temperature=1.0,
         dynamic_branch_gate_training_freeze_steps=0,
         dynamic_branch_gate_regularizer="none",
         dynamic_branch_gate_prior_keep=0.5,
@@ -2081,6 +2105,14 @@ class PublicTransformerRelationCapturer(nn.Module):
         self.dynamic_branch_gate_group_input = bool(
             dynamic_branch_gate_group_input
         )
+        self.dynamic_branch_gate_static = bool(dynamic_branch_gate_static)
+        self.dynamic_branch_gate_probability_temperature = float(
+            dynamic_branch_gate_probability_temperature
+        )
+        if self.dynamic_branch_gate_probability_temperature <= 0.0:
+            raise ValueError(
+                "dynamic_branch_gate_probability_temperature must be positive"
+            )
         self.dynamic_branch_gate_training_freeze_steps = max(
             0, int(dynamic_branch_gate_training_freeze_steps)
         )
@@ -2425,6 +2457,10 @@ class PublicTransformerRelationCapturer(nn.Module):
                 ),
                 slot_group_ids=self._dynamic_gate_slot_group_ids(),
                 aggregate_group_inputs=self.dynamic_branch_gate_group_input,
+                observation_independent=self.dynamic_branch_gate_static,
+                probability_temperature=(
+                    self.dynamic_branch_gate_probability_temperature
+                ),
             )
             if self.dynamic_branch_gate_mode is not None
             else None
@@ -5161,6 +5197,8 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         dynamic_branch_gate_scope="both",
         dynamic_branch_gate_group_properties=False,
         dynamic_branch_gate_group_input=False,
+        dynamic_branch_gate_static=False,
+        dynamic_branch_gate_probability_temperature=1.0,
         dynamic_branch_gate_training_freeze_steps=0,
         dynamic_branch_gate_regularizer="none",
         dynamic_branch_gate_prior_keep=0.5,
@@ -5322,6 +5360,14 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         self.dynamic_branch_gate_group_input = bool(
             dynamic_branch_gate_group_input
         )
+        self.dynamic_branch_gate_static = bool(dynamic_branch_gate_static)
+        self.dynamic_branch_gate_probability_temperature = float(
+            dynamic_branch_gate_probability_temperature
+        )
+        if self.dynamic_branch_gate_probability_temperature <= 0.0:
+            raise ValueError(
+                "dynamic_branch_gate_probability_temperature must be positive"
+            )
         self.dynamic_branch_gate_training_freeze_steps = max(
             0, int(dynamic_branch_gate_training_freeze_steps)
         )
@@ -5600,6 +5646,10 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
                 ),
                 slot_group_ids=self._dynamic_gate_slot_group_ids(),
                 aggregate_group_inputs=self.dynamic_branch_gate_group_input,
+                observation_independent=self.dynamic_branch_gate_static,
+                probability_temperature=(
+                    self.dynamic_branch_gate_probability_temperature
+                ),
             )
             if self.dynamic_branch_gate_mode is not None
             else None
@@ -8456,6 +8506,20 @@ class CleanHyperAgent(nn.Module):
         self.binary_concrete_temperature = float(
             getattr(args, "clean_binary_concrete_temperature", 0.5)
         )
+        self.dynamic_branch_gate_static = bool(
+            getattr(args, "clean_dynamic_branch_gate_static", False)
+        )
+        self.dynamic_branch_gate_probability_temperature = float(
+            getattr(
+                args,
+                "clean_dynamic_branch_gate_probability_temperature",
+                1.0,
+            )
+        )
+        if self.dynamic_branch_gate_probability_temperature <= 0.0:
+            raise ValueError(
+                "clean_dynamic_branch_gate_probability_temperature must be positive"
+            )
         self.td_parameter_relative_std = float(
             getattr(args, "clean_td_parameter_relative_std", 0.02)
         )
@@ -9857,7 +9921,8 @@ class CleanHyperAgent(nn.Module):
             ),
             dynamic_branch_gate_scope=(
                 "shared"
-                if self.model_type in GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS
+                if suite_profile.get("static_gate")
+                or self.model_type in GRF_DUAL_BRANCH_SLOT_SHARED_GATE_VARIANTS
                 else "attention_only"
                 if self.model_type in GRF_DUAL_BRANCH_ATTENTION_ONLY_GATE_VARIANTS
                 else "both"
@@ -9872,6 +9937,10 @@ class CleanHyperAgent(nn.Module):
             dynamic_branch_gate_group_input=(
                 self.model_type
                 in GRF_DUAL_BRANCH_PERMUTATION_INVARIANT_GROUP_GATE_VARIANTS
+            ),
+            dynamic_branch_gate_static=self.dynamic_branch_gate_static,
+            dynamic_branch_gate_probability_temperature=(
+                self.dynamic_branch_gate_probability_temperature
             ),
             dynamic_branch_gate_training_freeze_steps=(
                 GRF_DUAL_BRANCH_TRAIN_GATE_FREEZE_STEPS_BY_MODEL.get(
