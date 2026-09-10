@@ -42,6 +42,12 @@ ABLATION_PROFILES = {
         "gate": True, "aux": "kl80", "static_gate": True,
         "gate_threshold": 0.5, "gate_probability_temperature": 0.5,
     },
+    # One independent observation-free mask vector per agent. Unlike the
+    # trajectory variant, there is no relation/group loss between agents.
+    "agent_static_gate_kl80aux": {
+        "gate": True, "aux": "kl80", "static_gate": True,
+        "per_agent_gate": True, "gate_threshold": 0.5,
+    },
     # Pure Transformer-only individual network.  The only intervention is an
     # auxiliary Binary-Concrete KL80 drop over agent utilities before QMIX.
     "mixer_kl80aux": {"mixer_aux": "kl80"},
