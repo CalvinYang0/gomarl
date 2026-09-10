@@ -24,6 +24,9 @@ PROFILES = {
 # opt-in and submitted separately, without cancelling the original runs.
 ABLATION_PROFILES = {
     "obs_gate_kl80aux": {"gate": True, "aux": "kl80"},
+    # Full-observation main/test path. KL80 masking exists only in the second
+    # training rollout and therefore acts purely as robustness augmentation.
+    "kl80aux_augmentation": {"aux": "kl80"},
     # Observation-independent learned masks: one global logit per raw slot,
     # shared by every agent and timestep. These retain the matched KL80
     # robustness auxiliary from obs_gate_kl80aux.
