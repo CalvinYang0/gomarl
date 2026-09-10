@@ -896,6 +896,9 @@ clean_binary_concrete_temperature: 0.5
 # gate network with one global logit per slot; probability_temperature < 1
 # sharpens sigmoid(logit / temperature).
 clean_dynamic_branch_gate_static: false
+# When static=true, select one shared vector (false) or one learned vector for
+# each agent identity (true). Neither variant reads observation values.
+clean_dynamic_branch_gate_per_agent: false
 clean_dynamic_branch_gate_probability_temperature: 1.0
 # This intentionally matches BayesG's GraphMaskGenerator implementation.
 clean_bayesg_gate_eval_threshold: 0.08
@@ -950,6 +953,8 @@ clean_mask_parameter_relation_pairing: fixed
 # a * (b - mean(b)), with b detached, as a separate objective ablation.
 # advantage_contrastive builds transient positive/negative pairs from the
 # detached normalized action-advantage distribution and never uses parameters.
+# trajectory_advantage_contrastive first averages that distribution across
+# every valid timestep, then relates the observation-independent agent masks.
 clean_mask_parameter_relation_objective: l1
 # probability compares sigmoid keep probabilities; sampled_gate compares the
 # stochastic Binary-Concrete values actually applied to the observation.

@@ -86,6 +86,18 @@ ABLATION_PROFILES = {
         # Keep the new structural regularizer subordinate to the TD objective.
         "relation_coef": 0.1,
     },
+    # One observation-independent mask per agent. Agent groups are inferred
+    # from episode-level, time-aggregated advantage signatures rather than
+    # changing the mask at every timestep.
+    "relation_trajectory_agent_kl80aux": {
+        "gate": True,
+        "relation": True,
+        "aux": "kl80",
+        "static_gate": True,
+        "per_agent_gate": True,
+        "relation_objective": "trajectory_advantage_contrastive",
+        "relation_coef": 0.1,
+    },
     "relation_random80": {"gate": True, "relation": True, "aux": "fixed_concrete"},
     # "kl80" is the legacy auxiliary implementation kind; the prior is separate.
     "relation_kl50aux": {"gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.5},
@@ -126,6 +138,7 @@ SMAC_PROFILES = (
     "relation_kl80aux_mixer",
     "obs_gate_kl80aux_mixer_coef001",
     "relation_advantage_kl80aux",
+    "relation_trajectory_agent_kl80aux",
 )
 
 
@@ -194,6 +207,7 @@ def experiment_overrides(label, domain="grf"):
         "clean_hard_gate_initial_keep_probability": 0.95,
         "clean_hard_gate_threshold": flags.get("gate_threshold", 0.5),
         "clean_dynamic_branch_gate_static": bool(flags.get("static_gate")),
+        "clean_dynamic_branch_gate_per_agent": bool(flags.get("per_agent_gate")),
         "clean_dynamic_branch_gate_probability_temperature": flags.get(
             "gate_probability_temperature", 1.0
         ),

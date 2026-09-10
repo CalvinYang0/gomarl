@@ -1132,6 +1132,7 @@ class ObservationConditionedBranchGate(nn.Module):
         hard_concrete_gamma=-0.1,
         hard_concrete_zeta=1.1,
         observation_independent=False,
+        observation_independent_agent_count=0,
         probability_temperature=1.0,
     ):
         super().__init__()
@@ -1189,6 +1190,15 @@ class ObservationConditionedBranchGate(nn.Module):
         self.hard_concrete_gamma = float(hard_concrete_gamma)
         self.hard_concrete_zeta = float(hard_concrete_zeta)
         self.observation_independent = bool(observation_independent)
+        self.observation_independent_agent_count = int(
+            observation_independent_agent_count
+        )
+        if self.observation_independent_agent_count < 0:
+            raise ValueError("observation_independent_agent_count cannot be negative")
+        if self.observation_independent_agent_count and not self.observation_independent:
+            raise ValueError(
+                "Per-agent static logits require observation_independent=True"
+            )
         self.probability_temperature = float(probability_temperature)
         if not self.hard_concrete_gamma < 0.0 < self.hard_concrete_zeta:
             raise ValueError("hard_concrete_gamma/zeta must straddle zero")
@@ -1205,8 +1215,20 @@ class ObservationConditionedBranchGate(nn.Module):
         if self.observation_independent:
             self.gate_network = None
             self.static_logits = nn.Parameter(
-                th.full((output_dim,), initial_logit)
+                th.full(
+                    (
+                        (self.observation_independent_agent_count, output_dim)
+                        if self.observation_independent_agent_count
+                        else (output_dim,)
+                    ),
+                    initial_logit,
+                )
             )
+            if self.observation_independent_agent_count:
+                # L1 contrastive repulsion has a zero subgradient when every
+                # agent starts exactly equal. A tiny seeded perturbation only
+                # breaks that symmetry; it does not encode an agent grouping.
+                nn.init.normal_(self.static_logits, mean=initial_logit, std=1e-3)
         elif hidden_dim > 0:
             self.gate_network = nn.Sequential(
                 nn.Linear(gate_input_dim, hidden_dim),
@@ -1252,9 +1274,29 @@ class ObservationConditionedBranchGate(nn.Module):
             )
             gate_input = gate_input / counts.clamp(min=1.0)
         if self.observation_independent:
-            logits = self.static_logits.view(
-                *((1,) * (obs.dim() - 1)), self.static_logits.numel()
-            ).expand(*obs.shape[:-1], self.static_logits.numel())
+            if self.observation_independent_agent_count:
+                if (
+                    obs.dim() < 3
+                    or obs.size(-2) != self.observation_independent_agent_count
+                ):
+                    raise ValueError(
+                        "Per-agent static gate expected agent axis {} in obs {}; got {}"
+                        .format(
+                            self.observation_independent_agent_count,
+                            tuple(obs.shape),
+                            obs.size(-2) if obs.dim() >= 2 else None,
+                        )
+                    )
+                output_dim = self.static_logits.size(-1)
+                logits = self.static_logits.view(
+                    *((1,) * (obs.dim() - 2)),
+                    self.observation_independent_agent_count,
+                    output_dim,
+                ).expand(*obs.shape[:-2], self.observation_independent_agent_count, output_dim)
+            else:
+                logits = self.static_logits.view(
+                    *((1,) * (obs.dim() - 1)), self.static_logits.numel()
+                ).expand(*obs.shape[:-1], self.static_logits.numel())
         else:
             logits = self.gate_network(gate_input)
         if self.gate_scope == "shared":
@@ -1940,6 +1982,7 @@ class PublicTransformerRelationCapturer(nn.Module):
         dynamic_branch_gate_group_properties=False,
         dynamic_branch_gate_group_input=False,
         dynamic_branch_gate_static=False,
+        dynamic_branch_gate_static_agent_count=0,
         dynamic_branch_gate_probability_temperature=1.0,
         dynamic_branch_gate_training_freeze_steps=0,
         dynamic_branch_gate_regularizer="none",
@@ -2106,6 +2149,9 @@ class PublicTransformerRelationCapturer(nn.Module):
             dynamic_branch_gate_group_input
         )
         self.dynamic_branch_gate_static = bool(dynamic_branch_gate_static)
+        self.dynamic_branch_gate_static_agent_count = int(
+            dynamic_branch_gate_static_agent_count
+        )
         self.dynamic_branch_gate_probability_temperature = float(
             dynamic_branch_gate_probability_temperature
         )
@@ -2458,6 +2504,9 @@ class PublicTransformerRelationCapturer(nn.Module):
                 slot_group_ids=self._dynamic_gate_slot_group_ids(),
                 aggregate_group_inputs=self.dynamic_branch_gate_group_input,
                 observation_independent=self.dynamic_branch_gate_static,
+                observation_independent_agent_count=(
+                    self.dynamic_branch_gate_static_agent_count
+                ),
                 probability_temperature=(
                     self.dynamic_branch_gate_probability_temperature
                 ),
@@ -5198,6 +5247,7 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
         dynamic_branch_gate_group_properties=False,
         dynamic_branch_gate_group_input=False,
         dynamic_branch_gate_static=False,
+        dynamic_branch_gate_static_agent_count=0,
         dynamic_branch_gate_probability_temperature=1.0,
         dynamic_branch_gate_training_freeze_steps=0,
         dynamic_branch_gate_regularizer="none",
@@ -5361,6 +5411,9 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
             dynamic_branch_gate_group_input
         )
         self.dynamic_branch_gate_static = bool(dynamic_branch_gate_static)
+        self.dynamic_branch_gate_static_agent_count = int(
+            dynamic_branch_gate_static_agent_count
+        )
         self.dynamic_branch_gate_probability_temperature = float(
             dynamic_branch_gate_probability_temperature
         )
@@ -5647,6 +5700,9 @@ class GRFPublicPrivateBiasTransformerCapturer(PublicTransformerRelationCapturer)
                 slot_group_ids=self._dynamic_gate_slot_group_ids(),
                 aggregate_group_inputs=self.dynamic_branch_gate_group_input,
                 observation_independent=self.dynamic_branch_gate_static,
+                observation_independent_agent_count=(
+                    self.dynamic_branch_gate_static_agent_count
+                ),
                 probability_temperature=(
                     self.dynamic_branch_gate_probability_temperature
                 ),
@@ -8509,6 +8565,13 @@ class CleanHyperAgent(nn.Module):
         self.dynamic_branch_gate_static = bool(
             getattr(args, "clean_dynamic_branch_gate_static", False)
         )
+        self.dynamic_branch_gate_per_agent = bool(
+            getattr(args, "clean_dynamic_branch_gate_per_agent", False)
+        )
+        if self.dynamic_branch_gate_per_agent and not self.dynamic_branch_gate_static:
+            raise ValueError(
+                "clean_dynamic_branch_gate_per_agent requires a static gate"
+            )
         self.dynamic_branch_gate_probability_temperature = float(
             getattr(
                 args,
@@ -9939,6 +10002,9 @@ class CleanHyperAgent(nn.Module):
                 in GRF_DUAL_BRANCH_PERMUTATION_INVARIANT_GROUP_GATE_VARIANTS
             ),
             dynamic_branch_gate_static=self.dynamic_branch_gate_static,
+            dynamic_branch_gate_static_agent_count=(
+                self.n_agents if self.dynamic_branch_gate_per_agent else 0
+            ),
             dynamic_branch_gate_probability_temperature=(
                 self.dynamic_branch_gate_probability_temperature
             ),

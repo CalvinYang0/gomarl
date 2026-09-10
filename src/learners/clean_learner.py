@@ -520,10 +520,12 @@ class CleanLearner:
             "l1",
             "centered_product",
             "advantage_contrastive",
+            "trajectory_advantage_contrastive",
         }:
             raise ValueError(
                 "clean_mask_parameter_relation_objective must be l1, "
-                "centered_product, or advantage_contrastive"
+                "centered_product, advantage_contrastive, or "
+                "trajectory_advantage_contrastive"
             )
         self.advantage_relation_temperature = float(
             getattr(args, "clean_advantage_relation_temperature", 1.0)
@@ -1360,6 +1362,159 @@ class CleanLearner:
             ).detach(),
         }
 
+    def _trajectory_advantage_mask_relation(
+        self,
+        q_values,
+        avail_actions,
+        relation_probabilities,
+        valid_steps,
+    ):
+        """Group fixed agent masks by episode-level advantage trajectories."""
+        batch_size, time_steps, n_agents, _ = q_values.shape
+        if len(relation_probabilities) != time_steps:
+            raise RuntimeError("Trajectory relation Q/mask lengths differ")
+        stacked_probabilities = th.stack(relation_probabilities, dim=1)
+        if stacked_probabilities.size(0) != 2:
+            raise RuntimeError("Dynamic gate probabilities must start with two branches")
+        mask_probabilities = stacked_probabilities[
+            self.counter_branch_index
+        ].reshape(time_steps, batch_size, n_agents, -1).permute(1, 0, 2, 3)
+        valid = th.stack(valid_steps, dim=1).unsqueeze(-1).expand(
+            -1, -1, n_agents
+        )
+
+        q = q_values.detach().float()
+        available = avail_actions.bool()
+        available_float = available.to(q.dtype)
+        action_count = available_float.sum(dim=-1, keepdim=True).clamp(min=1.0)
+        baseline = (q * available_float).sum(dim=-1, keepdim=True) / action_count
+        advantage = q - baseline
+        advantage_scale = (
+            (advantage.pow(2) * available_float).sum(dim=-1, keepdim=True)
+            / action_count
+        ).sqrt().clamp(min=1e-6)
+        normalized_advantage = (
+            advantage / advantage_scale
+        ) / self.advantage_relation_temperature
+        normalized_advantage = normalized_advantage.masked_fill(~available, -1e9)
+        state_policy = th.softmax(normalized_advantage, dim=-1) * available_float
+        state_policy = state_policy / state_policy.sum(
+            dim=-1, keepdim=True
+        ).clamp(min=1e-8)
+
+        valid_float = valid.to(state_policy.dtype)
+        trajectory_count = valid_float.sum(dim=1, keepdim=False).unsqueeze(-1)
+        trajectory_policy = (
+            state_policy * valid_float.unsqueeze(-1)
+        ).sum(dim=1) / trajectory_count.clamp(min=1.0)
+        trajectory_policy = trajectory_policy / trajectory_policy.sum(
+            dim=-1, keepdim=True
+        ).clamp(min=1e-8)
+        trajectory_mask = (
+            mask_probabilities * valid_float.unsqueeze(-1)
+        ).sum(dim=1) / trajectory_count.clamp(min=1.0)
+        trajectory_valid = trajectory_count.squeeze(-1) > 0
+
+        left_policy, right_policy = [], []
+        left_mask, right_mask, pair_valid = [], [], []
+        for left_agent in range(n_agents):
+            for right_agent in range(left_agent + 1, n_agents):
+                left_policy.append(trajectory_policy[:, left_agent])
+                right_policy.append(trajectory_policy[:, right_agent])
+                left_mask.append(trajectory_mask[:, left_agent])
+                right_mask.append(trajectory_mask[:, right_agent])
+                pair_valid.append(
+                    trajectory_valid[:, left_agent]
+                    & trajectory_valid[:, right_agent]
+                )
+        if not left_policy:
+            zero = mask_probabilities.sum() * 0.0
+            return zero, {
+                "positive_count": zero.detach(),
+                "negative_count": zero.detach(),
+                "candidate_count": zero.detach(),
+                "mask_distance": zero.detach(),
+                "advantage_js": zero.detach(),
+                "confidence": zero.detach(),
+            }
+
+        policy_left = th.cat(left_policy, dim=0)
+        policy_right = th.cat(right_policy, dim=0)
+        mask_left = th.cat(left_mask, dim=0)
+        mask_right = th.cat(right_mask, dim=0)
+        valid_pair = th.cat(pair_valid, dim=0)
+        midpoint = 0.5 * (policy_left + policy_right)
+        eps = 1e-8
+
+        def kl_term(probability, reference):
+            return th.where(
+                probability > 0,
+                probability * (
+                    probability.clamp(min=eps).log()
+                    - reference.clamp(min=eps).log()
+                ),
+                th.zeros_like(probability),
+            ).sum(dim=-1)
+
+        advantage_js = 0.5 * (
+            kl_term(policy_left, midpoint)
+            + kl_term(policy_right, midpoint)
+        ) / 0.6931471805599453
+        left_top = policy_left.topk(k=min(2, policy_left.size(-1)), dim=-1).values
+        right_top = policy_right.topk(k=min(2, policy_right.size(-1)), dim=-1).values
+        left_confidence = left_top[:, 0] - (
+            left_top[:, 1] if left_top.size(1) > 1 else 0.0
+        )
+        right_confidence = right_top[:, 0] - (
+            right_top[:, 1] if right_top.size(1) > 1 else 0.0
+        )
+        confidence = th.minimum(left_confidence, right_confidence)
+        confident = (
+            valid_pair
+            & (confidence >= self.advantage_relation_confidence_threshold)
+        )
+        positive = (
+            confident
+            & (policy_left.argmax(dim=-1) == policy_right.argmax(dim=-1))
+            & (advantage_js <= self.advantage_relation_positive_threshold)
+        )
+        negative = (
+            confident
+            & (advantage_js >= self.advantage_relation_negative_threshold)
+        )
+        mask_distance = (mask_left - mask_right).abs().mean(dim=-1)
+        positive_float = positive.to(mask_distance.dtype)
+        negative_float = negative.to(mask_distance.dtype)
+        positive_count = positive_float.sum()
+        negative_count = negative_float.sum()
+        positive_loss = (
+            mask_distance * positive_float
+        ).sum() / positive_count.clamp(min=1.0)
+        negative_loss = (
+            (self.advantage_relation_mask_margin - mask_distance).clamp(min=0.0)
+            * negative_float
+        ).sum() / negative_count.clamp(min=1.0)
+        loss = positive_loss + self.advantage_relation_negative_coef * negative_loss
+        selected = positive | negative
+        selected_float = selected.to(mask_distance.dtype)
+        selected_count = selected_float.sum().clamp(min=1.0)
+        confident_float = confident.to(confidence.dtype)
+        return loss, {
+            "positive_count": positive_count.detach(),
+            "negative_count": negative_count.detach(),
+            "candidate_count": valid_pair.to(mask_distance.dtype).sum().detach(),
+            "mask_distance": (
+                (mask_distance.detach() * selected_float).sum() / selected_count
+            ),
+            "advantage_js": (
+                (advantage_js * selected_float).sum() / selected_count
+            ).detach(),
+            "confidence": (
+                (confidence * confident_float).sum()
+                / confident_float.sum().clamp(min=1.0)
+            ).detach(),
+        }
+
     @staticmethod
     def _random_relation_pair_indices(valid_steps, pairing):
         """Return random valid-state pairs for the requested sampling scope.
@@ -2099,8 +2254,10 @@ class CleanLearner:
             []
             if self.mask_parameter_relation_active
             and importance_auxiliary_enabled
-            and self.mask_parameter_relation_objective
-            != "advantage_contrastive"
+            and self.mask_parameter_relation_objective not in {
+                "advantage_contrastive",
+                "trajectory_advantage_contrastive",
+            }
             else None
         )
         relation_probabilities = (
@@ -2547,8 +2704,10 @@ class CleanLearner:
             if (
                 relation_parameters is not None
                 and len(relation_parameters) > 1
-                and self.mask_parameter_relation_objective
-                != "advantage_contrastive"
+                and self.mask_parameter_relation_objective not in {
+                    "advantage_contrastive",
+                    "trajectory_advantage_contrastive",
+                }
             ):
                 if self.mask_parameter_relation_pairing in {
                     "fixed", "adjacent_random"
@@ -2673,15 +2832,20 @@ class CleanLearner:
 
             mac_out = th.stack(mac_out, dim=1)
             if (
-                self.mask_parameter_relation_objective
-                == "advantage_contrastive"
+                self.mask_parameter_relation_objective in {
+                    "advantage_contrastive",
+                    "trajectory_advantage_contrastive",
+                }
                 and relation_probabilities is not None
             ):
                 relation_time_steps = len(relation_probabilities)
-                (
-                    advantage_relation_loss,
-                    advantage_relation_stats,
-                ) = self._advantage_contrastive_mask_relation(
+                relation_function = (
+                    self._trajectory_advantage_mask_relation
+                    if self.mask_parameter_relation_objective
+                    == "trajectory_advantage_contrastive"
+                    else self._advantage_contrastive_mask_relation
+                )
+                advantage_relation_loss, advantage_relation_stats = relation_function(
                     mac_out[:, :relation_time_steps],
                     avail_actions[:, :relation_time_steps],
                     relation_probabilities,
