@@ -57,6 +57,17 @@ ABLATION_PROFILES = {
         "aux": "kl80",
         "relation_objective": "centered_product",
     },
+    # Dynamic pseudo-groups are induced from the current policy's detached
+    # normalized advantage distribution.  Confident near-policy pairs pull
+    # masks together; confident far-policy pairs push them apart by a margin.
+    "relation_advantage_kl80aux": {
+        "gate": True,
+        "relation": True,
+        "aux": "kl80",
+        "relation_objective": "advantage_contrastive",
+        # Keep the new structural regularizer subordinate to the TD objective.
+        "relation_coef": 0.1,
+    },
     "relation_random80": {"gate": True, "relation": True, "aux": "fixed_concrete"},
     # "kl80" is the legacy auxiliary implementation kind; the prior is separate.
     "relation_kl50aux": {"gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.5},
@@ -96,6 +107,7 @@ SMAC_PROFILES = (
     "obs_gate_kl80aux",
     "relation_kl80aux_mixer",
     "obs_gate_kl80aux_mixer_coef001",
+    "relation_advantage_kl80aux",
 )
 
 
@@ -136,7 +148,9 @@ def experiment_overrides(label, domain="grf"):
     flags = ALL_PROFILES[label]
     overrides = {
         "clean_model_type": model_type_for(label, domain),
-        "clean_mask_parameter_relation_coef": float(bool(flags.get("relation"))),
+        "clean_mask_parameter_relation_coef": flags.get(
+            "relation_coef", float(bool(flags.get("relation")))
+        ),
         "clean_mask_parameter_relation_pairing": flags.get(
             "relation_pairing", "fixed"
         ),

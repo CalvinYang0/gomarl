@@ -942,6 +942,8 @@ clean_mask_parameter_relation_scale: 0.1
 clean_mask_parameter_relation_pairing: fixed
 # l1 matches the two continuous distances. centered_product maximizes
 # a * (b - mean(b)), with b detached, as a separate objective ablation.
+# advantage_contrastive builds transient positive/negative pairs from the
+# detached normalized action-advantage distribution and never uses parameters.
 clean_mask_parameter_relation_objective: l1
 # probability compares sigmoid keep probabilities; sampled_gate compares the
 # stochastic Binary-Concrete values actually applied to the observation.
@@ -953,6 +955,15 @@ clean_mask_parameter_relation_coef: 10.0
 clean_mask_parameter_relation_temporal_coef: 50.0
 clean_mask_parameter_relation_perturbed_head_coef: 1.0
 clean_mask_parameter_relation_gate_regularization_coef: 1.0
+# Advantage-induced pseudo-group relation. Distances are normalized JS in
+# [0,1]. Ambiguous pairs between the positive and negative thresholds are
+# ignored, as are low-confidence action distributions.
+clean_advantage_relation_temperature: 1.0
+clean_advantage_relation_positive_threshold: 0.1
+clean_advantage_relation_negative_threshold: 0.4
+clean_advantage_relation_confidence_threshold: 0.05
+clean_advantage_relation_mask_margin: 0.2
+clean_advantage_relation_negative_coef: 1.0
 # Optional decoupled importance training. After the ordinary gate warm-up,
 # alternate 80k environment steps of TD-only non-gate updates with 20k steps
 # where only the gate receives TD plus its importance auxiliary.

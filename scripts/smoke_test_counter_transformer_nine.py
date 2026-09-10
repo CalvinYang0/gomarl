@@ -96,8 +96,11 @@ def check(label, scene="academy_counterattack_easy"):
         assert math.isfinite(relation_loss)
         if flags.get("relation_objective", "l1") == "l1":
             assert relation_loss > 0
-        assert learner.mask_parameter_relation_coef == 1.0
-        assert logger.stats["weighted_loss_mask_parameter_relation"][-1][1] == relation_loss
+        expected_relation_coef = flags.get("relation_coef", 1.0)
+        assert learner.mask_parameter_relation_coef == expected_relation_coef
+        assert logger.stats["weighted_loss_mask_parameter_relation"][-1][1] == (
+            expected_relation_coef * relation_loss
+        )
         assert any(p.grad is not None and p.grad.abs().sum() > 0
                    for p in capturer.dynamic_branch_gate.parameters())
     if flags.get("temporal"):
