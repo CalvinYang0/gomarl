@@ -33,6 +33,12 @@ ABLATION_PROFILES = {
     "mixer_kl80aux_coef001": {
         "mixer_aux": "kl80", "mixer_aux_coef": 0.01,
     },
+    "obs_gate_kl80aux_mixer_coef001": {
+        "gate": True,
+        "aux": "kl80",
+        "mixer_aux": "kl80",
+        "mixer_aux_coef": 0.01,
+    },
     "relation_kl90aux": {
         "gate": True, "relation": True, "aux": "kl80", "aux_prior": 0.9,
     },
@@ -89,6 +95,7 @@ SMAC_PROFILES = (
     "relation_kl80aux",
     "obs_gate_kl80aux",
     "relation_kl80aux_mixer",
+    "obs_gate_kl80aux_mixer_coef001",
 )
 
 
