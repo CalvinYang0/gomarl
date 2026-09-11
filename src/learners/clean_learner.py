@@ -3026,7 +3026,19 @@ class CleanLearner:
                             prefix = "aux_" + self.kl_auxiliary_tag if self.kl80_random_drop_auxiliary else "aux_fixed80"
                             gate_diagnostics.add(prefix + "_probability", random_capturer.latest_kl80_auxiliary_probability[self.counter_branch_index], t)
                             sampled = random_capturer.latest_kl80_auxiliary_mask[self.counter_branch_index]
-                            main_mask = random_capturer.latest_dynamic_branch_gates_graph[self.counter_branch_index].detach()
+                            main_gates = (
+                                random_capturer.latest_dynamic_branch_gates_graph
+                            )
+                            # The augmentation-only control deliberately has
+                            # no learned main gate.  For diagnostics its
+                            # identity main mask is all ones, so the combined
+                            # mask is exactly the sampled KL auxiliary mask.
+                            if main_gates is None:
+                                main_mask = th.ones_like(sampled)
+                            else:
+                                main_mask = main_gates[
+                                    self.counter_branch_index
+                                ].detach()
                             gate_diagnostics.add(prefix + "_mask", sampled, t)
                             gate_diagnostics.add(prefix + "_main_mask", main_mask, t)
                             gate_diagnostics.add(prefix + "_combined_mask", main_mask * sampled, t)
