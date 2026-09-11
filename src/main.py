@@ -20,7 +20,10 @@ ex = Experiment("pymarl")
 ex.logger = logger
 ex.captured_out_filter = apply_backspaces_and_linefeeds
 
-results_path = join(dirname(dirname(abspath(__file__))), "results")
+results_path = os.environ.get(
+    "GOMARL_RESULTS_PATH",
+    join(dirname(dirname(abspath(__file__))), "results"),
+)
 
 
 @ex.main

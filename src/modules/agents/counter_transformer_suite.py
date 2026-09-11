@@ -69,6 +69,16 @@ ABLATION_PROFILES = {
     "relation_kl80aux_mixer": {
         "gate": True, "relation": True, "aux": "kl80", "mixer_aux": "kl80",
     },
+    # Matched low-weight mixer controls requested for the relation study.
+    # The only difference from their non-mixer reference is the additional
+    # QMIX-utility KL80 auxiliary with coefficient 0.01.
+    "relation_kl80aux_mixer_coef001": {
+        "gate": True,
+        "relation": True,
+        "aux": "kl80",
+        "mixer_aux": "kl80",
+        "mixer_aux_coef": 0.01,
+    },
     "relation_kl80aux_adjrand": {
         "gate": True,
         "relation": True,
@@ -91,6 +101,15 @@ ABLATION_PROFILES = {
         "relation_objective": "advantage_contrastive",
         # Keep the new structural regularizer subordinate to the TD objective.
         "relation_coef": 0.1,
+    },
+    "relation_advantage_kl80aux_mixer_coef001": {
+        "gate": True,
+        "relation": True,
+        "aux": "kl80",
+        "relation_objective": "advantage_contrastive",
+        "relation_coef": 0.1,
+        "mixer_aux": "kl80",
+        "mixer_aux_coef": 0.01,
     },
     # One observation-independent mask per agent. Agent groups are inferred
     # from episode-level, time-aggregated advantage signatures rather than
@@ -142,8 +161,10 @@ SMAC_PROFILES = (
     "relation_kl80aux",
     "obs_gate_kl80aux",
     "relation_kl80aux_mixer",
+    "relation_kl80aux_mixer_coef001",
     "obs_gate_kl80aux_mixer_coef001",
     "relation_advantage_kl80aux",
+    "relation_advantage_kl80aux_mixer_coef001",
     "relation_trajectory_agent_kl80aux",
 )
 

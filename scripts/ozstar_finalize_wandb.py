@@ -16,7 +16,9 @@ def idle():
 
 def main():
     repo = Path(os.environ.get('REPO_DIR', '/home/kyang/code/gomarl-dual-branch')).resolve()
-    root = repo / 'wandb'
+    configured_root = Path(os.environ.get('WANDB_ROOT', 'wandb'))
+    root = (configured_root if configured_root.is_absolute()
+            else repo / configured_root).resolve()
     os.chdir(repo)
     with (repo / '.wandb-counter-sync-once.lock').open('a') as lock:
         try:

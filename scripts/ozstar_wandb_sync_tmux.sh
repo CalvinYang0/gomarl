@@ -63,6 +63,11 @@ case "$ACTION" in
       "SESSION_NAME=$SESSION_NAME" "INTERVAL_SECONDS=$INTERVAL_SECONDS" "SYNC_TIMEOUT=$SYNC_TIMEOUT" \
       "WANDB_ROOT=${WANDB_ROOT:-wandb}" "WANDB_ENTITY=${WANDB_ENTITY:-hjh331-sjtu}" \
       "WANDB_PROJECT=${WANDB_PROJECT:-gomarl}" \
+      "WANDB_DIR=${WANDB_DIR:-$REPO_DIR}" \
+      "WANDB_CACHE_DIR=${WANDB_CACHE_DIR:-$REPO_DIR/.wandb-cache}" \
+      "WANDB_CONFIG_DIR=${WANDB_CONFIG_DIR:-$REPO_DIR/.wandb-config}" \
+      "WANDB_DATA_DIR=${WANDB_DATA_DIR:-$REPO_DIR/.wandb-data}" \
+      "TMPDIR=${TMPDIR:-/tmp}" \
       bash "$REPO_DIR/scripts/ozstar_wandb_sync_tmux.sh" --loop
     tmux new-session -d -s "$SESSION_NAME" -n wandb-sync "$loop_command"
     echo "Started $SESSION_NAME: sync now, then every ${INTERVAL_SECONDS}s; slow rounds never overlap."
