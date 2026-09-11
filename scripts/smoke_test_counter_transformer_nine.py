@@ -117,8 +117,13 @@ def check(label, scene="academy_counterattack_easy"):
         assert not capturer.kl80_auxiliary_enabled
         assert any(p.grad is not None and p.grad.abs().sum() > 0
                    for p in capturer.kl80_auxiliary_gate.parameters())
-        assert any(p.grad is not None and p.grad.abs().sum() > 0
-                   for p in capturer.dynamic_branch_gate.parameters())
+        if flags.get("gate"):
+            assert any(p.grad is not None and p.grad.abs().sum() > 0
+                       for p in capturer.dynamic_branch_gate.parameters())
+        else:
+            # KL80 augmentation is a valid auxiliary-only control: its main
+            # execution path deliberately has no learned gate to differentiate.
+            assert capturer.dynamic_branch_gate is None
     if flags.get("mixer_aux") == "kl80":
         assert logger.stats["loss_mixer_kl80_td_auxiliary"][-1][1] > 0
         assert logger.stats["loss_mixer_kl80_prior"][-1][1] >= 0
