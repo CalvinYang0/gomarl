@@ -297,7 +297,7 @@ class CleanMAC(BasicMAC):
             }
         profile = getattr(relation_capturer, "counter_transformer_profile", {})
         trajectory["gate_note"] = (
-            "No gate: all slots kept" if profile.get("label") == "baseline"
+            "No main gate: all slots kept" if not profile.get("gate")
             else "Test mask bypassed: all slots kept; plotted values are learned probabilities"
             if profile.get("test_open")
             else "Test applies learned probabilities as soft masks"

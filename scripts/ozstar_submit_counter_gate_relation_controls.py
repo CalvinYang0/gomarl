@@ -53,8 +53,39 @@ def main():
         return
 
     os.chdir(repo)
-    for smoke_test in SMOKE_TESTS:
-        subprocess.run([sys.executable, smoke_test], check=True)
+    smoke_failures = []
+    for index, smoke_test in enumerate(SMOKE_TESTS, start=1):
+        print(
+            "[smoke {}/{}] START {}".format(
+                index, len(SMOKE_TESTS), smoke_test
+            ),
+            flush=True,
+        )
+        result = subprocess.run([sys.executable, smoke_test])
+        if result.returncode:
+            smoke_failures.append((smoke_test, result.returncode))
+            print(
+                "[smoke {}/{}] FAILED {} (exit={})".format(
+                    index, len(SMOKE_TESTS), smoke_test, result.returncode
+                ),
+                flush=True,
+            )
+        else:
+            print(
+                "[smoke {}/{}] PASSED {}".format(
+                    index, len(SMOKE_TESTS), smoke_test
+                ),
+                flush=True,
+            )
+    if smoke_failures:
+        details = ", ".join(
+            "{}:exit={}".format(path, code)
+            for path, code in smoke_failures
+        )
+        raise RuntimeError(
+            "Counter control preflight failed after running every smoke test; "
+            "no jobs submitted: " + details
+        )
 
     user = run(["id", "-un"])
     names = {plan["job_name"] for plan in plans}
