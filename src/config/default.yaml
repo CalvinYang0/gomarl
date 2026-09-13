@@ -39,6 +39,9 @@ wandb_save_model: False # Save checkpoints into W&B run directory
 # trajectory image, and the optional test video; local/TensorBoard/Sacred logs
 # remain unchanged.
 wandb_minimal_logging: True
+# Minimum environment-step gap between W&B image batches. Scalar metrics are
+# unaffected. Individual submission suites may raise this for inode safety.
+wandb_media_interval: 100000
 save_model: False # Save the models to disk
 save_model_interval: 2000000 # Save models after this many timesteps
 save_model_at_end: False # Save one final checkpoint at the end of training

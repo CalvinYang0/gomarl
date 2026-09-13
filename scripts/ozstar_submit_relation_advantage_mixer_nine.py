@@ -88,6 +88,13 @@ def route_runtime(plans, runtime_root):
         exports["EXTRA_ARGS"] += " local_results_path={}".format(
             paths["results"]
         )
+        # Nine concurrent runs otherwise create image batches quickly enough
+        # to exhaust the filesystem inode quota. This does not change scalar
+        # metric, evaluation, or learner logging cadence.
+        exports["EXTRA_ARGS"] += (
+            " wandb_media_interval=1000000"
+            " clean_train_gate_image_interval=1000000"
+        )
         plan["sbatch_args"] = [
             arg
             for arg in plan["sbatch_args"]

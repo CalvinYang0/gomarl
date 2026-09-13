@@ -19,6 +19,16 @@ class Logger:
         # compact by default: only the requested performance, loss, and gate
         # probability summaries are uploaded.
         self.wandb_minimal_logging = True
+        self.media_interval = 100000
+        self._media_last = {}
+
+    def media_due(self, group, t):
+        """Throttle rendering, separately for training, test, and battle media."""
+        previous = self._media_last.get(group)
+        if previous is not None and t - previous < self.media_interval:
+            return False
+        self._media_last[group] = t
+        return True
 
     @staticmethod
     def _wandb_metric_allowed(key):
@@ -79,6 +89,9 @@ class Logger:
         self.wandb_module = wandb
         self.wandb_minimal_logging = bool(
             config.get("wandb_minimal_logging", True)
+        )
+        self.media_interval = max(
+            1, int(config.get("wandb_media_interval", self.media_interval))
         )
 
         alg_name = config.get("name", "unknown_alg")
@@ -167,6 +180,8 @@ class Logger:
         """One real replay episode from the diagnostic update; white=0, red=1."""
         if not self.use_wandb:
             return
+        if not self.media_due('train', t):
+            return
         try:
             import matplotlib.pyplot as plt
             from matplotlib.colors import LinearSegmentedColormap
@@ -214,6 +229,8 @@ class Logger:
         to drop space; slots above it are dropped by the test gate.
         """
         if not self.use_wandb or trajectory is None:
+            return
+        if not self.media_due('test', t):
             return
         # Keep this diagnostic independent from the gate-probability figure:
         # either plot should still be uploaded if the other one fails.
