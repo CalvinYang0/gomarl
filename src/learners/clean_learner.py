@@ -377,6 +377,13 @@ class CleanLearner:
         self.random_drop_auxiliary_coef = float(
             getattr(args, "clean_random_drop_auxiliary_coef", 0.5)
         )
+        self.main_td_coef = float(getattr(args, "clean_main_td_coef", 1.0))
+        self.nomask_td_auxiliary_coef = float(
+            getattr(args, "clean_nomask_td_auxiliary_coef", 0.0)
+        )
+        self.kl_auxiliary_force_main_open = bool(
+            getattr(args, "clean_kl_auxiliary_force_main_open", False)
+        )
         self.random_drop_auxiliary_scope = str(
             getattr(args, "clean_random_drop_auxiliary_scope", "episode")
         ).lower()
@@ -393,6 +400,16 @@ class CleanLearner:
             )
         if self.random_drop_auxiliary_coef < 0.0:
             raise ValueError("clean_random_drop_auxiliary_coef must be non-negative")
+        if self.main_td_coef < 0.0:
+            raise ValueError("clean_main_td_coef must be non-negative")
+        if self.nomask_td_auxiliary_coef < 0.0:
+            raise ValueError(
+                "clean_nomask_td_auxiliary_coef must be non-negative"
+            )
+        if self.kl_auxiliary_force_main_open and not self.concrete_random_drop_auxiliary:
+            raise ValueError(
+                "clean_kl_auxiliary_force_main_open requires a Concrete KL auxiliary"
+            )
         if self.random_drop_auxiliary_scope not in {"episode", "timestep"}:
             raise ValueError(
                 "clean_random_drop_auxiliary_scope must be episode or timestep"
@@ -518,12 +535,13 @@ class CleanLearner:
             )
         if self.mask_parameter_relation_objective not in {
             "l1",
+            "l1_sigmoid",
             "centered_product",
             "advantage_contrastive",
             "trajectory_advantage_contrastive",
         }:
             raise ValueError(
-                "clean_mask_parameter_relation_objective must be l1, "
+                "clean_mask_parameter_relation_objective must be l1, l1_sigmoid, "
                 "centered_product, advantage_contrastive, or "
                 "trajectory_advantage_contrastive"
             )
@@ -1136,8 +1154,25 @@ class CleanLearner:
         mask_distance = (
             current_probabilities - previous_probabilities
         ).abs().mean(dim=(0, -1))
+        objective = getattr(
+            self, "mask_parameter_relation_objective", "l1"
+        )
         if self.mask_parameter_relation_stop_side == "mask":
             mask_distance = mask_distance.detach()
+            target_change = parameter_change
+        else:
+            target_change = parameter_change.detach()
+        if objective == "l1_sigmoid":
+            # Shifted sigmoid: exactly zero at zero change, approximately
+            # linear around the origin, and saturated for extreme changes.
+            # This retains the [0, 1) mask-distance target without forcing
+            # either tiny numerical changes or outliers to dominate.
+            parameter_target = (
+                2.0 * th.sigmoid(
+                    target_change / self.mask_parameter_relation_scale
+                ) - 1.0
+            )
+        elif self.mask_parameter_relation_stop_side == "mask":
             parameter_target = parameter_change / (
                 parameter_change.detach() + self.mask_parameter_relation_scale
             )
@@ -1147,8 +1182,7 @@ class CleanLearner:
                 / (parameter_change.detach() + self.mask_parameter_relation_scale)
             )
         if (
-            getattr(self, "mask_parameter_relation_objective", "l1")
-            == "centered_product"
+            objective == "centered_product"
         ):
             # Maximize a * (b - mean(b)).  Parameter target b is detached, so
             # above-average parameter changes increase mask change while
@@ -2933,6 +2967,32 @@ class CleanLearner:
             td_mask = mask.expand_as(td_error)
             masked_td_error = td_error * td_mask
             td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
+            nomask_td_loss = td_loss.new_zeros(())
+            if self.nomask_td_auxiliary_coef > 0.0:
+                # A matched clean-observation pass. The learned probabilities
+                # were already captured from the ordinary masked pass above;
+                # force-open affects only this additional TD path.
+                nomask_mac_out = []
+                self.mac.init_hidden(batch.batch_size)
+                self.mac.set_dynamic_branch_gate_force_open(True)
+                try:
+                    for t in range(batch.max_seq_length):
+                        nomask_mac_out.append(self.mac.forward(batch, t=t))
+                finally:
+                    self.mac.set_dynamic_branch_gate_force_open(False)
+                nomask_mac_out = th.stack(nomask_mac_out, dim=1)
+                nomask_chosen_qvals = th.gather(
+                    nomask_mac_out[:, :-1], dim=3, index=actions
+                ).squeeze(3)
+                if self.mixer is not None:
+                    nomask_chosen_qvals = self.mixer(
+                        nomask_chosen_qvals, batch["state"][:, :-1]
+                    )
+                nomask_td_error = (nomask_chosen_qvals - targets.detach()) * td_mask
+                nomask_td_loss = (
+                    nomask_td_error.pow(2).sum()
+                    / td_mask.sum().clamp(min=1.0)
+                )
             mixer_kl80_td_loss = td_loss.new_zeros(())
             mixer_kl80_prior_loss = td_loss.new_zeros(())
             mixer_kl80_prior_coef = 0.0
@@ -2990,6 +3050,8 @@ class CleanLearner:
                 auxiliary_kl_terms = []
                 random_capturer = getattr(self.mac.agent, "rpg_relation_capturer", None)
                 try:
+                    if self.kl_auxiliary_force_main_open:
+                        self.mac.set_dynamic_branch_gate_force_open(True)
                     if self.concrete_random_drop_auxiliary:
                         random_capturer.kl80_auxiliary_enabled = True
                     elif not self.random_drop_auxiliary_input_mask:
@@ -3055,6 +3117,8 @@ class CleanLearner:
                 finally:
                     if self.concrete_random_drop_auxiliary:
                         random_capturer.kl80_auxiliary_enabled = False
+                    if self.kl_auxiliary_force_main_open:
+                        self.mac.set_dynamic_branch_gate_force_open(False)
                     if self.random_drop_auxiliary_input_mask:
                         self.mac.set_random_drop_auxiliary_input_keep_probability(None)
                     else:
@@ -3403,7 +3467,8 @@ class CleanLearner:
                     * temporal_param_auxiliary_loss
                 )
             loss = (
-                td_loss
+                self.main_td_coef * td_loss
+                + self.nomask_td_auxiliary_coef * nomask_td_loss
                 + self.mixer_kl80_auxiliary_coef * mixer_kl80_td_loss
                 + mixer_kl80_prior_coef * mixer_kl80_prior_loss
                 + random_drop_auxiliary_coef * random_drop_auxiliary_loss
@@ -3647,6 +3712,20 @@ class CleanLearner:
                 if gate_diagnostics.trajectories:
                     self.last_train_gate_image_t = t_env
             self.logger.log_stat("loss_td", td_loss.item(), t_env)
+            self.logger.log_stat(
+                "weighted_loss_main_td",
+                self.main_td_coef * td_loss.item(),
+                t_env,
+            )
+            if self.nomask_td_auxiliary_coef > 0.0:
+                self.logger.log_stat(
+                    "loss_nomask_td_auxiliary", nomask_td_loss.item(), t_env
+                )
+                self.logger.log_stat(
+                    "weighted_loss_nomask_td_auxiliary",
+                    self.nomask_td_auxiliary_coef * nomask_td_loss.item(),
+                    t_env,
+                )
             if self.mixer_kl80_auxiliary_active:
                 weighted_mixer_td = (
                     self.mixer_kl80_auxiliary_coef * mixer_kl80_td_loss.item()

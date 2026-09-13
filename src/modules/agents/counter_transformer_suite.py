@@ -144,6 +144,43 @@ ABLATION_PROFILES = {
         "aux": "kl80",
         "test_soft_gate": True,
     },
+    # Loss-composition study. The ordinary learner pass is L_mask when a
+    # learned gate exists and L_nomask otherwise. Optional clean and KL80
+    # passes reuse the same replay batch, actions, mixer and detached target.
+    "relation_lnomask_lmask": {
+        "gate": True, "relation": True, "nomask_td_coef": 1.0,
+    },
+    "kl80_ltd_lkl_only": {
+        "aux": "kl80", "main_td_coef": 0.0,
+    },
+    "relation_all4": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0, "aux_force_main_open": True,
+    },
+    "relation_lnomask_lmask_testopen": {
+        "gate": True, "relation": True, "nomask_td_coef": 1.0,
+        "test_open": True,
+    },
+    "relation_all4_testopen": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0, "aux_force_main_open": True,
+        "test_open": True,
+    },
+    "relation_all4_sigmoid": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0, "aux_force_main_open": True,
+        "relation_objective": "l1_sigmoid",
+    },
+    "relation_all4_relcoef10": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0, "aux_force_main_open": True,
+        "relation_coef": 10.0,
+    },
+    "relation_all4_relcoef01": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0, "aux_force_main_open": True,
+        "relation_coef": 0.1,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
@@ -220,6 +257,13 @@ def experiment_overrides(label, domain="grf"):
         "clean_mask_parameter_relation_perturbed_head_coef": 0.0,
         "clean_mask_parameter_relation_gate_regularization_coef": 0.0,
         "clean_random_drop_auxiliary_coef": float(bool(flags.get("aux"))),
+        "clean_main_td_coef": flags.get("main_td_coef", 1.0),
+        "clean_nomask_td_auxiliary_coef": flags.get(
+            "nomask_td_coef", 0.0
+        ),
+        "clean_kl_auxiliary_force_main_open": bool(
+            flags.get("aux_force_main_open")
+        ),
         "clean_mixer_kl80_auxiliary_coef": flags.get(
             "mixer_aux_coef", float(bool(flags.get("mixer_aux")))
         ),

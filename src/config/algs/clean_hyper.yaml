@@ -1032,6 +1032,14 @@ clean_train_gate_diagnostics: True
 clean_train_gate_image_interval: 50000
 clean_train_gate_image_max_steps: 200
 
+# Explicit TD-path coefficients for the relation loss-composition ablation.
+# The standard pass is masked whenever the selected profile has a main gate.
+clean_main_td_coef: 1.0
+clean_nomask_td_auxiliary_coef: 0.0
+# Make the independent KL80 observation path start from full observation
+# rather than multiplying it by the learned main mask.
+clean_kl_auxiliary_force_main_open: False
+
 # Learned auxiliary gate's Bernoulli KL prior (keep probability, not drop).
 clean_kl_auxiliary_prior: 0.8
 # Optional Transformer-only value-decomposition auxiliary.  A state-conditioned
