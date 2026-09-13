@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Submit three relation/mixer methods on Counter, MMM2 and 3s5z.
 
-All mutable runtime output is routed to /fred by default. Existing active jobs
+All mutable runtime output is routed to the user's home quota by default.
+Existing active jobs
 with the same name and repository workdir are retained; nothing is cancelled.
 DRY_RUN=YES prints the full nine-job plan without filesystem or Slurm writes.
 """
@@ -59,7 +60,7 @@ def build_selected_plans(repo):
     return plans
 
 
-def route_runtime_to_fred(plans, runtime_root):
+def route_runtime(plans, runtime_root):
     if not runtime_root.is_absolute():
         raise ValueError("RUNTIME_ROOT must be an absolute path")
     paths = {
@@ -106,17 +107,18 @@ def main():
     )).resolve()
     runtime_root = Path(os.environ.get(
         "RUNTIME_ROOT",
-        "/fred/oz501/kyang/gomarl-runtime/gomarl-dual-branch",
+        "/home/kyang/gomarl-runtime/gomarl-dual-branch",
     ))
     plans = build_selected_plans(repo)
-    paths = route_runtime_to_fred(plans, runtime_root)
+    paths = route_runtime(plans, runtime_root)
     if os.environ.get("DRY_RUN") == "YES":
         print(json.dumps(plans, indent=2))
         return
 
-    if not str(runtime_root).startswith("/fred/"):
+    allowed_roots = ("/home/kyang/", "/fred/oz501/kyang/")
+    if not any(str(runtime_root).startswith(root) for root in allowed_roots):
         raise RuntimeError(
-            "Refusing OzSTAR run outside /fred; set an explicit /fred RUNTIME_ROOT"
+            "Refusing runtime output outside /home/kyang or /fred/oz501/kyang"
         )
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)
