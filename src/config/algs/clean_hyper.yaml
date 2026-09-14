@@ -1039,6 +1039,10 @@ clean_nomask_td_auxiliary_coef: 0.0
 # Make the independent KL80 observation path start from full observation
 # rather than multiplying it by the learned main mask.
 clean_kl_auxiliary_force_main_open: False
+# Teacher/student gradient routing control. The no-mask TD objective updates
+# only the shared policy/value parameters; masked TD, KL and relation
+# objectives update only the observation gates.
+clean_mask_nomask_gradient_separation: False
 
 # Learned auxiliary gate's Bernoulli KL prior (keep probability, not drop).
 clean_kl_auxiliary_prior: 0.8

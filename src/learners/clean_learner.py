@@ -381,6 +381,9 @@ class CleanLearner:
         self.nomask_td_auxiliary_coef = float(
             getattr(args, "clean_nomask_td_auxiliary_coef", 0.0)
         )
+        self.mask_nomask_gradient_separation = bool(
+            getattr(args, "clean_mask_nomask_gradient_separation", False)
+        )
         self.kl_auxiliary_force_main_open = bool(
             getattr(args, "clean_kl_auxiliary_force_main_open", False)
         )
@@ -457,6 +460,45 @@ class CleanLearner:
             for parameter in self.params
             if id(parameter) not in gate_parameter_ids
         )
+        self.gradient_separation_gate_parameters = ()
+        self.gradient_separation_non_gate_parameters = tuple(self.params)
+        if self.mask_nomask_gradient_separation:
+            if self.nomask_td_auxiliary_coef <= 0.0:
+                raise ValueError(
+                    "Mask/no-mask gradient separation requires a positive "
+                    "no-mask TD coefficient"
+                )
+            relation_capturer = getattr(
+                self.mac.agent, "rpg_relation_capturer", None
+            )
+            gate_modules = (
+                getattr(relation_capturer, "dynamic_branch_gate", None),
+                getattr(relation_capturer, "kl80_auxiliary_gate", None),
+            )
+            separated_gates = []
+            seen_gate_ids = set()
+            for module in gate_modules:
+                if module is None:
+                    continue
+                for parameter in module.parameters():
+                    if not parameter.requires_grad or id(parameter) in seen_gate_ids:
+                        continue
+                    separated_gates.append(parameter)
+                    seen_gate_ids.add(id(parameter))
+            self.gradient_separation_gate_parameters = tuple(separated_gates)
+            if not self.gradient_separation_gate_parameters:
+                raise RuntimeError(
+                    "Mask/no-mask gradient separation requires trainable gates"
+                )
+            self.gradient_separation_non_gate_parameters = tuple(
+                parameter
+                for parameter in self.params
+                if id(parameter) not in seen_gate_ids
+            )
+            if not self.gradient_separation_non_gate_parameters:
+                raise RuntimeError(
+                    "Mask/no-mask gradient separation has no teacher parameters"
+                )
         self.mask_parameter_relation_group_ids = None
         if self.mask_parameter_relation_group_distance:
             relation_capturer = getattr(
@@ -864,7 +906,9 @@ class CleanLearner:
         )
         return freeze_steps > 0 and int(t_env) >= freeze_steps
 
-    def _backward_parameters_only(self, loss, parameters):
+    def _backward_parameters_only(
+        self, loss, parameters, require_any_gradient=True
+    ):
         """Differentiate one loss only with respect to the selected parameters."""
         parameters = tuple(parameters)
         if not parameters:
@@ -876,11 +920,33 @@ class CleanLearner:
             allow_unused=True,
         )
         if not any(gradient is not None for gradient in gradients):
-            raise RuntimeError("Selected parameters are disconnected from the loss")
+            if require_any_gradient:
+                raise RuntimeError(
+                    "Selected parameters are disconnected from the loss"
+                )
+            return False
         for parameter, gradient in zip(parameters, gradients):
             if gradient is None:
                 continue
             parameter.grad = gradient.detach().clone()
+        return True
+
+    def _backward_mask_nomask_gradient_separated(
+        self,
+        nomask_teacher_loss,
+        masked_gate_loss,
+        require_gate_gradient=True,
+    ):
+        """Route teacher TD and masked objectives to disjoint parameters."""
+        self._backward_parameters_only(
+            nomask_teacher_loss,
+            self.gradient_separation_non_gate_parameters,
+        )
+        self._backward_parameters_only(
+            masked_gate_loss,
+            self.gradient_separation_gate_parameters,
+            require_any_gradient=require_gate_gradient,
+        )
 
     def _importance_training_phase(self, t_env):
         """Return the current phase of optional environment-step alternation."""
@@ -3466,9 +3532,8 @@ class CleanLearner:
                     temporal_param_auxiliary_coef
                     * temporal_param_auxiliary_loss
                 )
-            loss = (
+            shared_loss_without_nomask = (
                 self.main_td_coef * td_loss
-                + self.nomask_td_auxiliary_coef * nomask_td_loss
                 + self.mixer_kl80_auxiliary_coef * mixer_kl80_td_loss
                 + mixer_kl80_prior_coef * mixer_kl80_prior_loss
                 + random_drop_auxiliary_coef * random_drop_auxiliary_loss
@@ -3489,6 +3554,10 @@ class CleanLearner:
                 + self.td_weighted_parameter_likelihood_coef
                 * td_weighted_parameter_likelihood_loss
             )
+            nomask_teacher_loss = (
+                self.nomask_td_auxiliary_coef * nomask_td_loss
+            )
+            loss = shared_loss_without_nomask + nomask_teacher_loss
 
         parameter_sensitivity_score = None
         if (
@@ -3534,7 +3603,21 @@ class CleanLearner:
             semantic_router.semantic_route_probe.grad = None
         if self.use_amp:
             semantic_gradient_scale = float(self.amp_scaler.get_scale())
-            if importance_training_phase == "non_gate_td":
+            if self.mask_nomask_gradient_separation:
+                separated_gate_loss = shared_loss_without_nomask
+                if gate_only_importance_loss is not None:
+                    separated_gate_loss = (
+                        separated_gate_loss + gate_only_importance_loss
+                    )
+                self._backward_mask_nomask_gradient_separated(
+                    nomask_teacher_loss,
+                    separated_gate_loss,
+                    require_gate_gradient=(
+                        t_env >= self.importance_auxiliary_warmup_steps
+                        and not dynamic_gate_training_frozen
+                    ),
+                )
+            elif importance_training_phase == "non_gate_td":
                 self._backward_parameters_only(
                     td_loss, self.importance_non_gate_parameters
                 )
@@ -3576,7 +3659,21 @@ class CleanLearner:
             self.amp_scaler.step(self.optimiser)
             self.amp_scaler.update()
         else:
-            if importance_training_phase == "non_gate_td":
+            if self.mask_nomask_gradient_separation:
+                separated_gate_loss = shared_loss_without_nomask
+                if gate_only_importance_loss is not None:
+                    separated_gate_loss = (
+                        separated_gate_loss + gate_only_importance_loss
+                    )
+                self._backward_mask_nomask_gradient_separated(
+                    nomask_teacher_loss,
+                    separated_gate_loss,
+                    require_gate_gradient=(
+                        t_env >= self.importance_auxiliary_warmup_steps
+                        and not dynamic_gate_training_frozen
+                    ),
+                )
+            elif importance_training_phase == "non_gate_td":
                 self._backward_parameters_only(
                     td_loss, self.importance_non_gate_parameters
                 )

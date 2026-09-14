@@ -181,6 +181,14 @@ ABLATION_PROFILES = {
         "nomask_td_coef": 1.0, "aux_force_main_open": True,
         "relation_coef": 0.1,
     },
+    # Matched relcoef=.1 control with teacher/student gradient routing:
+    # the full-observation TD pass updates only the shared policy/value
+    # parameters, while every masked/KL/relation objective updates only gates.
+    "relation_all4_relcoef01_gradsep": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0, "aux_force_main_open": True,
+        "relation_coef": 0.1, "gradient_separation": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
@@ -263,6 +271,9 @@ def experiment_overrides(label, domain="grf"):
         ),
         "clean_kl_auxiliary_force_main_open": bool(
             flags.get("aux_force_main_open")
+        ),
+        "clean_mask_nomask_gradient_separation": bool(
+            flags.get("gradient_separation")
         ),
         "clean_mixer_kl80_auxiliary_coef": flags.get(
             "mixer_aux_coef", float(bool(flags.get("mixer_aux")))
