@@ -172,6 +172,13 @@ ABLATION_PROFILES = {
         "nomask_td_coef": 1.0, "aux_force_main_open": True,
         "test_open": True,
     },
+    # Same training recipe as relation_all4_testopen, but preserve the normal
+    # learned gate in the first evaluation and add a second force-open pass.
+    "relation_all4_dualtest": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0, "aux_force_main_open": True,
+        "dual_gate_test": True,
+    },
     "relation_all4_sigmoid": {
         "gate": True, "relation": True, "aux": "kl80",
         "nomask_td_coef": 1.0, "aux_force_main_open": True,
@@ -247,6 +254,7 @@ SMAC_PROFILES = (
     "relation_advantage_kl80aux",
     "relation_advantage_kl80aux_mixer_coef001",
     "relation_trajectory_agent_kl80aux",
+    "relation_all4_dualtest",
 )
 
 
