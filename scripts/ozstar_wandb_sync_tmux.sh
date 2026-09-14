@@ -48,7 +48,8 @@ command -v tmux >/dev/null || { echo "tmux is not available on this host" >&2; e
 case "$ACTION" in
   start)
     if tmux has-session -t "=$SESSION_NAME" 2>/dev/null; then
-      pane_dead=$(tmux display-message -p -t "=$SESSION_NAME" '#{pane_dead}')
+      pane_dead=$(tmux display-message -p \
+        -t "$SESSION_NAME:wandb-sync" '#{pane_dead}')
       if [[ "$pane_dead" == "1" ]]; then
         tmux kill-session -t "=$SESSION_NAME"
       else
@@ -80,12 +81,13 @@ case "$ACTION" in
     # shell with the loop. A startup failure is therefore inspectable instead
     # of destroying the last tmux server and losing the error message.
     tmux new-session -d -s "$SESSION_NAME" -n wandb-sync
-    tmux set-option -t "=$SESSION_NAME" remain-on-exit on
+    tmux set-window-option -t "$SESSION_NAME:wandb-sync" remain-on-exit on
     printf -v launched_command 'exec %s >> %q 2>&1' \
       "$loop_command" "$SYNC_LOG"
     tmux respawn-pane -k -t "$SESSION_NAME:wandb-sync" "$launched_command"
     sleep 1
-    pane_dead=$(tmux display-message -p -t "=$SESSION_NAME:wandb-sync" '#{pane_dead}')
+    pane_dead=$(tmux display-message -p \
+      -t "$SESSION_NAME:wandb-sync" '#{pane_dead}')
     if [[ "$pane_dead" == "1" ]]; then
       echo "ERROR: sync loop exited during startup; session retained: $SESSION_NAME" >&2
       echo "Log: $SYNC_LOG" >&2
