@@ -72,7 +72,7 @@ def main():
     learner.train(batch, t_env=300000, episode_num=1)
     assert logger.stats["loss_td"][-1][1] > 0.0
     assert logger.stats["loss_nomask_td_auxiliary"][-1][1] > 0.0
-    assert logger.stats["loss_random_drop_auxiliary"][-1][1] > 0.0
+    assert logger.stats["loss_random_drop_td_auxiliary"][-1][1] > 0.0
     assert logger.stats["loss_mask_parameter_relation"][-1][1] >= 0.0
 
     # Before the 250k gate warm-up ends, the gate is intentionally force-open

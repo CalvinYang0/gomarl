@@ -387,6 +387,9 @@ class CleanLearner:
         self.kl_auxiliary_force_main_open = bool(
             getattr(args, "clean_kl_auxiliary_force_main_open", False)
         )
+        self.kl_auxiliary_td_gate_only = bool(
+            getattr(args, "clean_kl_auxiliary_td_gate_only", False)
+        )
         self.random_drop_auxiliary_scope = str(
             getattr(args, "clean_random_drop_auxiliary_scope", "episode")
         ).lower()
@@ -412,6 +415,18 @@ class CleanLearner:
         if self.kl_auxiliary_force_main_open and not self.concrete_random_drop_auxiliary:
             raise ValueError(
                 "clean_kl_auxiliary_force_main_open requires a Concrete KL auxiliary"
+            )
+        if self.kl_auxiliary_td_gate_only and not self.kl80_random_drop_auxiliary:
+            raise ValueError(
+                "clean_kl_auxiliary_td_gate_only requires a learned KL auxiliary"
+            )
+        if (
+            self.kl_auxiliary_td_gate_only
+            and self.mask_nomask_gradient_separation
+        ):
+            raise ValueError(
+                "KL-TD gate-only routing and full mask/no-mask gradient "
+                "separation cannot be enabled together"
             )
         if self.random_drop_auxiliary_scope not in {"episode", "timestep"}:
             raise ValueError(
@@ -498,6 +513,36 @@ class CleanLearner:
             if not self.gradient_separation_non_gate_parameters:
                 raise RuntimeError(
                     "Mask/no-mask gradient separation has no teacher parameters"
+                )
+        self.kl_auxiliary_td_gate_only_parameters = ()
+        if self.kl_auxiliary_td_gate_only:
+            relation_capturer = getattr(
+                self.mac.agent, "rpg_relation_capturer", None
+            )
+            dynamic_gate = getattr(
+                relation_capturer, "dynamic_branch_gate", None
+            )
+            auxiliary_gate = getattr(
+                relation_capturer, "kl80_auxiliary_gate", None
+            )
+            if dynamic_gate is None or auxiliary_gate is None:
+                raise RuntimeError(
+                    "KL-TD gate-only routing requires main and auxiliary gates"
+                )
+            isolated_parameters = []
+            seen_isolated_ids = set()
+            for module in (dynamic_gate, auxiliary_gate):
+                for parameter in module.parameters():
+                    if not parameter.requires_grad or id(parameter) in seen_isolated_ids:
+                        continue
+                    isolated_parameters.append(parameter)
+                    seen_isolated_ids.add(id(parameter))
+            self.kl_auxiliary_td_gate_only_parameters = tuple(
+                isolated_parameters
+            )
+            if not self.kl_auxiliary_td_gate_only_parameters:
+                raise RuntimeError(
+                    "KL-TD gate-only routing has no trainable gate parameters"
                 )
         self.mask_parameter_relation_group_ids = None
         if self.mask_parameter_relation_group_distance:
@@ -844,21 +889,29 @@ class CleanLearner:
         return coefficient
 
     def _backward_main_and_gate_only_auxiliary(
-        self, main_loss, gate_only_auxiliary_loss=None
+        self,
+        main_loss,
+        gate_only_auxiliary_loss=None,
+        gate_parameters=None,
     ):
-        """Backpropagate an auxiliary objective only into the dynamic gate.
+        """Backpropagate an auxiliary objective only into selected gates.
 
         The main loss keeps its ordinary gradient path through every trainable
         parameter, including the gate. The separate auxiliary graph is then
         differentiated only with respect to gate parameters, so parameter
-        stability cannot flatten the condition encoder or hypernetwork merely
-        to reduce its own loss.
+        stability/corruption cannot flatten the condition encoder,
+        hypernetwork or mixer merely to reduce its own loss.
         """
         auxiliary_active = (
             gate_only_auxiliary_loss is not None
             and gate_only_auxiliary_loss.requires_grad
         )
-        if auxiliary_active and not self.importance_gate_parameters:
+        selected_gate_parameters = (
+            self.importance_gate_parameters
+            if gate_parameters is None
+            else tuple(gate_parameters)
+        )
+        if auxiliary_active and not selected_gate_parameters:
             raise RuntimeError(
                 "Gate-only auxiliary backward has no trainable gate parameters"
             )
@@ -877,7 +930,7 @@ class CleanLearner:
         )
         auxiliary_gradients = th.autograd.grad(
             scaled_auxiliary_loss,
-            self.importance_gate_parameters,
+            selected_gate_parameters,
             allow_unused=True,
         )
         if not any(gradient is not None for gradient in auxiliary_gradients):
@@ -885,7 +938,7 @@ class CleanLearner:
                 "Importance auxiliary loss is disconnected from the dynamic gate"
             )
         for parameter, gradient in zip(
-            self.importance_gate_parameters, auxiliary_gradients
+            selected_gate_parameters, auxiliary_gradients
         ):
             if gradient is None:
                 continue
@@ -3532,12 +3585,40 @@ class CleanLearner:
                     temporal_param_auxiliary_coef
                     * temporal_param_auxiliary_loss
                 )
+            if (
+                self.kl_auxiliary_td_gate_only
+                and random_drop_auxiliary_enabled
+            ):
+                isolated_kl_auxiliary_loss = (
+                    random_drop_auxiliary_coef
+                    * random_drop_auxiliary_loss
+                    + kl80_random_auxiliary_coef
+                    * kl80_random_auxiliary_loss
+                )
+                gate_only_importance_loss = (
+                    isolated_kl_auxiliary_loss
+                    if gate_only_importance_loss is None
+                    else gate_only_importance_loss
+                    + isolated_kl_auxiliary_loss
+                )
+            shared_random_drop_auxiliary_coef = (
+                0.0
+                if self.kl_auxiliary_td_gate_only
+                else random_drop_auxiliary_coef
+            )
+            shared_kl80_random_auxiliary_coef = (
+                0.0
+                if self.kl_auxiliary_td_gate_only
+                else kl80_random_auxiliary_coef
+            )
             shared_loss_without_nomask = (
                 self.main_td_coef * td_loss
                 + self.mixer_kl80_auxiliary_coef * mixer_kl80_td_loss
                 + mixer_kl80_prior_coef * mixer_kl80_prior_loss
-                + random_drop_auxiliary_coef * random_drop_auxiliary_loss
-                + kl80_random_auxiliary_coef * kl80_random_auxiliary_loss
+                + shared_random_drop_auxiliary_coef
+                * random_drop_auxiliary_loss
+                + shared_kl80_random_auxiliary_coef
+                * kl80_random_auxiliary_loss
                 + gate_auxiliary_coef * aux_loss
                 + float(
                     getattr(self.args, "clean_relation_teacher_td_coef", 0.0)
@@ -3632,7 +3713,13 @@ class CleanLearner:
                 )
             else:
                 self._backward_main_and_gate_only_auxiliary(
-                    loss, gate_only_importance_loss
+                    loss,
+                    gate_only_importance_loss,
+                    gate_parameters=(
+                        self.kl_auxiliary_td_gate_only_parameters
+                        if self.kl_auxiliary_td_gate_only
+                        else None
+                    ),
                 )
             self.amp_scaler.unscale_(self.optimiser)
             semantic_gradient = (
@@ -3688,7 +3775,13 @@ class CleanLearner:
                 )
             else:
                 self._backward_main_and_gate_only_auxiliary(
-                    loss, gate_only_importance_loss
+                    loss,
+                    gate_only_importance_loss,
+                    gate_parameters=(
+                        self.kl_auxiliary_td_gate_only_parameters
+                        if self.kl_auxiliary_td_gate_only
+                        else None
+                    ),
                 )
             semantic_gradient = (
                 None

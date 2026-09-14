@@ -14,6 +14,12 @@ PROFILES = {
     },
     "kl80": {"gate": True, "kl": True},
     "relation_kl80aux": {"gate": True, "relation": True, "aux": "kl80"},
+    # Keep the KL80 corrupted TD path as gate supervision without allowing it
+    # to adapt the shared policy, hypernetwork or mixer to that corruption.
+    "relation_kl80aux_kltd_gateonly": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "kl_auxiliary_td_gate_only": True,
+    },
     "relation_temporal_kl80aux": {
         "gate": True, "relation": True, "temporal": True, "aux": "kl80",
     },
@@ -271,6 +277,9 @@ def experiment_overrides(label, domain="grf"):
         ),
         "clean_kl_auxiliary_force_main_open": bool(
             flags.get("aux_force_main_open")
+        ),
+        "clean_kl_auxiliary_td_gate_only": bool(
+            flags.get("kl_auxiliary_td_gate_only")
         ),
         "clean_mask_nomask_gradient_separation": bool(
             flags.get("gradient_separation")
