@@ -338,6 +338,9 @@ class CleanLearner:
         self.advantage_margin_auxiliary_coef = float(
             getattr(args, "clean_advantage_margin_auxiliary_coef", 1.0)
         )
+        self.advantage_margin_weight_by_teacher = bool(
+            getattr(args, "clean_advantage_margin_weight_by_teacher", False)
+        )
         self.advantage_margin_delta = float(
             getattr(args, "clean_advantage_margin_delta", 0.1)
         )
@@ -1429,7 +1432,10 @@ class CleanLearner:
         valid = (
             valid_steps.bool() & teacher_valid & masked_valid
         ).to(masked_margin.dtype)
-        per_agent_loss = confidence * F.relu(
+        sample_weight = confidence
+        if self.advantage_margin_weight_by_teacher:
+            sample_weight = sample_weight * teacher_margin.detach().clamp(min=0.0)
+        per_agent_loss = sample_weight * F.relu(
             teacher_margin.detach()
             + self.advantage_margin_delta
             - masked_margin
@@ -1447,6 +1453,7 @@ class CleanLearner:
                 "masked_margin": (masked_margin * valid).sum()
                 / denominator,
                 "confidence": (confidence * valid).sum() / denominator,
+                "sample_weight": (sample_weight * valid).sum() / denominator,
                 "action_agreement": (
                     (masked_greedy == teacher_actions.squeeze(-1))
                     .to(valid.dtype)

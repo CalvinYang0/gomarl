@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit three Counter gate experiments with mask-on/open paired evaluation.
+"""Submit five Counter gate experiments with mask-on/open paired evaluation.
 
 All mutable output is routed to the personal home runtime. Active same-name
 jobs from this repository are retained, and unrelated jobs are never cancelled.
@@ -19,6 +19,8 @@ from ozstar_submit_relation_advantage_mixer_nine import route_runtime
 LABELS = (
     "relation_advantage_margin_kl80aux",
     "relation_advantage_margin_kl80aux_gradsep",
+    "relation_advantage_weighted_kl80aux",
+    "relation_advantage_weighted_kl80aux_gradsep",
     "relation_kl80aux_kltd_gateonly",
 )
 SMOKE_TESTS = (
@@ -34,10 +36,12 @@ def main():
     runtime_root = Path(os.environ.get(
         "RUNTIME_ROOT", "/home/kyang/gomarl-runtime/gomarl-dual-branch"
     ))
-    os.environ.setdefault("RUN_SUFFIX", "_home1")
+    # Keep this five-way comparison distinct from any three-way jobs that may
+    # already be active from the preceding implementation revision.
+    os.environ.setdefault("RUN_SUFFIX", "_home1_advw")
     plans = build_plans(repo, LABELS)
     if tuple(plan["label"] for plan in plans) != LABELS:
-        raise RuntimeError("Three-model Counter selection changed")
+        raise RuntimeError("Five-model Counter selection changed")
     paths = route_runtime(plans, runtime_root)
     if os.environ.get("DRY_RUN") == "YES":
         print(json.dumps(plans, indent=2))

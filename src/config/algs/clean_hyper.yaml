@@ -1052,6 +1052,9 @@ clean_mask_nomask_gradient_separation: False
 # mask is trained to preserve that action with a larger margin.
 clean_advantage_margin_auxiliary: False
 clean_advantage_margin_auxiliary_coef: 1.0
+# Multiply each hinge term by the detached normalized full-observation
+# advantage. This emphasizes high-confidence/high-margin teacher decisions.
+clean_advantage_margin_weight_by_teacher: False
 clean_advantage_margin_delta: 0.1
 clean_advantage_margin_confidence_threshold: 0.05
 clean_advantage_margin_confidence_temperature: 0.1

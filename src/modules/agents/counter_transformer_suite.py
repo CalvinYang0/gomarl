@@ -210,6 +210,21 @@ ABLATION_PROFILES = {
         "aux_force_main_open": True, "advantage_margin": True,
         "gradient_separation": True, "dual_gate_test": True,
     },
+    # Same objective, but high-Advantage full-observation decisions carry
+    # proportionally more gate supervision than ambiguous decisions.
+    "relation_advantage_weighted_kl80aux": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0,
+        "aux_force_main_open": True, "advantage_margin": True,
+        "advantage_weighted": True, "dual_gate_test": True,
+    },
+    "relation_advantage_weighted_kl80aux_gradsep": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0,
+        "aux_force_main_open": True, "advantage_margin": True,
+        "advantage_weighted": True,
+        "gradient_separation": True, "dual_gate_test": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
@@ -301,6 +316,9 @@ def experiment_overrides(label, domain="grf"):
         ),
         "clean_advantage_margin_auxiliary": bool(
             flags.get("advantage_margin")
+        ),
+        "clean_advantage_margin_weight_by_teacher": bool(
+            flags.get("advantage_weighted")
         ),
         "clean_dual_gate_test": bool(flags.get("dual_gate_test")),
         "clean_mixer_kl80_auxiliary_coef": flags.get(

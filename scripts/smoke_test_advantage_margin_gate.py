@@ -22,6 +22,8 @@ from utils.logging import Logger
 LABELS = (
     "relation_advantage_margin_kl80aux",
     "relation_advantage_margin_kl80aux_gradsep",
+    "relation_advantage_weighted_kl80aux",
+    "relation_advantage_weighted_kl80aux_gradsep",
 )
 
 
@@ -55,6 +57,32 @@ def check_gradient_router(learner, separated):
         gate.grad.reshape(-1)[0], gate.new_tensor(expected_gate)
     )
     learner.optimiser.zero_grad()
+
+
+def check_teacher_advantage_weighting(learner):
+    full_values = th.tensor([[[[4.0, 0.0, 0.0]]]])
+    masked_values = th.tensor(
+        [[[[1.0, 0.9, 0.0]]]], requires_grad=True
+    )
+    available = th.ones_like(full_values, dtype=th.int)
+    valid = th.ones(1, 1, 1, dtype=th.bool)
+    learner.advantage_margin_weight_by_teacher = False
+    plain_loss, plain_stats = learner._advantage_margin_gate_loss(
+        masked_values, full_values, available, valid
+    )
+    learner.advantage_margin_weight_by_teacher = True
+    weighted_loss, weighted_stats = learner._advantage_margin_gate_loss(
+        masked_values, full_values, available, valid
+    )
+    teacher_advantage = weighted_stats["teacher_margin"]
+    assert teacher_advantage.item() > 1.0
+    assert th.allclose(
+        weighted_loss,
+        plain_loss * teacher_advantage,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    assert weighted_stats["sample_weight"] > plain_stats["sample_weight"]
 
 
 def check_dual_test_logging_contract():
@@ -119,6 +147,9 @@ def check_profile(label):
         label, sorted(missing)
     )
     assert overrides["clean_advantage_margin_auxiliary"] is True
+    assert overrides["clean_advantage_margin_weight_by_teacher"] is (
+        "_weighted_" in label
+    )
     assert overrides["clean_dual_gate_test"] is True
     assert math.isclose(overrides["clean_main_td_coef"], 1.0)
     assert math.isclose(overrides["clean_nomask_td_auxiliary_coef"], 1.0)
@@ -133,6 +164,9 @@ def check_profile(label):
     _, learner, batch, logger = make_case(label)
     assert learner.advantage_margin_auxiliary_active
     check_gradient_router(learner, label.endswith("_gradsep"))
+    if "_weighted_" in label:
+        check_teacher_advantage_weighting(learner)
+        learner.advantage_margin_weight_by_teacher = True
     learner.train(batch, t_env=500000, episode_num=3)
     assert logger.stats["loss_advantage_margin"][-1][1] >= 0.0
     assert logger.stats["weighted_loss_advantage_margin"][-1][1] >= 0.0
@@ -146,6 +180,7 @@ def check_profile(label):
         "teacher_margin",
         "masked_margin",
         "confidence",
+        "sample_weight",
         "action_agreement",
     ):
         value = logger.stats[
@@ -162,8 +197,8 @@ def main():
     for label in LABELS:
         check_profile(label)
     print(
-        "Counter Advantage-margin joint/gradient-separated profiles and "
-        "dual test logging: OK"
+        "Counter Advantage-margin/weighted, joint/gradient-separated "
+        "profiles and dual test logging: OK"
     )
 
 
