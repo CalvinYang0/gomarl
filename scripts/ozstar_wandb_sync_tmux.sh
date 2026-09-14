@@ -8,6 +8,7 @@ SESSION_NAME="${SESSION_NAME:-gomarl-wandb-sync}"
 INTERVAL_SECONDS="${INTERVAL_SECONDS:-600}"
 SYNC_TIMEOUT="${SYNC_TIMEOUT:-600}"
 ACTION="${1:-start}"
+WANDB_ROOT="${WANDB_ROOT:-wandb}"
 SYNC_LOG="${SYNC_LOG:-${WANDB_DIR:-$REPO_DIR}/ozstar_logs/${SESSION_NAME}.log}"
 
 [[ "$SESSION_NAME" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Invalid SESSION_NAME" >&2; exit 2; }
@@ -15,9 +16,15 @@ SYNC_LOG="${SYNC_LOG:-${WANDB_DIR:-$REPO_DIR}/ozstar_logs/${SESSION_NAME}.log}"
 
 if [[ "$ACTION" == "--loop" ]]; then
   cd "$REPO_DIR"
-  # Also prevent two login-node sessions from syncing this repo concurrently.
-  exec 9>"$REPO_DIR/.wandb-counter-sync-loop.lock"
-  flock -n 9 || { echo "Another sync loop holds this repository lock" >&2; exit 1; }
+  # Serialize only syncers that target the same W&B root. A legacy /fred
+  # uploader and the current /home uploader handle disjoint run directories
+  # and must not block one another merely because they share a checkout.
+  mkdir -p "$WANDB_ROOT"
+  exec 9>"$WANDB_ROOT/.gomarl-sync-loop.lock"
+  flock -n 9 || {
+    echo "Another sync loop holds the lock for WANDB_ROOT=$WANDB_ROOT" >&2
+    exit 1
+  }
   export REPO_DIR PYTHON_BIN SYNC_TIMEOUT
   export USER="$(id -un)"
   trap 'echo "Sync loop stopping; training jobs are untouched"; exit 0' INT TERM

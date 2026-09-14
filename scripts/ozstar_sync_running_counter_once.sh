@@ -18,8 +18,11 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   exit 2
 fi
 
-# Serialize manual and periodic uploads of this repository's active runs.
-exec 8>"$REPO_DIR/.wandb-counter-sync-once.lock"
+# Serialize manual and periodic uploads of the same W&B run root. Distinct
+# roots (for example a legacy /fred root and the active /home root) are safe
+# to upload independently.
+mkdir -p "$WANDB_ROOT"
+exec 8>"$WANDB_ROOT/.gomarl-sync-once.lock"
 if ! flock -n 8; then
   echo "Another Counter sync is in progress; skipping overlapping invocation"
   exit 0
