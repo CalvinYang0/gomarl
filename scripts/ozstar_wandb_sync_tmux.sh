@@ -83,7 +83,7 @@ case "$ACTION" in
     tmux set-option -t "=$SESSION_NAME" remain-on-exit on
     printf -v launched_command 'exec %s >> %q 2>&1' \
       "$loop_command" "$SYNC_LOG"
-    tmux send-keys -t "=$SESSION_NAME:wandb-sync" "$launched_command" C-m
+    tmux respawn-pane -k -t "$SESSION_NAME:wandb-sync" "$launched_command"
     sleep 1
     pane_dead=$(tmux display-message -p -t "=$SESSION_NAME:wandb-sync" '#{pane_dead}')
     if [[ "$pane_dead" == "1" ]]; then
