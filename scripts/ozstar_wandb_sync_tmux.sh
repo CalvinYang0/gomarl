@@ -8,6 +8,7 @@ SESSION_NAME="${SESSION_NAME:-gomarl-wandb-sync}"
 INTERVAL_SECONDS="${INTERVAL_SECONDS:-600}"
 SYNC_TIMEOUT="${SYNC_TIMEOUT:-600}"
 ACTION="${1:-start}"
+SYNC_LOG="${SYNC_LOG:-${WANDB_DIR:-$REPO_DIR}/ozstar_logs/${SESSION_NAME}.log}"
 
 [[ "$SESSION_NAME" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Invalid SESSION_NAME" >&2; exit 2; }
 [[ "$INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]] || { echo "INTERVAL_SECONDS must be positive" >&2; exit 2; }
@@ -47,9 +48,14 @@ command -v tmux >/dev/null || { echo "tmux is not available on this host" >&2; e
 case "$ACTION" in
   start)
     if tmux has-session -t "=$SESSION_NAME" 2>/dev/null; then
-      echo "Session already exists; not starting a duplicate: $SESSION_NAME"
-      echo "View it: tmux attach -t $SESSION_NAME"
-      exit 0
+      pane_dead=$(tmux display-message -p -t "=$SESSION_NAME" '#{pane_dead}')
+      if [[ "$pane_dead" == "1" ]]; then
+        tmux kill-session -t "=$SESSION_NAME"
+      else
+        echo "Session already exists; not starting a duplicate: $SESSION_NAME"
+        echo "View it: tmux attach -t $SESSION_NAME"
+        exit 0
+      fi
     fi
     cd "$REPO_DIR"
     REPO_DIR="$(pwd -P)"
@@ -58,6 +64,7 @@ case "$ACTION" in
     for program in flock timeout squeue scontrol; do
       command -v "$program" >/dev/null || { echo "Required command missing: $program" >&2; exit 2; }
     done
+    mkdir -p "$(dirname "$SYNC_LOG")"
     # Explicit env propagation also works with a tmux server started long ago.
     printf -v loop_command '%q ' env "REPO_DIR=$REPO_DIR" "PYTHON_BIN=$PYTHON_BIN" \
       "SESSION_NAME=$SESSION_NAME" "INTERVAL_SECONDS=$INTERVAL_SECONDS" "SYNC_TIMEOUT=$SYNC_TIMEOUT" \
@@ -69,9 +76,25 @@ case "$ACTION" in
       "WANDB_DATA_DIR=${WANDB_DATA_DIR:-$REPO_DIR/.wandb-data}" \
       "TMPDIR=${TMPDIR:-/tmp}" \
       bash "$REPO_DIR/scripts/ozstar_wandb_sync_tmux.sh" --loop
-    tmux new-session -d -s "$SESSION_NAME" -n wandb-sync "$loop_command"
+    # Create the pane first, enable remain-on-exit, and only then replace its
+    # shell with the loop. A startup failure is therefore inspectable instead
+    # of destroying the last tmux server and losing the error message.
+    tmux new-session -d -s "$SESSION_NAME" -n wandb-sync
+    tmux set-option -t "=$SESSION_NAME" remain-on-exit on
+    printf -v launched_command 'exec %s >> %q 2>&1' \
+      "$loop_command" "$SYNC_LOG"
+    tmux send-keys -t "=$SESSION_NAME:wandb-sync" "$launched_command" C-m
+    sleep 1
+    pane_dead=$(tmux display-message -p -t "=$SESSION_NAME:wandb-sync" '#{pane_dead}')
+    if [[ "$pane_dead" == "1" ]]; then
+      echo "ERROR: sync loop exited during startup; session retained: $SESSION_NAME" >&2
+      echo "Log: $SYNC_LOG" >&2
+      tail -n 80 "$SYNC_LOG" >&2 || true
+      exit 1
+    fi
     echo "Started $SESSION_NAME: sync now, then every ${INTERVAL_SECONDS}s; slow rounds never overlap."
     echo "View: tmux attach -t $SESSION_NAME (detach: Ctrl-b, then d)"
+    echo "Log: $SYNC_LOG"
     ;;
   attach) exec tmux attach-session -t "=$SESSION_NAME" ;;
   status) tmux list-panes -t "=$SESSION_NAME" -F '#{session_name}:#{window_name} #{pane_current_command} dead=#{pane_dead}' ;;
