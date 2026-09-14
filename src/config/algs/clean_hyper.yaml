@@ -1047,6 +1047,22 @@ clean_kl_auxiliary_td_gate_only: False
 # objectives update only the observation gates.
 clean_mask_nomask_gradient_separation: False
 
+# Gate-only decision-margin denoising. A detached full-observation action is
+# trusted in proportion to its normalized margin; the learned observation
+# mask is trained to preserve that action with a larger margin.
+clean_advantage_margin_auxiliary: False
+clean_advantage_margin_auxiliary_coef: 1.0
+clean_advantage_margin_delta: 0.1
+clean_advantage_margin_confidence_threshold: 0.05
+clean_advantage_margin_confidence_temperature: 0.1
+clean_advantage_margin_scale_eps: 0.000001
+clean_advantage_margin_warmup_steps: 250000
+clean_advantage_margin_ramp_steps: 250000
+
+# At every scheduled evaluation, log both the normal masked policy and the
+# same checkpoint with its learned observation gate forced fully open.
+clean_dual_gate_test: False
+
 # Learned auxiliary gate's Bernoulli KL prior (keep probability, not drop).
 clean_kl_auxiliary_prior: 0.8
 # Optional Transformer-only value-decomposition auxiliary.  A state-conditioned

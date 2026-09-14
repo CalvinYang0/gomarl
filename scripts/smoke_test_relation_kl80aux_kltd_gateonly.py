@@ -76,6 +76,7 @@ def main():
         LABEL, sorted(missing)
     )
     assert overrides["clean_kl_auxiliary_td_gate_only"] is True
+    assert overrides["clean_dual_gate_test"] is True
     assert overrides["clean_mask_nomask_gradient_separation"] is False
     assert math.isclose(overrides["clean_main_td_coef"], 1.0)
     assert math.isclose(overrides["clean_nomask_td_auxiliary_coef"], 0.0)

@@ -332,6 +332,45 @@ class CleanLearner:
             "grf_abs_dual_branch_binary_concrete_temporal_relation_stop_mask_hypercond",
         }
         self.mask_parameter_relation_active |= bool(self.counter_transformer_profile.get("relation"))
+        self.advantage_margin_auxiliary_active = bool(
+            getattr(args, "clean_advantage_margin_auxiliary", False)
+        )
+        self.advantage_margin_auxiliary_coef = float(
+            getattr(args, "clean_advantage_margin_auxiliary_coef", 1.0)
+        )
+        self.advantage_margin_delta = float(
+            getattr(args, "clean_advantage_margin_delta", 0.1)
+        )
+        self.advantage_margin_confidence_threshold = float(
+            getattr(args, "clean_advantage_margin_confidence_threshold", 0.05)
+        )
+        self.advantage_margin_confidence_temperature = float(
+            getattr(args, "clean_advantage_margin_confidence_temperature", 0.1)
+        )
+        self.advantage_margin_scale_eps = float(
+            getattr(args, "clean_advantage_margin_scale_eps", 1e-6)
+        )
+        self.advantage_margin_warmup_steps = max(
+            0,
+            int(getattr(args, "clean_advantage_margin_warmup_steps", 250000)),
+        )
+        self.advantage_margin_ramp_steps = max(
+            0,
+            int(getattr(args, "clean_advantage_margin_ramp_steps", 250000)),
+        )
+        for name in (
+            "advantage_margin_auxiliary_coef",
+            "advantage_margin_delta",
+            "advantage_margin_confidence_threshold",
+        ):
+            if getattr(self, name) < 0.0:
+                raise ValueError("{} must be non-negative".format(name))
+        if self.advantage_margin_confidence_temperature <= 0.0:
+            raise ValueError(
+                "clean_advantage_margin_confidence_temperature must be positive"
+            )
+        if self.advantage_margin_scale_eps <= 0.0:
+            raise ValueError("clean_advantage_margin_scale_eps must be positive")
         self.temporal_param_stability_active |= bool(self.counter_transformer_profile.get("temporal"))
         self.mask_parameter_relation_group_distance = model_type == (
             "grf_abs_dual_branch_binary_concrete_"
@@ -412,6 +451,14 @@ class CleanLearner:
             raise ValueError(
                 "clean_nomask_td_auxiliary_coef must be non-negative"
             )
+        if (
+            self.advantage_margin_auxiliary_active
+            and self.nomask_td_auxiliary_coef <= 0.0
+        ):
+            raise ValueError(
+                "Advantage-margin supervision requires a positive no-mask "
+                "TD coefficient"
+            )
         if self.kl_auxiliary_force_main_open and not self.concrete_random_drop_auxiliary:
             raise ValueError(
                 "clean_kl_auxiliary_force_main_open requires a Concrete KL auxiliary"
@@ -445,6 +492,7 @@ class CleanLearner:
             or self.perturbed_head_td_quality_active
             or self.temporal_param_auxiliary_active
             or self.mask_parameter_relation_active
+            or self.advantage_margin_auxiliary_active
         )
         self.importance_gate_parameters = ()
         if self.importance_auxiliary_active:
@@ -1317,6 +1365,96 @@ class CleanLearner:
             (mask_distance * valid).sum(),
             (parameter_target * valid).sum(),
         )
+
+    def _normalized_action_margin(self, action_values, avail_actions, actions):
+        """Return a shift/scale-normalized chosen-vs-best-other margin."""
+        available = avail_actions.bool()
+        available_count = available.sum(dim=-1)
+        count = available_count.clamp(min=1).to(action_values.dtype)
+        mean = (
+            action_values.masked_fill(~available, 0.0).sum(dim=-1)
+            / count
+        )
+        centered = action_values - mean.unsqueeze(-1)
+        variance = (
+            centered.pow(2).masked_fill(~available, 0.0).sum(dim=-1)
+            / count
+        )
+        scale = variance.sqrt().clamp(min=self.advantage_margin_scale_eps)
+        normalized = centered / scale.detach().unsqueeze(-1)
+        chosen = th.gather(normalized, -1, actions).squeeze(-1)
+        competitors = normalized.masked_fill(
+            ~available, th.finfo(normalized.dtype).min
+        ).scatter(
+            -1,
+            actions,
+            th.finfo(normalized.dtype).min,
+        )
+        best_other = competitors.max(dim=-1)[0]
+        return chosen - best_other, available_count > 1
+
+    def _advantage_margin_gate_loss(
+        self,
+        masked_action_values,
+        full_action_values,
+        avail_actions,
+        valid_steps,
+    ):
+        """Make the detached full-observation action easier to select."""
+        with th.no_grad():
+            teacher_values = full_action_values.detach().masked_fill(
+                ~avail_actions.bool(),
+                th.finfo(full_action_values.dtype).min,
+            )
+            teacher_actions = teacher_values.argmax(
+                dim=-1, keepdim=True
+            )
+            teacher_margin, teacher_valid = self._normalized_action_margin(
+                full_action_values.detach(),
+                avail_actions,
+                teacher_actions,
+            )
+            confidence = th.sigmoid(
+                (
+                    teacher_margin
+                    - self.advantage_margin_confidence_threshold
+                )
+                / self.advantage_margin_confidence_temperature
+            )
+        masked_margin, masked_valid = self._normalized_action_margin(
+            masked_action_values,
+            avail_actions,
+            teacher_actions,
+        )
+        valid = (
+            valid_steps.bool() & teacher_valid & masked_valid
+        ).to(masked_margin.dtype)
+        per_agent_loss = confidence * F.relu(
+            teacher_margin.detach()
+            + self.advantage_margin_delta
+            - masked_margin
+        )
+        denominator = valid.sum().clamp(min=1.0)
+        loss = (per_agent_loss * valid).sum() / denominator
+        with th.no_grad():
+            masked_greedy = masked_action_values.masked_fill(
+                ~avail_actions.bool(),
+                th.finfo(masked_action_values.dtype).min,
+            ).argmax(dim=-1)
+            stats = {
+                "teacher_margin": (teacher_margin * valid).sum()
+                / denominator,
+                "masked_margin": (masked_margin * valid).sum()
+                / denominator,
+                "confidence": (confidence * valid).sum() / denominator,
+                "action_agreement": (
+                    (masked_greedy == teacher_actions.squeeze(-1))
+                    .to(valid.dtype)
+                    * valid
+                ).sum()
+                / denominator,
+            }
+        return loss, stats
 
     def _advantage_contrastive_mask_relation(
         self,
@@ -3087,6 +3225,7 @@ class CleanLearner:
             masked_td_error = td_error * td_mask
             td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
             nomask_td_loss = td_loss.new_zeros(())
+            nomask_mac_out = None
             if self.nomask_td_auxiliary_coef > 0.0:
                 # A matched clean-observation pass. The learned probabilities
                 # were already captured from the ordinary masked pass above;
@@ -3111,6 +3250,42 @@ class CleanLearner:
                 nomask_td_loss = (
                     nomask_td_error.pow(2).sum()
                     / td_mask.sum().clamp(min=1.0)
+                )
+            advantage_margin_loss = td_loss.new_zeros(())
+            advantage_margin_stats = {}
+            advantage_margin_coef = 0.0
+            if (
+                self.advantage_margin_auxiliary_active
+                and nomask_mac_out is not None
+                and t_env >= self.advantage_margin_warmup_steps
+                and self.advantage_margin_auxiliary_coef > 0.0
+            ):
+                advantage_margin_loss, advantage_margin_stats = (
+                    self._advantage_margin_gate_loss(
+                        mac_out[:, :-1],
+                        nomask_mac_out[:, :-1],
+                        avail_actions[:, :-1],
+                        mask.expand(
+                            -1, -1, self.args.n_agents
+                        ),
+                    )
+                )
+                if self.advantage_margin_ramp_steps == 0:
+                    ramp = 1.0
+                else:
+                    ramp = min(
+                        1.0,
+                        max(
+                            0.0,
+                            float(
+                                t_env
+                                - self.advantage_margin_warmup_steps
+                            )
+                            / float(self.advantage_margin_ramp_steps),
+                        ),
+                    )
+                advantage_margin_coef = (
+                    self.advantage_margin_auxiliary_coef * ramp
                 )
             mixer_kl80_td_loss = td_loss.new_zeros(())
             mixer_kl80_prior_loss = td_loss.new_zeros(())
@@ -3516,6 +3691,7 @@ class CleanLearner:
                 temporal_param_auxiliary_coef = 0.0
                 mask_parameter_combined_auxiliary_coef = 0.0
                 random_drop_auxiliary_coef = 0.0
+                advantage_margin_coef = 0.0
                 self.latest_adaptive_auxiliary_stats = {}
 
             gate_only_importance_loss = None
@@ -3584,6 +3760,16 @@ class CleanLearner:
                 gate_only_importance_loss = (
                     temporal_param_auxiliary_coef
                     * temporal_param_auxiliary_loss
+                )
+            if advantage_margin_coef > 0.0:
+                weighted_advantage_margin_loss = (
+                    advantage_margin_coef * advantage_margin_loss
+                )
+                gate_only_importance_loss = (
+                    weighted_advantage_margin_loss
+                    if gate_only_importance_loss is None
+                    else gate_only_importance_loss
+                    + weighted_advantage_margin_loss
                 )
             if (
                 self.kl_auxiliary_td_gate_only
@@ -3916,6 +4102,28 @@ class CleanLearner:
                     self.nomask_td_auxiliary_coef * nomask_td_loss.item(),
                     t_env,
                 )
+            if self.advantage_margin_auxiliary_active:
+                self.logger.log_stat(
+                    "loss_advantage_margin",
+                    advantage_margin_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "weighted_loss_advantage_margin",
+                    advantage_margin_coef * advantage_margin_loss.item(),
+                    t_env,
+                )
+                self.logger.log_stat(
+                    "train_gate/advantage_margin/effective_coef",
+                    advantage_margin_coef,
+                    t_env,
+                )
+                for stat_name, stat_value in advantage_margin_stats.items():
+                    self.logger.log_stat(
+                        "train_gate/advantage_margin/" + stat_name,
+                        stat_value.item(),
+                        t_env,
+                    )
             if self.mixer_kl80_auxiliary_active:
                 weighted_mixer_td = (
                     self.mixer_kl80_auxiliary_coef * mixer_kl80_td_loss.item()

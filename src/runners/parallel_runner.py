@@ -65,6 +65,7 @@ class ParallelRunner:
         self.test_returns = []
         self.train_stats = {}
         self.test_stats = {}
+        self.test_log_prefix = "test_"
 
         self.log_train_stats_t = -100000
         self.battle_trace_request = None
@@ -82,6 +83,11 @@ class ParallelRunner:
 
     def get_env_info(self):
         return self.env_info
+
+    def set_test_log_prefix(self, prefix):
+        if not isinstance(prefix, str) or not prefix.startswith("test_"):
+            raise ValueError("test log prefix must start with 'test_'")
+        self.test_log_prefix = prefix
 
     def save_replay(self):
         pass
@@ -354,7 +360,7 @@ class ParallelRunner:
 
         cur_stats = self.test_stats if test_mode else self.train_stats
         cur_returns = self.test_returns if test_mode else self.train_returns
-        log_prefix = "test_" if test_mode else ""
+        log_prefix = self.test_log_prefix if test_mode else ""
         infos = [cur_stats] + final_env_infos
 
         cur_stats.update({k: sum(d.get(k, 0) for d in infos) for k in set.union(*[set(d) for d in infos])})

@@ -23,6 +23,7 @@ class EpisodeRunner:
         self.test_returns = []
         self.train_stats = {}
         self.test_stats = {}
+        self.test_log_prefix = "test_"
 
         self.log_train_stats_t = -1000000
         self.battle_trace_request = None
@@ -35,6 +36,11 @@ class EpisodeRunner:
 
     def get_env_info(self):
         return self.env.get_env_info()
+
+    def set_test_log_prefix(self, prefix):
+        if not isinstance(prefix, str) or not prefix.startswith("test_"):
+            raise ValueError("test log prefix must start with 'test_'")
+        self.test_log_prefix = prefix
 
     def save_replay(self):
         self.env.save_replay()
@@ -185,7 +191,7 @@ class EpisodeRunner:
         
         cur_stats = self.test_stats if test_mode else self.train_stats
         cur_returns = self.test_returns if test_mode else self.train_returns
-        log_prefix = "test_" if test_mode else ""
+        log_prefix = self.test_log_prefix if test_mode else ""
         cur_stats.update({k: cur_stats.get(k, 0) + env_info.get(k, 0) for k in set(cur_stats) | set(env_info)})
         cur_stats["n_episodes"] = 1 + cur_stats.get("n_episodes", 0)
         cur_stats["ep_length"] = self.t + cur_stats.get("ep_length", 0)

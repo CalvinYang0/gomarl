@@ -125,10 +125,38 @@ def evaluate_sequential(args, runner):
     for _ in range(args.test_nepisode):
         runner.run(test_mode=True)
 
+    _run_force_open_test(args, runner, args.test_nepisode)
+
     if args.save_replay:
         runner.save_replay()
 
     runner.close_env()
+
+
+def _run_force_open_test(args, runner, n_test_runs):
+    """Evaluate the same checkpoint once more with the observation gate open."""
+    if not bool(getattr(args, "clean_dual_gate_test", False)):
+        return
+    if not hasattr(runner.mac, "set_dynamic_branch_gate_force_open"):
+        raise RuntimeError(
+            "clean_dual_gate_test requires a controller with force-open gate support"
+        )
+    if not hasattr(runner, "set_test_log_prefix"):
+        raise RuntimeError(
+            "clean_dual_gate_test requires a runner with test-prefix support"
+        )
+
+    runner.logger.console_logger.info(
+        "Evaluating the same checkpoint with the observation gate forced open"
+    )
+    runner.set_test_log_prefix("test_open_")
+    runner.mac.set_dynamic_branch_gate_force_open(True)
+    try:
+        for _ in range(n_test_runs):
+            runner.run(test_mode=True)
+    finally:
+        runner.mac.set_dynamic_branch_gate_force_open(False)
+        runner.set_test_log_prefix("test_")
 
 def run_sequential(args, logger):
 
@@ -281,6 +309,8 @@ def run_sequential(args, logger):
 
             last_test_T = runner.t_env
             trace_interval = int(getattr(args, "battle_trace_interval", 1000000))
+            if trace_interval > 0:
+                trace_interval = max(100000, trace_interval)
             trace_due = (
                 trace_interval > 0
                 and runner.t_env - last_battle_trace_T >= trace_interval
@@ -311,6 +341,8 @@ def run_sequential(args, logger):
                     last_battle_trace_T = runner.t_env
                     if save_one_test_video:
                         test_video_written = True
+
+            _run_force_open_test(args, runner, n_test_runs)
 
         if args.save_model and (runner.t_env - model_save_time >= args.save_model_interval or model_save_time == 0):
             model_save_time = runner.t_env

@@ -33,11 +33,24 @@ class Logger:
     @staticmethod
     def _wandb_metric_allowed(key):
         key = str(key)
+        if key.startswith("test_open_"):
+            return key[len("test_open_"):] in {
+                "return_mean",
+                "return_std",
+                "game_win_mean",
+                "battle_won_mean",
+                "ep_length_mean",
+                "score_mean",
+            }
         if key in {
             "game_win_mean",
             "test_game_win_mean",
             "battle_won_mean",
             "test_battle_won_mean",
+            "return_mean",
+            "test_return_mean",
+            "return_std",
+            "test_return_std",
             "ep_length_mean",
             "test_ep_length_mean",
             "dynamic_gate_probability_min",

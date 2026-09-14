@@ -18,7 +18,7 @@ PROFILES = {
     # to adapt the shared policy, hypernetwork or mixer to that corruption.
     "relation_kl80aux_kltd_gateonly": {
         "gate": True, "relation": True, "aux": "kl80",
-        "kl_auxiliary_td_gate_only": True,
+        "kl_auxiliary_td_gate_only": True, "dual_gate_test": True,
     },
     "relation_temporal_kl80aux": {
         "gate": True, "relation": True, "temporal": True, "aux": "kl80",
@@ -195,6 +195,21 @@ ABLATION_PROFILES = {
         "nomask_td_coef": 1.0, "aux_force_main_open": True,
         "relation_coef": 0.1, "gradient_separation": True,
     },
+    # A full-observation TD teacher supplies its detached greedy action and
+    # normalized action margin. The masked branch must preserve and improve
+    # that margin while KL80 keeps an explicit observation bottleneck.
+    "relation_advantage_margin_kl80aux": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0,
+        "aux_force_main_open": True, "advantage_margin": True,
+        "dual_gate_test": True,
+    },
+    "relation_advantage_margin_kl80aux_gradsep": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0,
+        "aux_force_main_open": True, "advantage_margin": True,
+        "gradient_separation": True, "dual_gate_test": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
@@ -284,6 +299,10 @@ def experiment_overrides(label, domain="grf"):
         "clean_mask_nomask_gradient_separation": bool(
             flags.get("gradient_separation")
         ),
+        "clean_advantage_margin_auxiliary": bool(
+            flags.get("advantage_margin")
+        ),
+        "clean_dual_gate_test": bool(flags.get("dual_gate_test")),
         "clean_mixer_kl80_auxiliary_coef": flags.get(
             "mixer_aux_coef", float(bool(flags.get("mixer_aux")))
         ),
