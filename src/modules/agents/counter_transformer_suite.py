@@ -255,6 +255,9 @@ SMAC_PROFILES = (
     "relation_advantage_kl80aux_mixer_coef001",
     "relation_trajectory_agent_kl80aux",
     "relation_all4_dualtest",
+    "relation_advantage_margin_kl80aux_gradsep",
+    "relation_advantage_margin_kl80aux",
+    "relation_advantage_weighted_kl80aux",
 )
 
 
