@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Exercise the selected Advantage-mask profiles on SMAC 3s5z."""
+"""Exercise selected Advantage-mask profiles on one requested SMAC map."""
 import logging
+import os
 from pathlib import Path
 import sys
 
@@ -21,12 +22,19 @@ LABELS = (
     "relation_advantage_margin_kl80aux",
     "relation_advantage_weighted_kl80aux",
 )
-SCENE = "3s5z_vs_3s6z"
+SCENES = {
+    "3s5z": "3s5z_vs_3s6z",
+    "corridor": "corridor",
+}
 
 
 def main():
     logging.basicConfig(level=logging.WARNING)
     th.set_num_threads(1)
+    scene_key = os.environ.get("TARGET_SCENE", "3s5z")
+    if scene_key not in SCENES:
+        raise ValueError("TARGET_SCENE must be 3s5z or corridor")
+    scene = SCENES[scene_key]
     config = yaml.safe_load(
         (ROOT / "src/config/algs/clean_hyper.yaml").read_text()
     )
@@ -46,9 +54,9 @@ def main():
         assert overrides["clean_advantage_margin_weight_by_teacher"] is (
             "_weighted_" in label
         )
-        check(label, SCENE)
-        check_smac_semantics(SCENE, label)
-    print("Selected Advantage-mask profiles passed on SMAC 3s5z")
+        check(label, scene)
+        check_smac_semantics(scene, label)
+    print("Selected Advantage-mask profiles passed on SMAC " + scene_key)
 
 
 if __name__ == "__main__":

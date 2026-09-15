@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit three Advantage-mask profiles on 3s5z with bounded memory use."""
+"""Submit three Advantage-mask profiles on 3s5z/corridor safely."""
 import json
 import os
 from pathlib import Path
@@ -18,18 +18,40 @@ LABELS = (
     "relation_advantage_margin_kl80aux",
     "relation_advantage_weighted_kl80aux",
 )
-SCENE = "3s5z"
+SAFE_SCENES = {
+    "3s5z": {
+        "batch_size_run": "4",
+        "batch_size": "32",
+        "buffer_size": "2000",
+        "memory": "64G",
+    },
+    "corridor": {
+        "batch_size_run": "2",
+        "batch_size": "16",
+        "buffer_size": "1000",
+        "memory": "96G",
+    },
+}
+
+
+def target_scene():
+    scene = os.environ.get("TARGET_SCENE", "3s5z")
+    if scene not in SAFE_SCENES:
+        raise ValueError("TARGET_SCENE must be 3s5z or corridor")
+    return scene
 
 
 def selected_plans(repo):
+    scene = target_scene()
+    resources = SAFE_SCENES[scene]
     preserved = {
         key: os.environ.get(key)
         for key in ("SCENES", "LABELS", "RUN_SUFFIX")
     }
     try:
-        os.environ["SCENES"] = SCENE
+        os.environ["SCENES"] = scene
         os.environ["LABELS"] = " ".join(LABELS)
-        os.environ["RUN_SUFFIX"] = "_home1_3s5zsafe"
+        os.environ["RUN_SUFFIX"] = "_home1_{}safe".format(scene)
         plans = build_plans(repo)
     finally:
         for key, value in preserved.items():
@@ -38,7 +60,7 @@ def selected_plans(repo):
             else:
                 os.environ[key] = value
 
-    expected = tuple((SCENE, label) for label in LABELS)
+    expected = tuple((scene, label) for label in LABELS)
     actual = tuple((plan["scene"], plan["label"]) for plan in plans)
     if actual != expected or len(plans) != 3:
         raise RuntimeError("Safe 3s5z selection changed: {}".format(actual))
@@ -46,13 +68,16 @@ def selected_plans(repo):
     for plan in plans:
         exports = plan["exports"]
         exports.update(
-            BATCH_SIZE_RUN="4",
-            EXPECTED_BATCH_SIZE_RUN="4",
-            BATCH_SIZE="32",
-            BUFFER_SIZE="2000",
+            BATCH_SIZE_RUN=resources["batch_size_run"],
+            EXPECTED_BATCH_SIZE_RUN=resources["batch_size_run"],
+            BATCH_SIZE=resources["batch_size"],
+            BUFFER_SIZE=resources["buffer_size"],
         )
         plan["sbatch_args"] = [
-            "--mem=" + os.environ.get("SMAC_3S5Z_MEMORY", "64G")
+            "--mem=" + os.environ.get(
+                "SMAC_{}_MEMORY".format(scene.upper()),
+                resources["memory"],
+            )
             if argument.startswith("--mem=")
             else argument
             for argument in plan["sbatch_args"]
@@ -88,6 +113,7 @@ def main():
     os.chdir(repo)
     subprocess.run(
         [sys.executable, "scripts/smoke_test_advantage_margin_3s5z.py"],
+        env=dict(os.environ, TARGET_SCENE=target_scene()),
         check=True,
     )
 
@@ -117,8 +143,8 @@ def main():
         )
 
     manifest = paths["logs"] / (
-        "advantage_3s5z_safe_{}_{}.json".format(
-            time.strftime("%Y%m%d_%H%M%S"), os.getpid()
+        "advantage_{}_safe_{}_{}.json".format(
+            target_scene(), time.strftime("%Y%m%d_%H%M%S"), os.getpid()
         )
     )
     record = {
