@@ -1051,6 +1051,10 @@ clean_mask_nomask_gradient_separation: False
 # trusted in proportion to its normalized margin; the learned observation
 # mask is trained to preserve that action with a larger margin.
 clean_advantage_margin_auxiliary: False
+# Build a force-open full-observation teacher under no_grad even when the
+# no-mask TD coefficient is zero. This supplies only the detached action and
+# margin used by Advantage-margin gate supervision.
+clean_advantage_margin_teacher_only: False
 clean_advantage_margin_auxiliary_coef: 1.0
 # Multiply each hinge term by the detached normalized full-observation
 # advantage. This emphasizes high-confidence/high-margin teacher decisions.

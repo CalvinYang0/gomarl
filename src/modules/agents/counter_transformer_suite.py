@@ -232,6 +232,25 @@ ABLATION_PROFILES = {
         "advantage_weighted": True,
         "gradient_separation": True, "dual_gate_test": True,
     },
+    # Lean Advantage-margin TD-path ablation. KL80 is multiplied on top of
+    # the observation-conditioned main gate. All three profiles share the
+    # same augmented TD and detached teacher-margin objective; they differ
+    # only in whether an additional main-mask or no-mask TD path backprops.
+    "relation_advantage_augtd_teacheronly": {
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
+        "advantage_margin": True, "advantage_teacher_only": True,
+        "importance_warmup_steps": 0, "dual_gate_test": True,
+    },
+    "relation_advantage_masktd_augtd_teacheronly": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "advantage_margin": True, "advantage_teacher_only": True,
+        "importance_warmup_steps": 0, "dual_gate_test": True,
+    },
+    "relation_advantage_augtd_nomasktd": {
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
+        "nomask_td_coef": 1.0, "advantage_margin": True,
+        "importance_warmup_steps": 0, "dual_gate_test": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
@@ -328,6 +347,9 @@ def experiment_overrides(label, domain="grf"):
         "clean_advantage_margin_auxiliary": bool(
             flags.get("advantage_margin")
         ),
+        "clean_advantage_margin_teacher_only": bool(
+            flags.get("advantage_teacher_only")
+        ),
         "clean_advantage_margin_weight_by_teacher": bool(
             flags.get("advantage_weighted")
         ),
@@ -352,7 +374,9 @@ def experiment_overrides(label, domain="grf"):
         ),
         "clean_binary_concrete_temperature": 0.5,
         "clean_dynamic_branch_gate_warmup_steps": 250000,
-        "clean_importance_auxiliary_warmup_steps": 250000,
+        "clean_importance_auxiliary_warmup_steps": flags.get(
+            "importance_warmup_steps", 250000
+        ),
         "clean_importance_alternating_training": False,
         "clean_relation_teacher_td_coef": 0.0,
         "clean_relation_distill_coef": 0.0,

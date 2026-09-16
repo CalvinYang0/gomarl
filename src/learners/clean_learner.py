@@ -335,6 +335,9 @@ class CleanLearner:
         self.advantage_margin_auxiliary_active = bool(
             getattr(args, "clean_advantage_margin_auxiliary", False)
         )
+        self.advantage_margin_teacher_only = bool(
+            getattr(args, "clean_advantage_margin_teacher_only", False)
+        )
         self.advantage_margin_auxiliary_coef = float(
             getattr(args, "clean_advantage_margin_auxiliary_coef", 1.0)
         )
@@ -457,10 +460,19 @@ class CleanLearner:
         if (
             self.advantage_margin_auxiliary_active
             and self.nomask_td_auxiliary_coef <= 0.0
+            and not self.advantage_margin_teacher_only
         ):
             raise ValueError(
-                "Advantage-margin supervision requires a positive no-mask "
-                "TD coefficient"
+                "Advantage-margin supervision requires either a positive "
+                "no-mask TD coefficient or teacher-only mode"
+            )
+        if (
+            self.advantage_margin_teacher_only
+            and self.nomask_td_auxiliary_coef > 0.0
+        ):
+            raise ValueError(
+                "Advantage-margin teacher-only mode must not be combined "
+                "with a positive no-mask TD coefficient"
             )
         if self.kl_auxiliary_force_main_open and not self.concrete_random_drop_auxiliary:
             raise ValueError(
@@ -3287,7 +3299,10 @@ class CleanLearner:
             td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
             nomask_td_loss = td_loss.new_zeros(())
             nomask_mac_out = None
-            if self.nomask_td_auxiliary_coef > 0.0:
+            if (
+                self.nomask_td_auxiliary_coef > 0.0
+                or self.advantage_margin_teacher_only
+            ):
                 # A matched clean-observation pass. The learned probabilities
                 # were already captured from the ordinary masked pass above;
                 # force-open affects only this additional TD path.
@@ -3295,23 +3310,38 @@ class CleanLearner:
                 self.mac.init_hidden(batch.batch_size)
                 self.mac.set_dynamic_branch_gate_force_open(True)
                 try:
-                    for t in range(batch.max_seq_length):
-                        nomask_mac_out.append(self.mac.forward(batch, t=t))
+                    if self.advantage_margin_teacher_only:
+                        # The full-observation branch is only a detached
+                        # decision-margin teacher. Avoid retaining a complete
+                        # recurrent graph when no no-mask TD update is wanted.
+                        with th.no_grad():
+                            for t in range(batch.max_seq_length):
+                                nomask_mac_out.append(
+                                    self.mac.forward(batch, t=t)
+                                )
+                    else:
+                        for t in range(batch.max_seq_length):
+                            nomask_mac_out.append(
+                                self.mac.forward(batch, t=t)
+                            )
                 finally:
                     self.mac.set_dynamic_branch_gate_force_open(False)
                 nomask_mac_out = th.stack(nomask_mac_out, dim=1)
-                nomask_chosen_qvals = th.gather(
-                    nomask_mac_out[:, :-1], dim=3, index=actions
-                ).squeeze(3)
-                if self.mixer is not None:
-                    nomask_chosen_qvals = self.mixer(
-                        nomask_chosen_qvals, batch["state"][:, :-1]
+                if self.nomask_td_auxiliary_coef > 0.0:
+                    nomask_chosen_qvals = th.gather(
+                        nomask_mac_out[:, :-1], dim=3, index=actions
+                    ).squeeze(3)
+                    if self.mixer is not None:
+                        nomask_chosen_qvals = self.mixer(
+                            nomask_chosen_qvals, batch["state"][:, :-1]
+                        )
+                    nomask_td_error = (
+                        nomask_chosen_qvals - targets.detach()
+                    ) * td_mask
+                    nomask_td_loss = (
+                        nomask_td_error.pow(2).sum()
+                        / td_mask.sum().clamp(min=1.0)
                     )
-                nomask_td_error = (nomask_chosen_qvals - targets.detach()) * td_mask
-                nomask_td_loss = (
-                    nomask_td_error.pow(2).sum()
-                    / td_mask.sum().clamp(min=1.0)
-                )
             advantage_margin_loss = td_loss.new_zeros(())
             advantage_margin_stats = {}
             advantage_margin_coef = 0.0
