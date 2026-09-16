@@ -259,6 +259,33 @@ ABLATION_PROFILES = {
         "nomask_td_coef": 1.0, "advantage_margin": True,
         "aux_identity_warmup": True, "dual_gate_test": True,
     },
+    # Objective-definition matrix. These four profiles change only the
+    # gate-only Advantage target relative to the two matched TD-path controls
+    # above: maximize the teacher action's normalized Advantage or raw Q.
+    "relation_advantage_actionadv_masktd_augtd_teacheronly": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "advantage_margin": True, "advantage_teacher_only": True,
+        "advantage_objective": "action_advantage",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+    },
+    "relation_advantage_qvalue_masktd_augtd_teacheronly": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "advantage_margin": True, "advantage_teacher_only": True,
+        "advantage_objective": "action_q",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+    },
+    "relation_advantage_actionadv_augtd_nomasktd": {
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
+        "nomask_td_coef": 1.0, "advantage_margin": True,
+        "advantage_objective": "action_advantage",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+    },
+    "relation_advantage_qvalue_augtd_nomasktd": {
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
+        "nomask_td_coef": 1.0, "advantage_margin": True,
+        "advantage_objective": "action_q",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
@@ -361,6 +388,12 @@ def experiment_overrides(label, domain="grf"):
         "clean_advantage_margin_teacher_only": bool(
             flags.get("advantage_teacher_only")
         ),
+        "clean_advantage_objective": flags.get(
+            "advantage_objective", "margin"
+        ),
+        "clean_advantage_margin_auxiliary_coef": 1.0,
+        "clean_advantage_margin_warmup_steps": 250000,
+        "clean_advantage_margin_ramp_steps": 250000,
         "clean_advantage_margin_weight_by_teacher": bool(
             flags.get("advantage_weighted")
         ),

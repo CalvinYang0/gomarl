@@ -341,6 +341,18 @@ class CleanLearner:
         self.advantage_margin_auxiliary_coef = float(
             getattr(args, "clean_advantage_margin_auxiliary_coef", 1.0)
         )
+        self.advantage_objective = str(
+            getattr(args, "clean_advantage_objective", "margin")
+        )
+        if self.advantage_objective not in {
+            "margin",
+            "action_advantage",
+            "action_q",
+        }:
+            raise ValueError(
+                "clean_advantage_objective must be margin, "
+                "action_advantage, or action_q"
+            )
         self.advantage_margin_weight_by_teacher = bool(
             getattr(args, "clean_advantage_margin_weight_by_teacher", False)
         )
@@ -1415,6 +1427,27 @@ class CleanLearner:
         best_other = competitors.max(dim=-1)[0]
         return chosen - best_other, available_count > 1
 
+    def _normalized_chosen_advantage(
+        self, action_values, avail_actions, actions
+    ):
+        """Return the chosen action's normalized Q-minus-mean Advantage."""
+        available = avail_actions.bool()
+        available_count = available.sum(dim=-1)
+        count = available_count.clamp(min=1).to(action_values.dtype)
+        mean = (
+            action_values.masked_fill(~available, 0.0).sum(dim=-1)
+            / count
+        )
+        centered = action_values - mean.unsqueeze(-1)
+        variance = (
+            centered.pow(2).masked_fill(~available, 0.0).sum(dim=-1)
+            / count
+        )
+        scale = variance.sqrt().clamp(min=self.advantage_margin_scale_eps)
+        normalized = centered / scale.detach().unsqueeze(-1)
+        chosen = th.gather(normalized, -1, actions).squeeze(-1)
+        return chosen, available_count > 1
+
     def _advantage_margin_gate_loss(
         self,
         masked_action_values,
@@ -1436,6 +1469,16 @@ class CleanLearner:
                 avail_actions,
                 teacher_actions,
             )
+            teacher_action_advantage, teacher_advantage_valid = (
+                self._normalized_chosen_advantage(
+                    full_action_values.detach(),
+                    avail_actions,
+                    teacher_actions,
+                )
+            )
+            teacher_action_q = th.gather(
+                full_action_values.detach(), -1, teacher_actions
+            ).squeeze(-1)
             confidence = th.sigmoid(
                 (
                     teacher_margin
@@ -1448,17 +1491,38 @@ class CleanLearner:
             avail_actions,
             teacher_actions,
         )
+        masked_action_advantage, masked_advantage_valid = (
+            self._normalized_chosen_advantage(
+                masked_action_values,
+                avail_actions,
+                teacher_actions,
+            )
+        )
+        masked_action_q = th.gather(
+            masked_action_values, -1, teacher_actions
+        ).squeeze(-1)
         valid = (
-            valid_steps.bool() & teacher_valid & masked_valid
+            valid_steps.bool()
+            & teacher_valid
+            & masked_valid
+            & teacher_advantage_valid
+            & masked_advantage_valid
         ).to(masked_margin.dtype)
         sample_weight = confidence
         if self.advantage_margin_weight_by_teacher:
             sample_weight = sample_weight * teacher_margin.detach().clamp(min=0.0)
-        per_agent_loss = sample_weight * F.relu(
-            teacher_margin.detach()
-            + self.advantage_margin_delta
-            - masked_margin
-        )
+        if self.advantage_objective == "margin":
+            per_agent_loss = sample_weight * F.relu(
+                teacher_margin.detach()
+                + self.advantage_margin_delta
+                - masked_margin
+            )
+        elif self.advantage_objective == "action_advantage":
+            per_agent_loss = -sample_weight * masked_action_advantage
+        else:
+            # This loss is differentiated only into the observation gate;
+            # it cannot inflate the Q-network weights to reduce itself.
+            per_agent_loss = -sample_weight * masked_action_q
         denominator = valid.sum().clamp(min=1.0)
         loss = (per_agent_loss * valid).sum() / denominator
         with th.no_grad():
@@ -1471,6 +1535,10 @@ class CleanLearner:
             margin_shortfall = F.relu(
                 teacher_margin + self.advantage_margin_delta - masked_margin
             )
+            action_advantage_gain = (
+                masked_action_advantage - teacher_action_advantage
+            )
+            action_q_gain = masked_action_q - teacher_action_q
             improved = (margin_gain > 0.0).to(valid.dtype)
             harmed = (margin_gain < 0.0).to(valid.dtype)
             target_met = (
@@ -1497,6 +1565,24 @@ class CleanLearner:
                 "teacher_margin": (teacher_margin * valid).sum()
                 / denominator,
                 "masked_margin": (masked_margin * valid).sum()
+                / denominator,
+                "teacher_action_advantage": (
+                    teacher_action_advantage * valid
+                ).sum()
+                / denominator,
+                "masked_action_advantage": (
+                    masked_action_advantage * valid
+                ).sum()
+                / denominator,
+                "action_advantage_gain_mean": (
+                    action_advantage_gain * valid
+                ).sum()
+                / denominator,
+                "teacher_action_q": (teacher_action_q * valid).sum()
+                / denominator,
+                "masked_action_q": (masked_action_q * valid).sum()
+                / denominator,
+                "action_q_gain_mean": (action_q_gain * valid).sum()
                 / denominator,
                 "confidence": (confidence * valid).sum() / denominator,
                 "sample_weight": (sample_weight * valid).sum() / denominator,

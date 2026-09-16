@@ -1060,6 +1060,10 @@ clean_advantage_margin_auxiliary: False
 # margin used by Advantage-margin gate supervision.
 clean_advantage_margin_teacher_only: False
 clean_advantage_margin_auxiliary_coef: 1.0
+# Gate-supervision target: margin compares the teacher action with its best
+# competitor; action_advantage maximizes its centered/normalized Advantage;
+# action_q directly maximizes its masked-branch Q value.
+clean_advantage_objective: margin
 # Multiply each hinge term by the detached normalized full-observation
 # advantage. This emphasizes high-confidence/high-margin teacher decisions.
 clean_advantage_margin_weight_by_teacher: False
