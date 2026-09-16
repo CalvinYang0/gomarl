@@ -1443,6 +1443,33 @@ class CleanLearner:
         denominator = valid.sum().clamp(min=1.0)
         loss = (per_agent_loss * valid).sum() / denominator
         with th.no_grad():
+            # Direct paired diagnostics: both margins use the same replay
+            # state, recurrent context and detached full-observation teacher
+            # action.  Positive gain therefore means that applying the main
+            # observation mask made that action easier to select, without
+            # requiring users to subtract two separately smoothed charts.
+            margin_gain = masked_margin - teacher_margin
+            margin_shortfall = F.relu(
+                teacher_margin + self.advantage_margin_delta - masked_margin
+            )
+            improved = (margin_gain > 0.0).to(valid.dtype)
+            harmed = (margin_gain < 0.0).to(valid.dtype)
+            target_met = (
+                margin_gain >= self.advantage_margin_delta
+            ).to(valid.dtype)
+            confidence_denominator = (
+                confidence * valid
+            ).sum().clamp(min=self.advantage_margin_scale_eps)
+            high_confidence_valid = (
+                valid.bool()
+                & (
+                    teacher_margin
+                    >= self.advantage_margin_confidence_threshold
+                )
+            ).to(valid.dtype)
+            high_confidence_denominator = high_confidence_valid.sum().clamp(
+                min=1.0
+            )
             masked_greedy = masked_action_values.masked_fill(
                 ~avail_actions.bool(),
                 th.finfo(masked_action_values.dtype).min,
@@ -1454,6 +1481,33 @@ class CleanLearner:
                 / denominator,
                 "confidence": (confidence * valid).sum() / denominator,
                 "sample_weight": (sample_weight * valid).sum() / denominator,
+                "margin_gain_mean": (margin_gain * valid).sum()
+                / denominator,
+                "margin_shortfall_mean": (margin_shortfall * valid).sum()
+                / denominator,
+                "margin_improve_rate": (improved * valid).sum()
+                / denominator,
+                "margin_harm_rate": (harmed * valid).sum() / denominator,
+                "margin_target_met_rate": (target_met * valid).sum()
+                / denominator,
+                "confidence_weighted_margin_gain": (
+                    margin_gain * confidence * valid
+                ).sum()
+                / confidence_denominator,
+                "high_confidence_fraction": high_confidence_valid.sum()
+                / denominator,
+                "high_confidence_margin_gain": (
+                    margin_gain * high_confidence_valid
+                ).sum()
+                / high_confidence_denominator,
+                "high_confidence_improve_rate": (
+                    improved * high_confidence_valid
+                ).sum()
+                / high_confidence_denominator,
+                "high_confidence_target_met_rate": (
+                    target_met * high_confidence_valid
+                ).sum()
+                / high_confidence_denominator,
                 "action_agreement": (
                     (masked_greedy == teacher_actions.squeeze(-1))
                     .to(valid.dtype)

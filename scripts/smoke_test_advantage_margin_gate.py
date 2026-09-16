@@ -181,12 +181,24 @@ def check_profile(label):
         "masked_margin",
         "confidence",
         "sample_weight",
+        "margin_gain_mean",
+        "margin_shortfall_mean",
+        "margin_improve_rate",
+        "margin_harm_rate",
+        "margin_target_met_rate",
+        "confidence_weighted_margin_gain",
+        "high_confidence_fraction",
+        "high_confidence_margin_gain",
+        "high_confidence_improve_rate",
+        "high_confidence_target_met_rate",
         "action_agreement",
     ):
         value = logger.stats[
             "train_gate/advantage_margin/" + name
         ][-1][1]
         assert math.isfinite(value)
+        if name.endswith("_rate") or name.endswith("_fraction"):
+            assert 0.0 <= value <= 1.0
 
 
 def main():
