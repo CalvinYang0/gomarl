@@ -29,7 +29,9 @@ def main():
     runtime_root = Path(os.environ.get(
         "RUNTIME_ROOT", "/home/kyang/gomarl-runtime/gomarl-dual-branch"
     ))
-    os.environ.setdefault("RUN_SUFFIX", "_home1_advobj")
+    # Reuse the earlier TD-path suffix so the two margin controls are
+    # retained rather than duplicated when they are already active.
+    os.environ.setdefault("RUN_SUFFIX", "_home1_tdpaths")
     os.environ.setdefault("MEMORY", "96G")
     plans = build_plans(repo, LABELS)
     if tuple(plan["label"] for plan in plans) != LABELS:
