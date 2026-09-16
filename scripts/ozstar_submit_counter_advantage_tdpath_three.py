@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preflight and submit three matched Counter Advantage TD-path jobs."""
+"""Preflight stacked KL80 plus three matched Advantage TD-path jobs."""
 import json
 import os
 from pathlib import Path
@@ -13,6 +13,7 @@ from ozstar_submit_relation_advantage_mixer_nine import route_runtime
 
 
 LABELS = (
+    "relation_advantage_margin_kl80aux_stacked",
     "relation_advantage_augtd_teacheronly",
     "relation_advantage_masktd_augtd_teacheronly",
     "relation_advantage_augtd_nomasktd",
@@ -30,7 +31,7 @@ def main():
     os.environ.setdefault("MEMORY", "96G")
     plans = build_plans(repo, LABELS)
     if tuple(plan["label"] for plan in plans) != LABELS:
-        raise RuntimeError("Advantage TD-path selection changed")
+        raise RuntimeError("Stacked/Advantage TD-path selection changed")
     paths = route_runtime(plans, runtime_root)
     if os.environ.get("DRY_RUN") == "YES":
         print(json.dumps(plans, indent=2))
@@ -77,7 +78,7 @@ def main():
         )
 
     manifest = paths["logs"] / (
-        "counter_advantage_tdpaths_{}_{}.json".format(
+        "counter_advantage_tdpaths_four_{}_{}.json".format(
             time.strftime("%Y%m%d_%H%M%S"), os.getpid()
         )
     )

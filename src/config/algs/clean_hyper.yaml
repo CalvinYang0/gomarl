@@ -925,6 +925,10 @@ clean_importance_auxiliary_warmup_steps: 250000
 # remains unchanged; a second masked rollout trains observation-loss robustness.
 clean_random_drop_auxiliary_keep_probability: 0.8
 clean_random_drop_auxiliary_coef: 0.5
+# Before the auxiliary sampling warmup, keep its TD rollout active while
+# forcing only the auxiliary mask to identity. This prevents augmented-TD-only
+# experiments from having no TD objective during their first 250k steps.
+clean_random_drop_auxiliary_identity_warmup: False
 # episode: one Bernoulli mask is reused across the sampled sequence;
 # timestep: a fresh mask is sampled at every timestep.
 clean_random_drop_auxiliary_scope: episode

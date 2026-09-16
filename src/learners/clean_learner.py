@@ -422,6 +422,13 @@ class CleanLearner:
         self.random_drop_auxiliary_coef = float(
             getattr(args, "clean_random_drop_auxiliary_coef", 0.5)
         )
+        self.random_drop_auxiliary_identity_warmup = bool(
+            getattr(
+                args,
+                "clean_random_drop_auxiliary_identity_warmup",
+                False,
+            )
+        )
         self.main_td_coef = float(getattr(args, "clean_main_td_coef", 1.0))
         self.nomask_td_auxiliary_coef = float(
             getattr(args, "clean_nomask_td_auxiliary_coef", 0.0)
@@ -3299,9 +3306,15 @@ class CleanLearner:
             td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
             nomask_td_loss = td_loss.new_zeros(())
             nomask_mac_out = None
+            teacher_only_forward_enabled = (
+                self.advantage_margin_teacher_only
+                and self.advantage_margin_auxiliary_active
+                and t_env >= self.advantage_margin_warmup_steps
+                and self.advantage_margin_auxiliary_coef > 0.0
+            )
             if (
                 self.nomask_td_auxiliary_coef > 0.0
-                or self.advantage_margin_teacher_only
+                or teacher_only_forward_enabled
             ):
                 # A matched clean-observation pass. The learned probabilities
                 # were already captured from the ordinary masked pass above;
@@ -3423,10 +3436,16 @@ class CleanLearner:
             kl80_random_auxiliary_coef = 0.0
             random_drop_auxiliary_enabled = (
                 self.random_drop_auxiliary_active
-                and t_env >= self.importance_auxiliary_warmup_steps
+                and (
+                    t_env >= self.importance_auxiliary_warmup_steps
+                    or self.random_drop_auxiliary_identity_warmup
+                )
                 and self.random_drop_auxiliary_coef > 0.0
             )
             if random_drop_auxiliary_enabled:
+                auxiliary_sampling_active = (
+                    t_env >= self.importance_auxiliary_warmup_steps
+                )
                 random_mac_out = []
                 random_relation_conditions = (
                     [] if self.relation_mixer_gate is not None else None
@@ -3437,7 +3456,10 @@ class CleanLearner:
                 try:
                     if self.kl_auxiliary_force_main_open:
                         self.mac.set_dynamic_branch_gate_force_open(True)
-                    if self.concrete_random_drop_auxiliary:
+                    if (
+                        self.concrete_random_drop_auxiliary
+                        and auxiliary_sampling_active
+                    ):
                         random_capturer.kl80_auxiliary_enabled = True
                     elif not self.random_drop_auxiliary_input_mask:
                         self.mac.set_dynamic_branch_gate_random_aux_combine_mode(
@@ -3469,7 +3491,11 @@ class CleanLearner:
                                     keep_probability
                                 )
                         random_mac_out.append(self.mac.forward(batch, t=t))
-                        if gate_diagnostics is not None and self.concrete_random_drop_auxiliary:
+                        if (
+                            gate_diagnostics is not None
+                            and self.concrete_random_drop_auxiliary
+                            and auxiliary_sampling_active
+                        ):
                             prefix = "aux_" + self.kl_auxiliary_tag if self.kl80_random_drop_auxiliary else "aux_fixed80"
                             gate_diagnostics.add(prefix + "_probability", random_capturer.latest_kl80_auxiliary_probability[self.counter_branch_index], t)
                             sampled = random_capturer.latest_kl80_auxiliary_mask[self.counter_branch_index]
@@ -3489,7 +3515,10 @@ class CleanLearner:
                             gate_diagnostics.add(prefix + "_mask", sampled, t)
                             gate_diagnostics.add(prefix + "_main_mask", main_mask, t)
                             gate_diagnostics.add(prefix + "_combined_mask", main_mask * sampled, t)
-                        if self.kl80_random_drop_auxiliary:
+                        if (
+                            self.kl80_random_drop_auxiliary
+                            and auxiliary_sampling_active
+                        ):
                             auxiliary_kl_terms.append(random_capturer.latest_kl80_auxiliary_loss)
                         if random_relation_conditions is not None:
                             condition = getattr(self.mac, "latest_condition", None)
@@ -4384,8 +4413,24 @@ class CleanLearner:
                 )
                 self.logger.log_stat(
                     "random_drop_auxiliary_keep_probability",
-                    float(self.mac.agent.rpg_relation_capturer.latest_kl80_auxiliary_probability[self.counter_branch_index].mean().item())
-                    if self.kl80_random_drop_auxiliary else self.random_drop_auxiliary_keep_probability,
+                    (
+                        float(
+                            self.mac.agent.rpg_relation_capturer
+                            .latest_kl80_auxiliary_probability[
+                                self.counter_branch_index
+                            ]
+                            .mean()
+                            .item()
+                        )
+                        if (
+                            self.kl80_random_drop_auxiliary
+                            and t_env
+                            >= self.importance_auxiliary_warmup_steps
+                        )
+                        else 1.0
+                        if self.kl80_random_drop_auxiliary
+                        else self.random_drop_auxiliary_keep_probability
+                    ),
                     t_env,
                 )
                 self.logger.log_stat(

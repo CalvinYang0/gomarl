@@ -211,6 +211,14 @@ ABLATION_PROFILES = {
         "aux_force_main_open": True, "advantage_margin": True,
         "dual_gate_test": True,
     },
+    # Exact composition control: only the KL80 placement changes. The
+    # auxiliary mask is multiplied on top of the learned observation gate.
+    "relation_advantage_margin_kl80aux_stacked": {
+        "gate": True, "relation": True, "aux": "kl80",
+        "nomask_td_coef": 1.0,
+        "aux_force_main_open": False, "advantage_margin": True,
+        "dual_gate_test": True,
+    },
     "relation_advantage_margin_kl80aux_gradsep": {
         "gate": True, "relation": True, "aux": "kl80",
         "nomask_td_coef": 1.0,
@@ -239,17 +247,17 @@ ABLATION_PROFILES = {
     "relation_advantage_augtd_teacheronly": {
         "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "advantage_margin": True, "advantage_teacher_only": True,
-        "importance_warmup_steps": 0, "dual_gate_test": True,
+        "aux_identity_warmup": True, "dual_gate_test": True,
     },
     "relation_advantage_masktd_augtd_teacheronly": {
         "gate": True, "aux": "kl80", "main_td_coef": 1.0,
         "advantage_margin": True, "advantage_teacher_only": True,
-        "importance_warmup_steps": 0, "dual_gate_test": True,
+        "aux_identity_warmup": True, "dual_gate_test": True,
     },
     "relation_advantage_augtd_nomasktd": {
         "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0, "advantage_margin": True,
-        "importance_warmup_steps": 0, "dual_gate_test": True,
+        "aux_identity_warmup": True, "dual_gate_test": True,
     },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
@@ -331,6 +339,9 @@ def experiment_overrides(label, domain="grf"):
         "clean_mask_parameter_relation_perturbed_head_coef": 0.0,
         "clean_mask_parameter_relation_gate_regularization_coef": 0.0,
         "clean_random_drop_auxiliary_coef": float(bool(flags.get("aux"))),
+        "clean_random_drop_auxiliary_identity_warmup": bool(
+            flags.get("aux_identity_warmup")
+        ),
         "clean_main_td_coef": flags.get("main_td_coef", 1.0),
         "clean_nomask_td_auxiliary_coef": flags.get(
             "nomask_td_coef", 0.0

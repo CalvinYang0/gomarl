@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the three matched Advantage-margin TD-path profiles."""
+"""Exercise stacked KL80 and three matched Advantage TD-path profiles."""
 import logging
 import math
 from pathlib import Path
@@ -17,9 +17,19 @@ from smoke_test_counter_transformer_nine import check, make_case
 
 
 PROFILES = {
-    "relation_advantage_augtd_teacheronly": (0.0, 0.0, True),
-    "relation_advantage_masktd_augtd_teacheronly": (1.0, 0.0, True),
-    "relation_advantage_augtd_nomasktd": (0.0, 1.0, False),
+    # main TD, no-mask TD, teacher-only, parameter relation, identity warmup
+    "relation_advantage_margin_kl80aux_stacked": (
+        1.0, 1.0, False, 1.0, False
+    ),
+    "relation_advantage_augtd_teacheronly": (
+        0.0, 0.0, True, 0.0, True
+    ),
+    "relation_advantage_masktd_augtd_teacheronly": (
+        1.0, 0.0, True, 0.0, True
+    ),
+    "relation_advantage_augtd_nomasktd": (
+        0.0, 1.0, False, 0.0, True
+    ),
 }
 
 
@@ -30,7 +40,14 @@ def main():
     sacred = yaml.safe_load(
         (ROOT / "src/config/algs/clean_hyper.yaml").read_text()
     )
-    for label, (main_coef, nomask_coef, teacher_only) in PROFILES.items():
+    for label, values in PROFILES.items():
+        (
+            main_coef,
+            nomask_coef,
+            teacher_only,
+            relation_coef,
+            identity_warmup,
+        ) = values
         overrides = experiment_overrides(label)
         missing = set(overrides) - set(sacred)
         assert not missing, "{} has unregistered keys: {}".format(
@@ -42,15 +59,29 @@ def main():
         )
         assert overrides["clean_advantage_margin_teacher_only"] is teacher_only
         assert overrides["clean_advantage_margin_auxiliary"] is True
-        assert overrides["clean_mask_parameter_relation_coef"] == 0.0
+        assert overrides["clean_mask_parameter_relation_coef"] == relation_coef
         assert overrides["clean_random_drop_auxiliary_coef"] == 1.0
+        assert (
+            overrides["clean_random_drop_auxiliary_identity_warmup"]
+            is identity_warmup
+        )
         assert overrides["clean_kl_auxiliary_force_main_open"] is False
-        assert overrides["clean_importance_auxiliary_warmup_steps"] == 0
+        assert overrides["clean_importance_auxiliary_warmup_steps"] == 250000
         assert overrides["clean_dual_gate_test"] is True
 
         check(label)
         _, learner, batch, logger = make_case(label)
         assert learner.advantage_margin_teacher_only is teacher_only
+        learner.train(batch, t_env=10, episode_num=4)
+        if identity_warmup:
+            assert logger.stats[
+                "loss_random_drop_td_auxiliary"
+            ][-1][1] > 0.0
+            assert logger.stats[
+                "loss_{}_random_auxiliary".format(
+                    learner.kl_auxiliary_tag
+                )
+            ][-1][1] == 0.0
         learner.train(batch, t_env=500000, episode_num=5)
         assert logger.stats["loss_random_drop_td_auxiliary"][-1][1] >= 0.0
         assert logger.stats["loss_advantage_margin"][-1][1] >= 0.0
@@ -60,7 +91,7 @@ def main():
             "train_gate/advantage_margin/margin_gain_mean"
         ][-1][1]
         assert math.isfinite(gain)
-    print("Advantage augmented/mask/no-mask TD-path profiles: OK")
+    print("Stacked KL80 and Advantage TD-path profiles: OK")
 
 
 if __name__ == "__main__":
