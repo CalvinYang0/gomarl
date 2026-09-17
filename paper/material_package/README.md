@@ -14,6 +14,8 @@ Recommended use:
 8. Use `05_writing_prompts.md` as reusable prompts.
 9. Use `06_run_command_templates.md` when launching the current main experiments.
 10. Use `07_ai_writing_workflow.md` to coordinate Codex, ChatGPT, and human revision.
+11. Use `09_private_bias_public_transformer_brief.md` when writing the current public/private Transformer model story, ablations, and safe claims.
+12. Use `11_hyperselect_paper_handoff.md` as the primary handoff for the current HyperSelect paper story, exact loss/config mapping, experiment lineage, safe claims, and paper-writing prompt.
 
 Important boundary:
 
