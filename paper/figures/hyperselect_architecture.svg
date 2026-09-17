@@ -1,0 +1,190 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1080" viewBox="0 0 1800 1080" role="img" aria-labelledby="title desc">
+  <title id="title">HyperSelect architecture</title>
+  <desc id="desc">Paper model diagram showing adaptive observation masking, stochastic mask exploration, open-view value anchoring, Q-guided mask evaluation, gradient isolation, training losses, and paired masked versus open evaluation.</desc>
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { font: 700 34px Arial, Helvetica, sans-serif; fill: #172033; }
+      .subtitle { font: 400 17px Arial, Helvetica, sans-serif; fill: #566176; }
+      .lane { font: 700 18px Arial, Helvetica, sans-serif; }
+      .node-title { font: 700 18px Arial, Helvetica, sans-serif; fill: #172033; }
+      .node-text { font: 400 15px Arial, Helvetica, sans-serif; fill: #39455b; }
+      .small { font: 400 13px Arial, Helvetica, sans-serif; fill: #566176; }
+      .formula { font: italic 16px Georgia, 'Times New Roman', serif; fill: #172033; }
+      .loss { font: 700 16px Arial, Helvetica, sans-serif; fill: #172033; }
+      .box { fill: #ffffff; stroke: #aab3c2; stroke-width: 2; rx: 14; }
+      .input { fill: #f6f7fa; stroke: #7d8798; stroke-width: 2; rx: 14; }
+      .blue { fill: #edf5ff; stroke: #3f7fc4; stroke-width: 2.5; rx: 14; }
+      .green { fill: #edf9f5; stroke: #3d9a78; stroke-width: 2.5; rx: 14; }
+      .purple { fill: #f5f0ff; stroke: #7a5bc7; stroke-width: 2.5; rx: 14; }
+      .orange { fill: #fff5e9; stroke: #d78327; stroke-width: 2.5; rx: 14; }
+      .shared { fill: #f7f8fb; stroke: #596579; stroke-width: 2.5; rx: 16; }
+      .lossbox { fill: #fbfbfd; stroke: #7d8798; stroke-width: 2; rx: 12; }
+      .eval { fill: #f2f8ff; stroke: #3f7fc4; stroke-width: 2; rx: 14; }
+      .solid { fill: none; stroke: #4f5b6d; stroke-width: 2.5; marker-end: url(#arrow); }
+      .blue-line { fill: none; stroke: #3f7fc4; stroke-width: 3; marker-end: url(#arrow-blue); }
+      .green-line { fill: none; stroke: #3d9a78; stroke-width: 3; marker-end: url(#arrow-green); }
+      .purple-line { fill: none; stroke: #7a5bc7; stroke-width: 3; marker-end: url(#arrow-purple); }
+      .orange-line { fill: none; stroke: #d78327; stroke-width: 3; marker-end: url(#arrow-orange); }
+      .grad { fill: none; stroke: #d78327; stroke-width: 2.8; stroke-dasharray: 9 7; marker-end: url(#arrow-orange); }
+      .detach { fill: none; stroke: #c34b50; stroke-width: 2.5; stroke-dasharray: 5 6; marker-end: url(#arrow-red); }
+      .guide { fill: none; stroke: #c5cbd5; stroke-width: 1.5; stroke-dasharray: 5 7; }
+      .divider { stroke: #d9dde5; stroke-width: 1.5; }
+      .tag-blue { fill: #3f7fc4; }
+      .tag-green { fill: #3d9a78; }
+      .tag-purple { fill: #7a5bc7; }
+      .tag-orange { fill: #d78327; }
+      .tag-text { font: 700 13px Arial, Helvetica, sans-serif; fill: #ffffff; }
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L12,6 L0,12 z" fill="#4f5b6d"/></marker>
+    <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L12,6 L0,12 z" fill="#3f7fc4"/></marker>
+    <marker id="arrow-green" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L12,6 L0,12 z" fill="#3d9a78"/></marker>
+    <marker id="arrow-purple" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L12,6 L0,12 z" fill="#7a5bc7"/></marker>
+    <marker id="arrow-orange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L12,6 L0,12 z" fill="#d78327"/></marker>
+    <marker id="arrow-red" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L12,6 L0,12 z" fill="#c34b50"/></marker>
+  </defs>
+
+  <rect class="bg" width="1800" height="1080"/>
+  <text class="title" x="900" y="48" text-anchor="middle">HyperSelect: Value-Guided Adaptive Observation Masking</text>
+  <text class="subtitle" x="900" y="78" text-anchor="middle">Selective observation conditioning for hypernetwork-based cooperative MARL</text>
+
+  <!-- lane labels -->
+  <rect class="tag-blue" x="38" y="126" width="150" height="30" rx="15"/><text class="tag-text" x="113" y="146" text-anchor="middle">MAIN EXECUTION</text>
+  <rect class="tag-purple" x="38" y="390" width="184" height="30" rx="15"/><text class="tag-text" x="130" y="410" text-anchor="middle">OPEN-VIEW ANCHOR</text>
+  <rect class="tag-green" x="38" y="646" width="150" height="30" rx="15"/><text class="tag-text" x="113" y="666" text-anchor="middle">MASK EXPLORATION</text>
+  <rect class="tag-orange" x="38" y="842" width="150" height="30" rx="15"/><text class="tag-text" x="113" y="862" text-anchor="middle">MASK EVALUATION</text>
+
+  <!-- observation -->
+  <rect class="input" x="62" y="194" width="210" height="118"/>
+  <text class="node-title" x="167" y="229" text-anchor="middle">Local observation</text>
+  <text class="formula" x="167" y="258" text-anchor="middle">o<tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline"> = {self, allies, opponents}</tspan></text>
+  <text class="small" x="167" y="287" text-anchor="middle">structured entity features</text>
+
+  <!-- AOM -->
+  <path class="blue-line" d="M272 253 H342"/>
+  <rect class="blue" x="342" y="178" width="246" height="150"/>
+  <text class="node-title" x="465" y="214" text-anchor="middle">Adaptive Observation</text>
+  <text class="node-title" x="465" y="238" text-anchor="middle">Masker (AOM)</text>
+  <text class="formula" x="465" y="271" text-anchor="middle">m<tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline"> = AOM</tspan><tspan baseline-shift="sub" font-size="12">ϕ</tspan><tspan baseline-shift="baseline">(o</tspan><tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline">)</tspan></text>
+  <text class="small" x="465" y="302" text-anchor="middle">state-dependent entity keep mask</text>
+
+  <!-- masked condition -->
+  <path class="blue-line" d="M588 253 H650"/>
+  <rect class="blue" x="650" y="194" width="210" height="118"/>
+  <text class="node-title" x="755" y="229" text-anchor="middle">Selected condition</text>
+  <text class="formula" x="755" y="261" text-anchor="middle">o<tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="super" font-size="12">m</tspan><tspan baseline-shift="baseline"> = m</tspan><tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline"> ⊙ o</tspan><tspan baseline-shift="sub" font-size="12">t</tspan></text>
+  <text class="small" x="755" y="287" text-anchor="middle">only selected entities condition H</text>
+
+  <!-- shared model -->
+  <path class="blue-line" d="M860 253 H930"/>
+  <rect class="shared" x="930" y="142" width="344" height="640"/>
+  <text class="node-title" x="1102" y="178" text-anchor="middle">Shared value model</text>
+  <line class="divider" x1="956" y1="195" x2="1248" y2="195"/>
+  <rect class="box" x="974" y="220" width="256" height="106"/>
+  <text class="node-title" x="1102" y="254" text-anchor="middle">Hypernetwork</text>
+  <text class="formula" x="1102" y="285" text-anchor="middle">θ<tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline"> = H</tspan><tspan baseline-shift="sub" font-size="12">ψ</tspan><tspan baseline-shift="baseline">(condition)</tspan></text>
+  <text class="small" x="1102" y="310" text-anchor="middle">generates agent decision parameters</text>
+  <path class="solid" d="M1102 326 V365"/>
+  <rect class="box" x="974" y="365" width="256" height="112"/>
+  <text class="node-title" x="1102" y="401" text-anchor="middle">Dynamic agent Q-head</text>
+  <text class="formula" x="1102" y="432" text-anchor="middle">Q<tspan baseline-shift="sub" font-size="12">i</tspan><tspan baseline-shift="baseline">(τ</tspan><tspan baseline-shift="sub" font-size="12">i</tspan><tspan baseline-shift="baseline">, · ; θ</tspan><tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline">)</tspan></text>
+  <text class="small" x="1102" y="458" text-anchor="middle">shared recurrent encoder and Q parameters</text>
+  <path class="solid" d="M1102 477 V516"/>
+  <rect class="box" x="974" y="516" width="256" height="84"/>
+  <text class="node-title" x="1102" y="550" text-anchor="middle">QMIX mixer</text>
+  <text class="small" x="1102" y="577" text-anchor="middle">centralized TD training with global state</text>
+  <line class="guide" x1="956" y1="640" x2="1248" y2="640"/>
+  <text class="small" x="1102" y="676" text-anchor="middle">masked, open, and augmented views</text>
+  <text class="small" x="1102" y="700" text-anchor="middle">each traverse the complete shared stack</text>
+  <text class="small" x="1102" y="744" text-anchor="middle">same ψ, recurrent Q parameters, and mixer</text>
+
+  <!-- main output -->
+  <path class="blue-line" d="M1274 253 H1354"/>
+  <rect class="blue" x="1354" y="194" width="206" height="118"/>
+  <text class="node-title" x="1457" y="229" text-anchor="middle">Masked-view Q</text>
+  <text class="formula" x="1457" y="261" text-anchor="middle">Q<tspan baseline-shift="super" font-size="12">m</tspan><tspan baseline-shift="baseline">(o</tspan><tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline">, ·)</tspan></text>
+  <text class="small" x="1457" y="287" text-anchor="middle">decentralized action selection</text>
+
+  <!-- explicit no main TD -->
+  <rect class="lossbox" x="1600" y="205" width="158" height="96"/>
+  <text class="loss" x="1679" y="236" text-anchor="middle">No main</text>
+  <text class="loss" x="1679" y="260" text-anchor="middle">MaskTD</text>
+  <line x1="1632" y1="280" x2="1726" y2="224" stroke="#c34b50" stroke-width="4"/>
+
+  <!-- open lane -->
+  <path class="purple-line" d="M167 312 V466 H342"/>
+  <rect class="purple" x="342" y="432" width="246" height="112"/>
+  <text class="node-title" x="465" y="468" text-anchor="middle">Open-view branch (OVA)</text>
+  <text class="formula" x="465" y="500" text-anchor="middle">m<tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline"> ≡ 1</tspan></text>
+  <text class="small" x="465" y="526" text-anchor="middle">bypass AOM; shared model weights</text>
+  <path class="purple-line" d="M588 488 H902 V406 H930"/>
+  <rect class="purple" x="1354" y="414" width="206" height="126"/>
+  <path class="purple-line" d="M1274 477 H1354"/>
+  <text class="node-title" x="1457" y="449" text-anchor="middle">Open-view Q</text>
+  <text class="formula" x="1457" y="480" text-anchor="middle">Q<tspan baseline-shift="super" font-size="12">open</tspan><tspan baseline-shift="baseline">(o</tspan><tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline">, ·)</tspan></text>
+  <text class="small" x="1457" y="507" text-anchor="middle">trained value anchor and teacher</text>
+
+  <path class="purple-line" d="M1560 448 H1600"/>
+  <rect class="purple" x="1584" y="398" width="174" height="98"/>
+  <text class="loss" x="1671" y="432" text-anchor="middle">L<tspan baseline-shift="sub" font-size="12">OVA-TD</tspan></text>
+  <text class="small" x="1671" y="460" text-anchor="middle">ordinary TD target</text>
+  <text class="small" x="1671" y="481" text-anchor="middle">updates shared value model</text>
+
+  <!-- SME lane -->
+  <path class="green-line" d="M588 300 H640 V620 H560 V650"/>
+  <path class="green-line" d="M167 312 V620 H342 V702 H376"/>
+  <rect class="green" x="376" y="650" width="242" height="132"/>
+  <text class="node-title" x="497" y="684" text-anchor="middle">Stochastic Mask</text>
+  <text class="node-title" x="497" y="708" text-anchor="middle">Exploration (SME)</text>
+  <text class="formula" x="497" y="739" text-anchor="middle">z<tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline"> ~ Concrete(p</tspan><tspan baseline-shift="sub" font-size="12">aux</tspan><tspan baseline-shift="baseline">(o</tspan><tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline">))</tspan></text>
+  <text class="small" x="497" y="764" text-anchor="middle">learned random entity drop</text>
+
+  <path class="green-line" d="M618 716 H676"/>
+  <rect class="green" x="676" y="650" width="224" height="132"/>
+  <text class="node-title" x="788" y="687" text-anchor="middle">Composed view</text>
+  <text class="formula" x="788" y="720" text-anchor="middle">o<tspan baseline-shift="super" font-size="12">aug</tspan><tspan baseline-shift="baseline"> = (m</tspan><tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline"> ⊙ z</tspan><tspan baseline-shift="sub" font-size="12">t</tspan><tspan baseline-shift="baseline">) ⊙ o</tspan><tspan baseline-shift="sub" font-size="12">t</tspan></text>
+  <text class="small" x="788" y="749" text-anchor="middle">SME is stacked on AOM</text>
+
+  <path class="green-line" d="M900 716 H930"/>
+  <path class="green-line" d="M1274 716 H1390"/>
+  <rect class="green" x="1390" y="642" width="170" height="110"/>
+  <text class="loss" x="1475" y="681" text-anchor="middle">L<tspan baseline-shift="sub" font-size="12">SME-TD</tspan></text>
+  <text class="small" x="1475" y="708" text-anchor="middle">augmented-view TD</text>
+  <text class="small" x="1475" y="730" text-anchor="middle">updates shared model + gates</text>
+
+  <path class="green-line" d="M497 650 V624 H1671 V650"/>
+  <rect class="green" x="1584" y="650" width="174" height="102"/>
+  <text class="loss" x="1671" y="684" text-anchor="middle">L<tspan baseline-shift="sub" font-size="12">SME-KL</tspan></text>
+  <text class="formula" x="1671" y="713" text-anchor="middle">KL(p<tspan baseline-shift="sub" font-size="11">aux</tspan><tspan baseline-shift="baseline"> || 0.8)</tspan></text>
+  <text class="small" x="1671" y="736" text-anchor="middle">exploration keep prior</text>
+
+  <!-- QME lane -->
+  <path class="detach" d="M1457 540 V602 H1324 V872 H1290"/>
+  <text class="small" x="1390" y="588" text-anchor="middle" fill="#c34b50">stop-gradient teacher</text>
+  <rect class="orange" x="1000" y="824" width="290" height="158"/>
+  <text class="node-title" x="1145" y="858" text-anchor="middle">Q-Guided Mask Evaluation (QME)</text>
+  <text class="formula" x="1145" y="889" text-anchor="middle">a* = arg max<tspan baseline-shift="sub" font-size="11">a</tspan><tspan baseline-shift="baseline"> Q</tspan><tspan baseline-shift="super" font-size="11">open</tspan><tspan baseline-shift="baseline">(o, a)</tspan></text>
+  <text class="formula" x="1145" y="920" text-anchor="middle">c = confidence(Q<tspan baseline-shift="super" font-size="11">open</tspan><tspan baseline-shift="baseline">)</tspan></text>
+  <text class="formula" x="1145" y="951" text-anchor="middle">L<tspan baseline-shift="sub" font-size="11">QME</tspan><tspan baseline-shift="baseline"> = −E[c · Q</tspan><tspan baseline-shift="super" font-size="11">m</tspan><tspan baseline-shift="baseline">(o, a*)]</tspan></text>
+
+  <path class="orange-line" d="M1457 312 V354 H1308 V930 H1290"/>
+  <text class="small" x="1370" y="343" text-anchor="middle">evaluate teacher action</text>
+  <path class="grad" d="M1000 968 H310 V350 H465 V328"/>
+  <text class="small" x="700" y="995" text-anchor="middle" fill="#d78327">gate-only gradient: QME updates AOM, not the shared value model</text>
+
+  <!-- objective and test -->
+  <rect class="lossbox" x="1370" y="842" width="388" height="140"/>
+  <text class="node-title" x="1564" y="874" text-anchor="middle">Training objective</text>
+  <text class="formula" x="1564" y="908" text-anchor="middle">L = L<tspan baseline-shift="sub" font-size="11">OVA-TD</tspan><tspan baseline-shift="baseline"> + λ</tspan><tspan baseline-shift="sub" font-size="11">S</tspan><tspan baseline-shift="baseline">L</tspan><tspan baseline-shift="sub" font-size="11">SME-TD</tspan></text>
+  <text class="formula" x="1564" y="938" text-anchor="middle">+ βL<tspan baseline-shift="sub" font-size="11">SME-KL</tspan><tspan baseline-shift="baseline"> + λ</tspan><tspan baseline-shift="sub" font-size="11">Q</tspan><tspan baseline-shift="baseline">L</tspan><tspan baseline-shift="sub" font-size="11">QME</tspan></text>
+  <text class="small" x="1564" y="966" text-anchor="middle">250k warmup; QME ramps over the next 250k</text>
+
+  <line class="divider" x1="38" y1="1010" x2="1762" y2="1010"/>
+  <text class="node-title" x="66" y="1046">Paired evaluation:</text>
+  <rect class="eval" x="248" y="1021" width="282" height="42"/>
+  <text class="node-text" x="389" y="1047" text-anchor="middle">HyperSelect-Masked (normal AOM)</text>
+  <text class="node-title" x="558" y="1048" text-anchor="middle">vs.</text>
+  <rect class="eval" x="590" y="1021" width="292" height="42"/>
+  <text class="node-text" x="736" y="1047" text-anchor="middle">HyperSelect-Open (AOM forced open)</text>
+  <text class="small" x="920" y="1047">same checkpoint · same environment · directly measures execution-time mask benefit</text>
+</svg>

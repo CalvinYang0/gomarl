@@ -16,6 +16,7 @@ Recommended use:
 10. Use `07_ai_writing_workflow.md` to coordinate Codex, ChatGPT, and human revision.
 11. Use `09_private_bias_public_transformer_brief.md` when writing the current public/private Transformer model story, ablations, and safe claims.
 12. Use `11_hyperselect_paper_handoff.md` as the primary handoff for the current HyperSelect paper story, exact loss/config mapping, experiment lineage, safe claims, and paper-writing prompt.
+13. Use `../figures/hyperselect_architecture.svg` as the editable paper model figure and `../figures/hyperselect_architecture.png` for high-resolution previews.
 
 Important boundary:
 

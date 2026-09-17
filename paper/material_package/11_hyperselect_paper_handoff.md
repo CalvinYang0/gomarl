@@ -5,6 +5,10 @@ Last updated: 2026-09-17
 Code snapshot used for this handoff: `0890c04`
 Primary implementation profile: `relation_advantage_qvalue_augtd_nomasktd`
 
+Paper architecture figure:
+[editable SVG](../figures/hyperselect_architecture.svg) and
+[high-resolution PNG](../figures/hyperselect_architecture.png).
+
 This document is the source-of-truth handoff from the implementation and
 experiment thread to the paper-writing thread. It records the agreed paper
 story, method naming, exact implemented loss paths, experiment lineage,
