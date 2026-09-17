@@ -651,6 +651,7 @@ baselines rather than claiming they are exact reproductions.
 
 - **[HyperMARL](https://arxiv.org/abs/2412.04233)**: agent-conditioned hypernetworks for specialization and reduced
   cross-agent gradient interference.
+- **[Kaleidoscope](https://arxiv.org/abs/2410.08540)**: learnable parameter masks for adaptive partial parameter sharing and agent heterogeneity. Its masks select shared network parameters and are differentiated across agents, whereas HyperSelect uses observation-conditioned entity masks to control which current observations participate in hypernetwork parameter generation.
 - **[CASH](https://arxiv.org/abs/2501.06058)**: capability- and observation-conditioned shared hypernetworks for
   heterogeneous coordination and generalization.
 - **[S2RL](https://arxiv.org/abs/2206.11054)**: dense and sparse entity-attention branches in value-based MARL;
