@@ -286,6 +286,14 @@ ABLATION_PROFILES = {
         "advantage_objective": "action_q",
         "aux_identity_warmup": True, "dual_gate_test": True,
     },
+    # Strict no-Advantage control for the Direct-Q + AugTD + NoMaskTD model.
+    # Every TD, masking, warmup and evaluation setting is identical; only the
+    # gate-only Advantage objective is disabled.
+    "relation_noadv_augtd_nomasktd": {
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
+        "nomask_td_coef": 1.0,
+        "aux_identity_warmup": True, "dual_gate_test": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
