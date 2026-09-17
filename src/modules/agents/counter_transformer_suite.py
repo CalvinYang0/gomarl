@@ -320,6 +320,7 @@ SMAC_PROFILES = (
     "relation_advantage_margin_kl80aux_gradsep",
     "relation_advantage_margin_kl80aux",
     "relation_advantage_weighted_kl80aux",
+    "relation_advantage_qvalue_augtd_nomasktd",
 )
 
 
