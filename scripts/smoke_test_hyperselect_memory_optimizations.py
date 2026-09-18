@@ -82,8 +82,8 @@ def main():
     assert th.equal(reference_main, optimized_main)
     assert th.equal(reference_full, optimized_full)
     assert th.equal(reference_loss, optimized_loss)
-    reference_parameters = dict(reference.named_parameters())
-    optimized_parameters = dict(optimized.named_parameters())
+    reference_parameters = dict(reference.agent.named_parameters())
+    optimized_parameters = dict(optimized.agent.named_parameters())
     assert reference_parameters.keys() == optimized_parameters.keys()
     for name in reference_parameters:
         left = reference_parameters[name].grad
@@ -102,8 +102,8 @@ def main():
     aggregate_learner.train(train_batch, t_env=500000, episode_num=1)
     th.manual_seed(37)
     staged_learner.train(train_batch, t_env=500000, episode_num=1)
-    aggregate_parameters = dict(aggregate_learner.mac.named_parameters())
-    staged_parameters = dict(staged_learner.mac.named_parameters())
+    aggregate_parameters = dict(aggregate_learner.mac.agent.named_parameters())
+    staged_parameters = dict(staged_learner.mac.agent.named_parameters())
     for name in aggregate_parameters:
         assert th.allclose(
             aggregate_parameters[name],
