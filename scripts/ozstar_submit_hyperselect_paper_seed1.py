@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Submit the seed-1 HyperSelect paper ablation and five-scene transfer set.
+"""Submit the missing seed-1 ablations and five-scene HyperSelect set.
 
-The suite contains five Counter ablations plus the full model on the five
-paper scenes not already covered by the historical Counter run.  It never
-cancels jobs and retains an active same-name job from this repository.
+The suite contains only the two Counter ablations not covered by historical
+runs, plus the full model on the five paper scenes other than Counter.  It
+never cancels jobs and retains an active same-name job from this repository.
 """
 import json
 import os
@@ -25,18 +25,12 @@ from ozstar_submit_relation_advantage_mixer_nine import route_runtime
 
 FULL_LABEL = "relation_advantage_qvalue_augtd_nomasktd"
 COUNTER_LABELS = (
-    "baseline",
-    "hyperselect_gate",
     "hyperselect_gate_qme",
     "hyperselect_gate_sme",
-    FULL_LABEL,
 )
 PAPER_NAMES = {
-    "baseline": "transformer",
-    "hyperselect_gate": "gate",
     "hyperselect_gate_qme": "gate_qme",
     "hyperselect_gate_sme": "gate_sme",
-    FULL_LABEL: "hyperselect",
 }
 TRANSFER_SCENES = (
     ("grf_pass", "academy_pass_and_shoot_with_keeper", "grf", "48G"),
