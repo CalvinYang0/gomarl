@@ -294,6 +294,22 @@ ABLATION_PROFILES = {
         "nomask_td_coef": 1.0,
         "aux_identity_warmup": True, "dual_gate_test": True,
     },
+    # Paper-facing HyperSelect ablations.  These profiles keep the same
+    # Transformer/hypernetwork backbone and isolate the main observation gate,
+    # Q-guided mask evaluation, and stochastic mask exploration.
+    "hyperselect_gate": {
+        "gate": True, "main_td_coef": 1.0, "dual_gate_test": True,
+    },
+    "hyperselect_gate_qme": {
+        "gate": True, "main_td_coef": 0.0, "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "dual_gate_test": True,
+    },
+    "hyperselect_gate_sme": {
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
+        "nomask_td_coef": 1.0,
+        "aux_identity_warmup": True, "dual_gate_test": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
