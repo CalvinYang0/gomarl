@@ -621,11 +621,19 @@ class CleanMAC(BasicMAC):
             "prev_state": prev_state,
         }
 
-    def forward(self, ep_batch, t, test_mode=False):
+    def forward(
+        self,
+        ep_batch,
+        t,
+        test_mode=False,
+        policy_hidden_override=None,
+    ):
         agent_inputs = self._build_inputs(ep_batch, t)
         if test_mode:
             self.agent.eval()
         model_context = self._build_model_context(ep_batch, t)
+        if policy_hidden_override is not None:
+            model_context["policy_hidden_override"] = policy_hidden_override
         agent_outs, self.hidden_states = self.agent(
             agent_inputs, self.hidden_states, context=model_context, test_mode=test_mode
         )

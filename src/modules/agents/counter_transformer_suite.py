@@ -285,6 +285,7 @@ ABLATION_PROFILES = {
         "nomask_td_coef": 1.0, "advantage_margin": True,
         "advantage_objective": "action_q",
         "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
     },
     # Strict no-Advantage control for the Direct-Q + AugTD + NoMaskTD model.
     # Every TD, masking, warmup and evaluation setting is identical; only the
@@ -303,12 +304,13 @@ ABLATION_PROFILES = {
     "hyperselect_gate_qme": {
         "gate": True, "main_td_coef": 0.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
-        "dual_gate_test": True,
+        "dual_gate_test": True, "memory_efficient_multi_path": True,
     },
     "hyperselect_gate_sme": {
         "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0,
         "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
     },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork

@@ -27,6 +27,11 @@ class CleanLearner:
         self.logger = logger
         model_type = getattr(self.mac.agent, "model_type", "")
         self.counter_transformer_profile = profile_for(model_type)
+        self.memory_efficient_multi_path = bool(
+            self.counter_transformer_profile.get(
+                "memory_efficient_multi_path", False
+            )
+        )
         self.counter_branch_index = 0 if self.counter_transformer_profile.get("branch") == "linear" else 1
         self.counter_branch_name = "linear" if self.counter_branch_index == 0 else "attention"
         self.params = [
@@ -998,23 +1003,30 @@ class CleanLearner:
                 "Gate-only auxiliary backward has no trainable gate parameters"
             )
 
+        auxiliary_gradients = None
+        if auxiliary_active:
+            # Differentiate the gate-only branch first.  The subsequent main
+            # backward can then release the much larger NoMaskTD/AugTD graphs
+            # instead of retaining the whole combined graph for this small
+            # parameter-only gradient.
+            scaled_auxiliary_loss = (
+                self.amp_scaler.scale(gate_only_auxiliary_loss)
+                if self.use_amp
+                else gate_only_auxiliary_loss
+            )
+            auxiliary_gradients = th.autograd.grad(
+                scaled_auxiliary_loss,
+                selected_gate_parameters,
+                allow_unused=True,
+                retain_graph=True,
+            )
         scaled_main_loss = (
             self.amp_scaler.scale(main_loss) if self.use_amp else main_loss
         )
-        scaled_main_loss.backward(retain_graph=auxiliary_active)
+        scaled_main_loss.backward()
         if not auxiliary_active:
             return
 
-        scaled_auxiliary_loss = (
-            self.amp_scaler.scale(gate_only_auxiliary_loss)
-            if self.use_amp
-            else gate_only_auxiliary_loss
-        )
-        auxiliary_gradients = th.autograd.grad(
-            scaled_auxiliary_loss,
-            selected_gate_parameters,
-            allow_unused=True,
-        )
         if not any(gradient is not None for gradient in auxiliary_gradients):
             raise RuntimeError(
                 "Importance auxiliary loss is disconnected from the dynamic gate"
@@ -2788,8 +2800,53 @@ class CleanLearner:
                 batch.max_seq_length, self.semantic_observation_probe_timesteps
             )
 
+        # The paper profiles have independent NoMaskTD and AugTD branches.
+        # Their gradients are accumulated before the final optimiser step so
+        # each branch graph can be released before constructing the next one.
+        if self.memory_efficient_multi_path:
+            self.optimiser.zero_grad()
+        policy_hidden_external_grads = [
+            None for _ in range(batch.max_seq_length)
+        ]
+
+        def auxiliary_policy_hidden_cache(policy_hidden_cache):
+            if not self.memory_efficient_multi_path:
+                return policy_hidden_cache
+            return [
+                hidden.detach().requires_grad_(True)
+                for hidden in policy_hidden_cache
+            ]
+
+        def accumulate_auxiliary_policy_gradients(auxiliary_cache):
+            if not self.memory_efficient_multi_path:
+                return
+            for index, hidden in enumerate(auxiliary_cache):
+                gradient = hidden.grad
+                if gradient is None:
+                    continue
+                gradient = gradient.detach()
+                previous = policy_hidden_external_grads[index]
+                policy_hidden_external_grads[index] = (
+                    gradient.clone()
+                    if previous is None
+                    else previous + gradient
+                )
+
+        def backward_auxiliary_branch(branch_loss):
+            scaled_loss = (
+                self.amp_scaler.scale(branch_loss)
+                if self.use_amp
+                else branch_loss
+            )
+            scaled_loss.backward()
+
         with self._amp_context():
             mac_out = []
+            # All online auxiliary paths receive the same clean recurrent
+            # policy inputs. Cache that trajectory once and reuse the exact
+            # tensors; mask-specific relation states and generated heads are
+            # still evaluated independently.
+            policy_hidden_cache = []
             teacher_mac_out = []
             relation_conditions = [] if self.relation_mixer_gate is not None else None
             aux_losses = []
@@ -2805,6 +2862,9 @@ class CleanLearner:
                         t in observation_probe_times
                     )
                 mac_out.append(self.mac.forward(batch, t=t))
+                policy_hidden_cache.append(
+                    self.mac.hidden_states[:, :, : self.mac.agent.hidden_dim]
+                )
                 if gate_diagnostics is not None:
                     diagnostic_capturer = self.mac.agent.rpg_relation_capturer
                     for suffix, attribute in (("probability", "latest_dynamic_branch_probabilities_graph"),
@@ -3352,9 +3412,11 @@ class CleanLearner:
                 if target_relation_conditions is not None:
                     target_relation_conditions = th.stack(target_relation_conditions, dim=1)
 
-                mac_out_detach = mac_out.detach().clone()
-                mask_value = th.finfo(mac_out_detach.dtype).min if mac_out_detach.is_floating_point() else -9999999
-                mac_out_detach[avail_actions == 0] = mask_value
+                detached_mac_out = mac_out.detach()
+                mask_value = th.finfo(detached_mac_out.dtype).min if detached_mac_out.is_floating_point() else -9999999
+                mac_out_detach = detached_mac_out.masked_fill(
+                    avail_actions == 0, mask_value
+                )
                 cur_max_actions = mac_out_detach.max(dim=3, keepdim=True)[1]
                 target_max_agent_qvals = th.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
 
@@ -3406,6 +3468,9 @@ class CleanLearner:
                 # were already captured from the ordinary masked pass above;
                 # force-open affects only this additional TD path.
                 nomask_mac_out = []
+                nomask_policy_hidden_cache = auxiliary_policy_hidden_cache(
+                    policy_hidden_cache
+                )
                 self.mac.init_hidden(batch.batch_size)
                 self.mac.set_dynamic_branch_gate_force_open(True)
                 try:
@@ -3416,12 +3481,20 @@ class CleanLearner:
                         with th.no_grad():
                             for t in range(batch.max_seq_length):
                                 nomask_mac_out.append(
-                                    self.mac.forward(batch, t=t)
+                                    self.mac.forward(
+                                        batch,
+                                        t=t,
+                                        policy_hidden_override=nomask_policy_hidden_cache[t],
+                                    )
                                 )
                     else:
                         for t in range(batch.max_seq_length):
                             nomask_mac_out.append(
-                                self.mac.forward(batch, t=t)
+                                self.mac.forward(
+                                    batch,
+                                    t=t,
+                                    policy_hidden_override=nomask_policy_hidden_cache[t],
+                                )
                             )
                 finally:
                     self.mac.set_dynamic_branch_gate_force_open(False)
@@ -3477,6 +3550,23 @@ class CleanLearner:
                 advantage_margin_coef = (
                     self.advantage_margin_auxiliary_coef * ramp
                 )
+            if (
+                self.memory_efficient_multi_path
+                and self.nomask_td_auxiliary_coef > 0.0
+            ):
+                backward_auxiliary_branch(
+                    self.nomask_td_auxiliary_coef * nomask_td_loss
+                )
+                accumulate_auxiliary_policy_gradients(
+                    nomask_policy_hidden_cache
+                )
+                # QME treats the full-observation values as a detached teacher;
+                # retain only those values after releasing the NoMaskTD graph.
+                nomask_td_loss = nomask_td_loss.detach()
+                nomask_mac_out = nomask_mac_out.detach()
+                nomask_chosen_qvals = None
+                nomask_td_error = None
+                nomask_policy_hidden_cache = None
             mixer_kl80_td_loss = td_loss.new_zeros(())
             mixer_kl80_prior_loss = td_loss.new_zeros(())
             mixer_kl80_prior_coef = 0.0
@@ -3533,6 +3623,9 @@ class CleanLearner:
                     t_env >= self.importance_auxiliary_warmup_steps
                 )
                 random_mac_out = []
+                random_policy_hidden_cache = auxiliary_policy_hidden_cache(
+                    policy_hidden_cache
+                )
                 random_relation_conditions = (
                     [] if self.relation_mixer_gate is not None else None
                 )
@@ -3576,7 +3669,13 @@ class CleanLearner:
                                 self.mac.set_dynamic_branch_gate_random_aux_mask(
                                     keep_probability
                                 )
-                        random_mac_out.append(self.mac.forward(batch, t=t))
+                        random_mac_out.append(
+                            self.mac.forward(
+                                batch,
+                                t=t,
+                                policy_hidden_override=random_policy_hidden_cache[t],
+                            )
+                        )
                         if (
                             gate_diagnostics is not None
                             and self.concrete_random_drop_auxiliary
@@ -3651,6 +3750,29 @@ class CleanLearner:
                     kl80_random_auxiliary_coef = self._adaptive_auxiliary_coefficient(
                         td_loss, kl80_random_auxiliary_loss
                     )
+                if self.memory_efficient_multi_path:
+                    backward_auxiliary_branch(
+                        self.random_drop_auxiliary_coef
+                        * random_drop_auxiliary_loss
+                        + kl80_random_auxiliary_coef
+                        * kl80_random_auxiliary_loss
+                    )
+                    accumulate_auxiliary_policy_gradients(
+                        random_policy_hidden_cache
+                    )
+                    random_drop_auxiliary_loss = (
+                        random_drop_auxiliary_loss.detach()
+                    )
+                    kl80_random_auxiliary_loss = (
+                        kl80_random_auxiliary_loss.detach()
+                    )
+                    random_mac_out = None
+                    random_chosen_qvals = None
+                    random_td_error = None
+                    random_masked_td_error = None
+                    random_relation_conditions = None
+                    auxiliary_kl_terms = None
+                    random_policy_hidden_cache = None
             perturbed_head_td_quality_loss = td_loss.new_zeros(())
             if perturbed_head_parameter_graphs is not None:
                 time_steps = len(perturbed_head_parameter_graphs)
@@ -3995,12 +4117,18 @@ class CleanLearner:
                 )
             shared_random_drop_auxiliary_coef = (
                 0.0
-                if self.kl_auxiliary_td_gate_only
+                if (
+                    self.kl_auxiliary_td_gate_only
+                    or self.memory_efficient_multi_path
+                )
                 else random_drop_auxiliary_coef
             )
             shared_kl80_random_auxiliary_coef = (
                 0.0
-                if self.kl_auxiliary_td_gate_only
+                if (
+                    self.kl_auxiliary_td_gate_only
+                    or self.memory_efficient_multi_path
+                )
                 else kl80_random_auxiliary_coef
             )
             shared_loss_without_nomask = (
@@ -4028,7 +4156,9 @@ class CleanLearner:
                 * td_weighted_parameter_likelihood_loss
             )
             nomask_teacher_loss = (
-                self.nomask_td_auxiliary_coef * nomask_td_loss
+                td_loss.new_zeros(())
+                if self.memory_efficient_multi_path
+                else self.nomask_td_auxiliary_coef * nomask_td_loss
             )
             loss = shared_loss_without_nomask + nomask_teacher_loss
 
@@ -4063,7 +4193,27 @@ class CleanLearner:
 
         semantic_critical_score = None
         semantic_gradient_scale = 1.0
-        self.optimiser.zero_grad()
+        if not self.memory_efficient_multi_path:
+            self.optimiser.zero_grad()
+        else:
+            hidden_outputs = []
+            hidden_gradients = []
+            for hidden, gradient in zip(
+                policy_hidden_cache, policy_hidden_external_grads
+            ):
+                if gradient is None:
+                    continue
+                hidden_outputs.append(hidden)
+                hidden_gradients.append(gradient)
+            if hidden_outputs:
+                # The auxiliary passes used detached leaf views of this one
+                # recurrent trajectory. Propagate their accumulated hidden
+                # gradients through the real policy trunk exactly once.
+                th.autograd.backward(
+                    hidden_outputs,
+                    grad_tensors=hidden_gradients,
+                    retain_graph=True,
+                )
         if self.importance_alternating_training:
             # Optimizers with momentum can still move a parameter whose
             # gradient is a zero tensor.  None is required so the inactive

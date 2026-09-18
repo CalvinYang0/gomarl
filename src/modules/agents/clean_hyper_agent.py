@@ -12586,8 +12586,6 @@ class CleanHyperAgent(nn.Module):
 
     def forward(self, inputs, hidden_state, context=None, test_mode=False):
         batch_size, n_agents, _ = inputs.shape
-        flat_inputs = inputs.reshape(batch_size * n_agents, -1)
-        x = F.relu(self.fc1(flat_inputs), inplace=True)
 
         self.latest_route_logits = None
         self.latest_route_indices = None
@@ -12674,8 +12672,31 @@ class CleanHyperAgent(nn.Module):
             policy_hidden_state = hidden_state
             relation_hidden_state = None
 
-        flat_hidden = policy_hidden_state.reshape(batch_size * n_agents, -1)
-        hidden = self.rnn(x, flat_hidden).view(batch_size, n_agents, self.hidden_dim)
+        policy_hidden_override = (
+            None
+            if context is None
+            else context.get("policy_hidden_override")
+        )
+        if policy_hidden_override is None:
+            flat_inputs = inputs.reshape(batch_size * n_agents, -1)
+            x = F.relu(self.fc1(flat_inputs), inplace=True)
+            flat_hidden = policy_hidden_state.reshape(
+                batch_size * n_agents, -1
+            )
+            hidden = self.rnn(x, flat_hidden).view(
+                batch_size, n_agents, self.hidden_dim
+            )
+        else:
+            expected_shape = (batch_size, n_agents, self.hidden_dim)
+            if tuple(policy_hidden_override.shape) != expected_shape:
+                raise ValueError(
+                    "policy_hidden_override has shape {}; expected {}".format(
+                        tuple(policy_hidden_override.shape), expected_shape
+                    )
+                )
+            if policy_hidden_override.device != inputs.device:
+                raise ValueError("policy_hidden_override is on the wrong device")
+            hidden = policy_hidden_override
 
         if self.model_type == "qmix_minimal":
             q = self.fixed_head(hidden)

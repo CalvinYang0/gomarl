@@ -94,10 +94,15 @@ def run_sequential(args, logger):
         "obs": {"vshape": env_info["obs_shape"], "group": "agents"},
         "actions": {"vshape": (1,), "group": "agents", "dtype": th.long},
         "avail_actions": {"vshape": (env_info["n_actions"],), "group": "agents", "dtype": th.int},
-        "probs": {"vshape": (env_info["n_actions"],), "group": "agents", "dtype": th.float},
         "reward": {"vshape": (1,)},
         "terminated": {"vshape": (1,), "dtype": th.uint8},
     }
+    if bool(getattr(args, "save_probs", False)):
+        scheme["probs"] = {
+            "vshape": (env_info["n_actions"],),
+            "group": "agents",
+            "dtype": th.float,
+        }
     if str(getattr(args, "clean_model_type", "")).endswith(
         "dual_branch_binary_concrete_adaptive_trajectory_parameter_likelihood_hypercond"
     ):

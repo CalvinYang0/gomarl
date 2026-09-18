@@ -35,9 +35,11 @@ PAPER_NAMES = {
 TRANSFER_SCENES = (
     ("grf_pass", "academy_pass_and_shoot_with_keeper", "grf", "48G"),
     ("grf_3v1", "academy_3_vs_1_with_keeper", "grf", "48G"),
-    ("smac_3s5z", "3s5z_vs_3s6z", "smac", "96G"),
-    ("smac_5m6m", "5m_vs_6m", "smac", "96G"),
-    ("smac_mmm2", "MMM2", "smac", "96G"),
+    # Keep ample headroom until the first optimized seed reports measured
+    # MaxRSS. The failed Corridor control reached ~92 GB under a 96 GB limit.
+    ("smac_3s5z", "3s5z_vs_3s6z", "smac", "160G"),
+    ("smac_5m6m", "5m_vs_6m", "smac", "160G"),
+    ("smac_mmm2", "MMM2", "smac", "160G"),
 )
 
 
@@ -164,6 +166,8 @@ def main():
 
     os.chdir(repo)
     smoke_commands = (
+        [sys.executable,
+         "scripts/smoke_test_hyperselect_memory_optimizations.py"],
         [sys.executable,
          "scripts/smoke_test_hyperselect_paper_counter_ablation.py"],
         [sys.executable, "scripts/smoke_test_hyperselect_paper_scenes.py"],
