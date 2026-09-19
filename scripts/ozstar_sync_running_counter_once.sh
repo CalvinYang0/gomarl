@@ -6,7 +6,8 @@ set -u
 
 REPO_DIR="${REPO_DIR:-/home/kyang/code/gomarl-dual-branch}"
 PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
-WANDB_ROOT="${WANDB_ROOT:-wandb}"
+RUNTIME_ROOT="${RUNTIME_ROOT:-/home/kyang/gomarl-runtime/gomarl-dual-branch}"
+WANDB_ROOT="${WANDB_ROOT:-$RUNTIME_ROOT/wandb}"
 WANDB_ENTITY="${WANDB_ENTITY:-hjh331-sjtu}"
 WANDB_PROJECT="${WANDB_PROJECT:-gomarl}"
 SYNC_TIMEOUT="${SYNC_TIMEOUT:-600}"
@@ -31,8 +32,15 @@ fi
 job_run_name() {
   local job_name="$1"
   if [[ "$job_name" =~ ^(.+)_s([0-9]+)(.*)$ ]]; then
-    printf '%s_10m_s%s%s\n' \
-      "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+    local prefix="${BASH_REMATCH[1]}"
+    local budget="10m"
+    # The paper suite uses a 5.05M environment-step budget and deliberately
+    # omits the budget token from its Slurm job name.
+    if [[ "$prefix" == *_paper_* ]]; then
+      budget="5m"
+    fi
+    printf '%s_%s_s%s%s\n' \
+      "$prefix" "$budget" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
     return 0
   fi
   return 1

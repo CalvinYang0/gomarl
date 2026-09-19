@@ -8,8 +8,10 @@ SESSION_NAME="${SESSION_NAME:-gomarl-wandb-sync}"
 INTERVAL_SECONDS="${INTERVAL_SECONDS:-600}"
 SYNC_TIMEOUT="${SYNC_TIMEOUT:-600}"
 ACTION="${1:-start}"
-WANDB_ROOT="${WANDB_ROOT:-wandb}"
-SYNC_LOG="${SYNC_LOG:-${WANDB_DIR:-$REPO_DIR}/ozstar_logs/${SESSION_NAME}.log}"
+RUNTIME_ROOT="${RUNTIME_ROOT:-/home/kyang/gomarl-runtime/gomarl-dual-branch}"
+WANDB_ROOT="${WANDB_ROOT:-$RUNTIME_ROOT/wandb}"
+WANDB_DIR="${WANDB_DIR:-$RUNTIME_ROOT}"
+SYNC_LOG="${SYNC_LOG:-$WANDB_DIR/ozstar_logs/${SESSION_NAME}.log}"
 
 [[ "$SESSION_NAME" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Invalid SESSION_NAME" >&2; exit 2; }
 [[ "$INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]] || { echo "INTERVAL_SECONDS must be positive" >&2; exit 2; }
@@ -76,6 +78,7 @@ case "$ACTION" in
     # Explicit env propagation also works with a tmux server started long ago.
     printf -v loop_command '%q ' env "REPO_DIR=$REPO_DIR" "PYTHON_BIN=$PYTHON_BIN" \
       "SESSION_NAME=$SESSION_NAME" "INTERVAL_SECONDS=$INTERVAL_SECONDS" "SYNC_TIMEOUT=$SYNC_TIMEOUT" \
+      "RUNTIME_ROOT=$RUNTIME_ROOT" \
       "WANDB_ROOT=${WANDB_ROOT:-wandb}" "WANDB_ENTITY=${WANDB_ENTITY:-hjh331-sjtu}" \
       "WANDB_PROJECT=${WANDB_PROJECT:-gomarl}" \
       "WANDB_DIR=${WANDB_DIR:-$REPO_DIR}" \

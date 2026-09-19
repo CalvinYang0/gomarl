@@ -11,7 +11,13 @@ SCRIPT = ROOT / "scripts/ozstar_wandb_sync_tmux.sh"
 
 
 def run(command, repo, **extra):
-    env = dict(os.environ, REPO_DIR=str(repo), PYTHON_BIN=sys.executable, **extra)
+    env = dict(
+        os.environ,
+        REPO_DIR=str(repo),
+        RUNTIME_ROOT=str(repo / "runtime"),
+        PYTHON_BIN=sys.executable,
+        **extra,
+    )
     return subprocess.run(["bash", "-c", command], env=env, text=True,
                           capture_output=True, timeout=10)
 
