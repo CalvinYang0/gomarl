@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise stable joint-Q and TD-quality HyperSelect objectives."""
+"""Exercise five isolated HyperSelect QME improvements."""
 import logging
 from pathlib import Path
 import sys
@@ -18,8 +18,11 @@ from smoke_test_trans9_multiscene import check_smac_semantics
 
 
 LABELS = (
-    "hyperselect_qme_joint_rank_stable",
-    "hyperselect_qme_tdquality_rank_stable",
+    "hyperselect_qme_joint_value",
+    "hyperselect_qme_td_quality",
+    "hyperselect_qme_action_rank",
+    "hyperselect_qme_stable_teacher",
+    "hyperselect_qme_dynamic_readiness",
 )
 
 
@@ -38,30 +41,36 @@ def main():
         assert overrides["clean_main_td_coef"] == 1.0
         assert overrides["clean_nomask_td_auxiliary_coef"] == 1.0
         assert overrides["clean_random_drop_auxiliary_coef"] == 1.0
-        assert overrides["clean_advantage_stable_target_teacher"] is True
-        assert overrides["clean_nomask_independent_target"] is True
-        assert overrides["clean_advantage_dynamic_readiness"] is True
+        stable = label == "hyperselect_qme_stable_teacher"
+        dynamic = label == "hyperselect_qme_dynamic_readiness"
+        assert overrides["clean_advantage_stable_target_teacher"] is stable
+        assert overrides["clean_nomask_independent_target"] is stable
+        assert overrides["clean_advantage_dynamic_readiness"] is dynamic
 
         check(label)
         _, learner, batch, logger = make_case(label)
         learner.train(batch, t_env=500000, episode_num=3)
         prefix = "train_gate/advantage_margin/"
-        assert logger.stats[prefix + "readiness_weight"][-1][1] > 0.0
-        assert logger.stats[prefix + "positive_return_ema"][-1][1] > 0.0
         assert logger.stats[prefix + "action_agreement"]
-        if "joint_q" in label:
+        if dynamic:
+            assert logger.stats[prefix + "readiness_weight"][-1][1] > 0.0
+            assert logger.stats[prefix + "positive_return_ema"][-1][1] > 0.0
+        if label == "hyperselect_qme_joint_value":
             assert logger.stats[prefix + "joint_masked_q"]
             assert logger.stats[prefix + "joint_full_q"]
             assert logger.stats[prefix + "joint_q_gain_mean"]
-        else:
+        if label == "hyperselect_qme_td_quality":
             assert logger.stats[prefix + "td_quality_gain_mean"]
+        if stable:
+            assert logger.stats["train_gate/qme_target/full_mean"]
+            assert logger.stats["train_gate/qme_target/masked_mean"]
 
         for scene in ("3s5z_vs_3s6z", "5m_vs_6m"):
             check_smac_semantics(scene, label)
 
     print(
-        "Stable target teacher, independent full targets, dynamic QME "
-        "readiness, action ranking, joint-Q and TD-quality objectives passed"
+        "Five isolated QME variants passed: joint-Q, TD-quality, action "
+        "ranking, stable teacher and dynamic readiness"
     )
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit stable QME diagnostics on 3s5z and 5m6m, seed 1."""
+"""Submit five isolated QME diagnostics, defaulting to 3s5z seed 1."""
 import json
 import os
 from pathlib import Path
@@ -20,22 +20,32 @@ from ozstar_submit_relation_advantage_mixer_nine import route_runtime
 
 
 ALL_LABELS = (
-    "hyperselect_qme_joint_rank_stable",
-    "hyperselect_qme_tdquality_rank_stable",
+    "hyperselect_qme_joint_value",
+    "hyperselect_qme_td_quality",
+    "hyperselect_qme_action_rank",
+    "hyperselect_qme_stable_teacher",
+    "hyperselect_qme_dynamic_readiness",
 )
 ALL_SCENES = (
     ("3s5z", "3s5z_vs_3s6z"),
     ("5m6m", "5m_vs_6m"),
 )
 SHORT_NAMES = {
-    "hyperselect_qme_joint_rank_stable": "joint_rank",
-    "hyperselect_qme_tdquality_rank_stable": "tdquality_rank",
+    "hyperselect_qme_joint_value": "joint_value",
+    "hyperselect_qme_td_quality": "td_quality",
+    "hyperselect_qme_action_rank": "action_rank",
+    "hyperselect_qme_stable_teacher": "stable_teacher",
+    "hyperselect_qme_dynamic_readiness": "dynamic_ready",
 }
 
 
-def _selected(values, environment_name):
+def _selected(values, environment_name, default=None):
     requested = tuple(
-        item for item in os.environ.get(environment_name, " ".join(values)).split()
+        item
+        for item in os.environ.get(
+            environment_name,
+            " ".join(values) if default is None else default,
+        ).split()
         if item
     )
     unknown = sorted(set(requested) - set(values))
@@ -54,7 +64,9 @@ def build_plans(repo):
     from modules.agents.counter_transformer_suite import model_type_for
 
     labels = _selected(ALL_LABELS, "LABELS")
-    scene_keys = _selected(tuple(item[0] for item in ALL_SCENES), "SCENES")
+    scene_keys = _selected(
+        tuple(item[0] for item in ALL_SCENES), "SCENES", default="3s5z"
+    )
     scenes = tuple(item for item in ALL_SCENES if item[0] in scene_keys)
     previous = {
         key: os.environ.get(key)

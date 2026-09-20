@@ -353,13 +353,15 @@ class CleanLearner:
             "margin",
             "action_advantage",
             "action_q",
+            "joint_q",
             "joint_q_rank",
+            "td_quality",
             "td_quality_rank",
         }:
             raise ValueError(
                 "clean_advantage_objective must be margin, "
-                "action_advantage, action_q, joint_q_rank, or "
-                "td_quality_rank"
+                "action_advantage, action_q, joint_q, joint_q_rank, "
+                "td_quality, or td_quality_rank"
             )
         self.advantage_action_rank_coef = float(
             getattr(args, "clean_advantage_action_rank_coef", 1.0)
@@ -1587,7 +1589,7 @@ class CleanLearner:
             # This loss is differentiated only into the observation gate;
             # it cannot inflate the Q-network weights to reduce itself.
             per_agent_loss = -sample_weight * masked_action_q
-        elif self.advantage_objective == "joint_q_rank":
+        elif self.advantage_objective in {"joint_q", "joint_q_rank"}:
             if mixer is None or states is None:
                 raise RuntimeError(
                     "joint_q_rank requires the QMIX mixer and states"
@@ -1617,9 +1619,11 @@ class CleanLearner:
                 joint_masked_q / joint_scale * team_weight
             ).sum() / team_weight.sum().clamp(min=1.0)
             rank_denominator = valid.sum().clamp(min=1.0)
-            loss = joint_loss + self.advantage_action_rank_coef * (
-                (rank_loss * valid).sum() / rank_denominator
-            )
+            loss = joint_loss
+            if self.advantage_objective == "joint_q_rank":
+                loss = loss + self.advantage_action_rank_coef * (
+                    (rank_loss * valid).sum() / rank_denominator
+                )
             per_agent_loss = None
         else:
             if (
@@ -1656,9 +1660,11 @@ class CleanLearner:
                 * team_valid
             ).sum() / team_valid.sum().clamp(min=1.0)
             rank_denominator = valid.sum().clamp(min=1.0)
-            loss = td_quality_loss + self.advantage_action_rank_coef * (
-                (rank_loss * valid).sum() / rank_denominator
-            )
+            loss = td_quality_loss
+            if self.advantage_objective == "td_quality_rank":
+                loss = loss + self.advantage_action_rank_coef * (
+                    (rank_loss * valid).sum() / rank_denominator
+                )
             per_agent_loss = None
         denominator = valid.sum().clamp(min=1.0)
         if per_agent_loss is not None:

@@ -339,28 +339,48 @@ ABLATION_PROFILES = {
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
-    # Stable QME trials. Both retain MaskTD, learn the full-observation path
-    # from its own open-gate Double-Q target, read teacher actions from the
-    # lagged target MAC, preserve teacher action ordering, and continuously
-    # scale QME by observed positive-return readiness after gate warmup.
-    "hyperselect_qme_joint_rank_stable": {
+    # Five single-change QME trials relative to the corrected additive Full
+    # model. Keep them separate so joint value, TD quality, action ranking,
+    # teacher stability and activation readiness can each be attributed.
+    "hyperselect_qme_joint_value": {
         "gate": True, "aux": "kl80", "main_td_coef": 1.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True,
-        "advantage_objective": "joint_q_rank",
-        "advantage_stable_target_teacher": True,
-        "nomask_independent_target": True,
-        "advantage_dynamic_readiness": True,
+        "advantage_objective": "joint_q",
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
-    "hyperselect_qme_tdquality_rank_stable": {
+    "hyperselect_qme_td_quality": {
         "gate": True, "aux": "kl80", "main_td_coef": 1.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True,
-        "advantage_objective": "td_quality_rank",
+        "advantage_objective": "td_quality",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
+    "hyperselect_qme_action_rank": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True,
+        "advantage_objective": "margin",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
+    "hyperselect_qme_stable_teacher": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True,
+        "advantage_objective": "action_q",
         "advantage_stable_target_teacher": True,
         "nomask_independent_target": True,
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
+    "hyperselect_qme_dynamic_readiness": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True,
+        "advantage_objective": "action_q",
         "advantage_dynamic_readiness": True,
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
@@ -392,8 +412,11 @@ SMAC_PROFILES = (
     "relation_advantage_margin_kl80aux",
     "relation_advantage_weighted_kl80aux",
     "relation_advantage_qvalue_augtd_nomasktd",
-    "hyperselect_qme_joint_rank_stable",
-    "hyperselect_qme_tdquality_rank_stable",
+    "hyperselect_qme_joint_value",
+    "hyperselect_qme_td_quality",
+    "hyperselect_qme_action_rank",
+    "hyperselect_qme_stable_teacher",
+    "hyperselect_qme_dynamic_readiness",
 )
 
 
