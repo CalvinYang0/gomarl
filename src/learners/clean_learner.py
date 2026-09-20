@@ -353,6 +353,7 @@ class CleanLearner:
             "margin",
             "action_advantage",
             "action_q",
+            "action_q_scaled",
             "joint_q",
             "joint_q_rank",
             "td_quality",
@@ -360,12 +361,16 @@ class CleanLearner:
         }:
             raise ValueError(
                 "clean_advantage_objective must be margin, "
-                "action_advantage, action_q, joint_q, joint_q_rank, "
+                "action_advantage, action_q, action_q_scaled, joint_q, joint_q_rank, "
                 "td_quality, or td_quality_rank"
             )
         self.advantage_action_rank_coef = float(
             getattr(args, "clean_advantage_action_rank_coef", 1.0)
         )
+        self.advantage_q_scale_ema_decay = float(
+            getattr(args, "clean_advantage_q_scale_ema_decay", 0.99)
+        )
+        self.advantage_q_scale_ema = None
         self.advantage_td_quality_margin = float(
             getattr(args, "clean_advantage_td_quality_margin", 0.0)
         )
@@ -434,6 +439,10 @@ class CleanLearner:
         if not 0.0 <= self.advantage_readiness_ema_decay < 1.0:
             raise ValueError(
                 "clean_advantage_readiness_ema_decay must be in [0, 1)"
+            )
+        if not 0.0 <= self.advantage_q_scale_ema_decay < 1.0:
+            raise ValueError(
+                "clean_advantage_q_scale_ema_decay must be in [0, 1)"
             )
         self.temporal_param_stability_active |= bool(self.counter_transformer_profile.get("temporal"))
         self.mask_parameter_relation_group_distance = model_type == (
@@ -1577,6 +1586,8 @@ class CleanLearner:
         joint_masked_q = None
         joint_full_q = None
         td_quality_gain = None
+        q_scale = None
+        raw_action_q_loss = None
         if self.advantage_objective == "margin":
             per_agent_loss = sample_weight * F.relu(
                 teacher_margin.detach()
@@ -1589,6 +1600,44 @@ class CleanLearner:
             # This loss is differentiated only into the observation gate;
             # it cannot inflate the Q-network weights to reduce itself.
             per_agent_loss = -sample_weight * masked_action_q
+        elif self.advantage_objective == "action_q_scaled":
+            # Preserve the raw-Q objective while conditioning its magnitude
+            # with one detached teacher/target scale. No mean subtraction is
+            # used, so this is not an Advantage objective.
+            with th.no_grad():
+                scale_denominator = valid.sum().clamp(min=1.0)
+                teacher_rms = (
+                    (teacher_action_q.pow(2) * valid).sum()
+                    / scale_denominator
+                ).sqrt()
+                target_rms = teacher_rms.new_zeros(())
+                if td_targets is not None:
+                    team_valid = valid_steps[..., :1].to(td_targets.dtype)
+                    target_rms = (
+                        (td_targets.detach().pow(2) * team_valid).sum()
+                        / team_valid.sum().clamp(min=1.0)
+                    ).sqrt()
+                batch_scale = th.stack(
+                    [
+                        teacher_rms,
+                        target_rms,
+                        teacher_rms.new_tensor(1.0),
+                    ]
+                ).max()
+                batch_scale_value = float(batch_scale.item())
+                if self.advantage_q_scale_ema is None:
+                    self.advantage_q_scale_ema = batch_scale_value
+                else:
+                    decay = self.advantage_q_scale_ema_decay
+                    self.advantage_q_scale_ema = (
+                        decay * self.advantage_q_scale_ema
+                        + (1.0 - decay) * batch_scale_value
+                    )
+                q_scale = masked_action_q.new_tensor(
+                    max(self.advantage_q_scale_ema, 1.0)
+                )
+                raw_action_q_loss = -sample_weight * masked_action_q.detach()
+            per_agent_loss = -sample_weight * masked_action_q / q_scale
         elif self.advantage_objective in {"joint_q", "joint_q_rank"}:
             if mixer is None or states is None:
                 raise RuntimeError(
@@ -1786,6 +1835,16 @@ class CleanLearner:
                 stats["td_quality_gain_mean"] = (
                     td_quality_gain * team_valid
                 ).sum() / team_valid.sum().clamp(min=1.0)
+            if q_scale is not None:
+                stats.update(
+                    {
+                        "q_scale": q_scale.detach(),
+                        "raw_action_q_loss": (
+                            raw_action_q_loss * valid
+                        ).sum() / denominator,
+                        "scaled_action_q_loss": loss.detach(),
+                    }
+                )
         return loss, stats
 
     def _advantage_contrastive_mask_relation(

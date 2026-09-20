@@ -385,6 +385,14 @@ ABLATION_PROFILES = {
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
+    "hyperselect_qme_action_q_scaled": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True,
+        "advantage_objective": "action_q_scaled",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
@@ -417,6 +425,7 @@ SMAC_PROFILES = (
     "hyperselect_qme_action_rank",
     "hyperselect_qme_stable_teacher",
     "hyperselect_qme_dynamic_readiness",
+    "hyperselect_qme_action_q_scaled",
 )
 
 
@@ -498,6 +507,9 @@ def experiment_overrides(label, domain="grf"):
         ),
         "clean_advantage_action_rank_coef": flags.get(
             "advantage_action_rank_coef", 1.0
+        ),
+        "clean_advantage_q_scale_ema_decay": flags.get(
+            "advantage_q_scale_ema_decay", 0.99
         ),
         "clean_advantage_td_quality_margin": flags.get(
             "advantage_td_quality_margin", 0.0

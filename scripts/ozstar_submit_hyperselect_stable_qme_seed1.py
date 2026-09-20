@@ -19,13 +19,14 @@ from ozstar_submit_counter_transformer_nine import (
 from ozstar_submit_relation_advantage_mixer_nine import route_runtime
 
 
-ALL_LABELS = (
+DEFAULT_LABELS = (
     "hyperselect_qme_joint_value",
     "hyperselect_qme_td_quality",
     "hyperselect_qme_action_rank",
     "hyperselect_qme_stable_teacher",
     "hyperselect_qme_dynamic_readiness",
 )
+ALL_LABELS = DEFAULT_LABELS + ("hyperselect_qme_action_q_scaled",)
 ALL_SCENES = (
     ("3s5z", "3s5z_vs_3s6z"),
     ("5m6m", "5m_vs_6m"),
@@ -36,6 +37,7 @@ SHORT_NAMES = {
     "hyperselect_qme_action_rank": "action_rank",
     "hyperselect_qme_stable_teacher": "stable_teacher",
     "hyperselect_qme_dynamic_readiness": "dynamic_ready",
+    "hyperselect_qme_action_q_scaled": "q_scaled",
 }
 
 
@@ -63,7 +65,11 @@ def _replace_arg(arguments, prefix, value):
 def build_plans(repo):
     from modules.agents.counter_transformer_suite import model_type_for
 
-    labels = _selected(ALL_LABELS, "LABELS")
+    labels = _selected(
+        ALL_LABELS,
+        "LABELS",
+        default=" ".join(DEFAULT_LABELS),
+    )
     scene_keys = _selected(
         tuple(item[0] for item in ALL_SCENES), "SCENES", default="3s5z"
     )
