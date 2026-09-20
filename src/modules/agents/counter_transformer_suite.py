@@ -312,6 +312,33 @@ ABLATION_PROFILES = {
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
+    # Corrected additive paper ablations.  Unlike the historical profiles
+    # above, every variant retains the learned gate's ordinary MaskTD path.
+    # The LTD control matches the extra clean TD branch required by QME, so
+    # any QME gain cannot be attributed merely to one additional TD loss.
+    "hyperselect_gate_ltd_control": {
+        "gate": True, "main_td_coef": 1.0, "nomask_td_coef": 1.0,
+        "dual_gate_test": True, "memory_efficient_multi_path": True,
+    },
+    "hyperselect_gate_qme_additive": {
+        "gate": True, "main_td_coef": 1.0, "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "dual_gate_test": True, "memory_efficient_multi_path": True,
+    },
+    # AugTD applies an observation-conditioned stochastic SME mask on top of
+    # the learned main mask: obs * main_mask(obs) * sme_mask(obs).
+    "hyperselect_gate_sme_additive": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
+    "hyperselect_gate_qme_sme_additive": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
