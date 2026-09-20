@@ -143,14 +143,10 @@ def main():
     if selected_labels & {
         "hyperselect_qme_full_behavior",
         "hyperselect_qme_mixed_behavior",
+        "hyperselect_qme_open_win_ready",
     }:
         subprocess.run(
             [sys.executable, "scripts/smoke_test_hyperselect_behavior_sampling.py"],
-            check=True,
-        )
-    if "hyperselect_qme_open_win_ready" in selected_labels:
-        subprocess.run(
-            [sys.executable, "scripts/smoke_test_advantage_margin_gate.py"],
             check=True,
         )
 
