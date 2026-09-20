@@ -16,7 +16,7 @@ from ozstar_submit_counter_transformer_nine import build_plans as counter_plans,
 from ozstar_submit_relation_advantage_mixer_nine import route_runtime
 
 
-LABELS = (
+ALL_LABELS = (
     "hyperselect_gate",
     "hyperselect_gate_ltd_control",
     "hyperselect_gate_qme_additive",
@@ -37,6 +37,18 @@ def _replace_arg(arguments, prefix, value):
 
 
 def build_plans(repo):
+    requested = tuple(
+        item
+        for item in os.environ.get("LABELS", " ".join(ALL_LABELS)).split()
+        if item
+    )
+    if not requested:
+        raise ValueError("LABELS must select at least one additive ablation")
+    unknown = sorted(set(requested) - set(ALL_LABELS))
+    if unknown:
+        raise ValueError("Unknown additive ablation labels: " + ", ".join(unknown))
+    if len(set(requested)) != len(requested):
+        raise ValueError("LABELS contains a duplicate additive ablation")
     previous = {
         key: os.environ.get(key)
         for key in ("SEED", "T_MAX", "RUN_SUFFIX", "MEMORY", "TIME")
@@ -49,7 +61,7 @@ def build_plans(repo):
         TIME="2-00:00:00",
     )
     try:
-        plans = counter_plans(repo, LABELS)
+        plans = counter_plans(repo, requested)
     finally:
         for key, value in previous.items():
             if value is None:
