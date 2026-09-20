@@ -1035,6 +1035,10 @@ name: "clean_hyper_baseline"
 clean_train_gate_diagnostics: True
 clean_train_gate_image_interval: 50000
 clean_train_gate_image_max_steps: 200
+# Environment behaviour used to collect replay. ``masked`` preserves the
+# historical learned-mask rollout, ``full`` forces the learned gate open only
+# while acting, and ``mixed`` alternates full/masked rollout batches 1:1.
+clean_train_behavior_gate_mode: masked
 
 # Explicit TD-path coefficients for the relation loss-composition ablation.
 # The standard pass is masked whenever the selected profile has a main gate.

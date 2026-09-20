@@ -26,7 +26,11 @@ DEFAULT_LABELS = (
     "hyperselect_qme_stable_teacher",
     "hyperselect_qme_dynamic_readiness",
 )
-ALL_LABELS = DEFAULT_LABELS + ("hyperselect_qme_action_q_scaled",)
+ALL_LABELS = DEFAULT_LABELS + (
+    "hyperselect_qme_action_q_scaled",
+    "hyperselect_qme_full_behavior",
+    "hyperselect_qme_mixed_behavior",
+)
 ALL_SCENES = (
     ("3s5z", "3s5z_vs_3s6z"),
     ("5m6m", "5m_vs_6m"),
@@ -38,6 +42,8 @@ SHORT_NAMES = {
     "hyperselect_qme_stable_teacher": "stable_teacher",
     "hyperselect_qme_dynamic_readiness": "dynamic_ready",
     "hyperselect_qme_action_q_scaled": "q_scaled",
+    "hyperselect_qme_full_behavior": "full_behavior",
+    "hyperselect_qme_mixed_behavior": "mixed_behavior",
 }
 
 
@@ -159,6 +165,7 @@ def main():
     for script in (
         "scripts/smoke_test_hyperselect_memory_optimizations.py",
         "scripts/smoke_test_hyperselect_stable_qme.py",
+        "scripts/smoke_test_hyperselect_behavior_sampling.py",
     ):
         subprocess.run([sys.executable, script], check=True)
 

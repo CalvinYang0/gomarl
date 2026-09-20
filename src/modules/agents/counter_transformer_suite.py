@@ -401,6 +401,24 @@ ABLATION_PROFILES = {
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
+    # Sampling-distribution diagnostics. Both retain the exact Full model and
+    # change only which policy acts in the environment to populate replay.
+    "hyperselect_qme_full_behavior": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "train_behavior_gate_mode": "full",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
+    "hyperselect_qme_mixed_behavior": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "train_behavior_gate_mode": "mixed",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
@@ -435,6 +453,8 @@ SMAC_PROFILES = (
     "hyperselect_qme_dynamic_readiness",
     "hyperselect_qme_action_q_scaled",
     "hyperselect_qme_action_q_episode_mean",
+    "hyperselect_qme_full_behavior",
+    "hyperselect_qme_mixed_behavior",
 )
 
 
@@ -537,6 +557,9 @@ def experiment_overrides(label, domain="grf"):
         ),
         "clean_advantage_readiness_ema_decay": flags.get(
             "advantage_readiness_ema_decay", 0.95
+        ),
+        "clean_train_behavior_gate_mode": flags.get(
+            "train_behavior_gate_mode", "masked"
         ),
         "clean_advantage_margin_auxiliary_coef": 1.0,
         "clean_advantage_margin_warmup_steps": 250000,

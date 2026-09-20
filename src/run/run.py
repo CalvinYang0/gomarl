@@ -62,6 +62,43 @@ def get_agent_own_state_size(env_args):
     # qatten parameter setting (only use in qatten)
     return  4 + sc_env.shield_bits_ally + sc_env.unit_type_bits
 
+
+def _training_behavior_force_open(args, collection_index):
+    """Choose only the environment behaviour; learner forwards are unchanged."""
+    mode = str(
+        getattr(args, "clean_train_behavior_gate_mode", "masked")
+    ).strip().lower()
+    if mode == "masked":
+        return False
+    if mode == "full":
+        return True
+    if mode == "mixed":
+        # Alternating complete rollout batches is exactly 1:1 when the worker
+        # count is fixed. Start by placing clean/full data in replay.
+        return int(collection_index) % 2 == 0
+    raise ValueError(
+        "clean_train_behavior_gate_mode must be masked, full, or mixed; got "
+        + repr(mode)
+    )
+
+
+def _collect_training_batch(args, runner, collection_index):
+    force_open = _training_behavior_force_open(args, collection_index)
+    setter = getattr(runner.mac, "set_dynamic_branch_gate_force_open", None)
+    if setter is None and force_open:
+        raise RuntimeError(
+            "Full-observation behaviour requires gate force-open support"
+        )
+    if setter is not None:
+        setter(force_open)
+    try:
+        return runner.run(test_mode=False), force_open
+    finally:
+        # This intervention affects collection only. Learner masked/full paths
+        # and the ordinary masked evaluation keep their configured semantics.
+        if setter is not None:
+            setter(False)
+
 def run(_run, _config, _log):
 
     # check args sanity
@@ -263,6 +300,9 @@ def run_sequential(args, logger):
     model_save_time = 0
     last_battle_trace_T = 0
     test_video_written = False
+    behavior_collection_index = 0
+    behavior_full_collections = 0
+    last_behavior_log_T = -int(args.learner_log_interval) - 1
 
     start_time = time.time()
     last_time = start_time
@@ -282,8 +322,24 @@ def run_sequential(args, logger):
         # Run for a whole episode at a time
 
         with th.no_grad():
-            episode_batch = runner.run(test_mode=False)
+            episode_batch, behavior_force_open = _collect_training_batch(
+                args, runner, behavior_collection_index
+            )
             buffer.insert_episode_batch(episode_batch)
+        behavior_collection_index += 1
+        behavior_full_collections += int(behavior_force_open)
+        if runner.t_env - last_behavior_log_T >= args.learner_log_interval:
+            logger.log_stat(
+                "train_gate/behavior_full_fraction",
+                behavior_full_collections / float(behavior_collection_index),
+                runner.t_env,
+            )
+            logger.log_stat(
+                "train_gate/behavior_force_open",
+                float(behavior_force_open),
+                runner.t_env,
+            )
+            last_behavior_log_T = runner.t_env
 
         if buffer.can_sample(args.batch_size):
             next_episode = episode + args.batch_size_run

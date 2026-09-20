@@ -25,6 +25,8 @@ LABELS = (
     "hyperselect_qme_dynamic_readiness",
     "hyperselect_qme_action_q_scaled",
     "hyperselect_qme_action_q_episode_mean",
+    "hyperselect_qme_full_behavior",
+    "hyperselect_qme_mixed_behavior",
 )
 
 
@@ -43,6 +45,14 @@ def main():
         assert overrides["clean_main_td_coef"] == 1.0
         assert overrides["clean_nomask_td_auxiliary_coef"] == 1.0
         assert overrides["clean_random_drop_auxiliary_coef"] == 1.0
+        expected_behavior = {
+            "hyperselect_qme_full_behavior": "full",
+            "hyperselect_qme_mixed_behavior": "mixed",
+        }.get(label, "masked")
+        assert (
+            overrides["clean_train_behavior_gate_mode"]
+            == expected_behavior
+        )
         stable = label == "hyperselect_qme_stable_teacher"
         dynamic = label == "hyperselect_qme_dynamic_readiness"
         assert overrides["clean_advantage_stable_target_teacher"] is stable
