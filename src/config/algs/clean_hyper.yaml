@@ -1062,9 +1062,10 @@ clean_advantage_margin_teacher_only: False
 clean_advantage_margin_auxiliary_coef: 1.0
 # Gate-supervision target: margin compares the teacher action with its best
 # competitor; action_advantage maximizes its centered/normalized Advantage;
-# action_q directly maximizes its masked-branch Q value; action_q_scaled keeps
-# that objective but divides by a detached teacher/TD-target RMS EMA; joint_q
-# optimizes the masked joint QMIX value; td_quality compares masked/full Bellman quality.
+# action_q directly maximizes its masked-branch Q value with timestep weighting;
+# action_q_episode_mean gives every episode equal weight; action_q_scaled keeps
+# raw Q but divides by a detached teacher/TD-target RMS EMA. joint_q optimizes
+# masked joint QMIX value; td_quality compares masked/full Bellman quality.
 # The *_rank forms additionally preserve the teacher action ordering.
 clean_advantage_objective: margin
 clean_advantage_action_rank_coef: 1.0

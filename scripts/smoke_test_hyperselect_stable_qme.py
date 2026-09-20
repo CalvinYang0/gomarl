@@ -24,6 +24,7 @@ LABELS = (
     "hyperselect_qme_stable_teacher",
     "hyperselect_qme_dynamic_readiness",
     "hyperselect_qme_action_q_scaled",
+    "hyperselect_qme_action_q_episode_mean",
 )
 
 
@@ -69,13 +70,17 @@ def main():
             assert logger.stats[prefix + "q_scale"][-1][1] >= 1.0
             assert logger.stats[prefix + "raw_action_q_loss"]
             assert logger.stats[prefix + "scaled_action_q_loss"]
+        if label == "hyperselect_qme_action_q_episode_mean":
+            assert logger.stats[prefix + "episode_equal_action_q_loss"]
+            assert logger.stats[prefix + "timestep_equal_action_q_loss"]
 
         for scene in ("3s5z_vs_3s6z", "5m_vs_6m"):
             check_smac_semantics(scene, label)
 
     print(
         "QME variants passed: joint-Q, TD-quality, action ranking, stable "
-        "teacher, dynamic readiness and raw-Q scale normalization"
+        "teacher, dynamic readiness, raw-Q scale normalization and "
+        "episode-equal aggregation"
     )
 
 

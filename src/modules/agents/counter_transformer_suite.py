@@ -393,6 +393,14 @@ ABLATION_PROFILES = {
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
+    "hyperselect_qme_action_q_episode_mean": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True,
+        "advantage_objective": "action_q_episode_mean",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
@@ -426,6 +434,7 @@ SMAC_PROFILES = (
     "hyperselect_qme_stable_teacher",
     "hyperselect_qme_dynamic_readiness",
     "hyperselect_qme_action_q_scaled",
+    "hyperselect_qme_action_q_episode_mean",
 )
 
 

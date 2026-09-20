@@ -353,6 +353,7 @@ class CleanLearner:
             "margin",
             "action_advantage",
             "action_q",
+            "action_q_episode_mean",
             "action_q_scaled",
             "joint_q",
             "joint_q_rank",
@@ -361,7 +362,8 @@ class CleanLearner:
         }:
             raise ValueError(
                 "clean_advantage_objective must be margin, "
-                "action_advantage, action_q, action_q_scaled, joint_q, joint_q_rank, "
+                "action_advantage, action_q, action_q_episode_mean, "
+                "action_q_scaled, joint_q, joint_q_rank, "
                 "td_quality, or td_quality_rank"
             )
         self.advantage_action_rank_coef = float(
@@ -1588,6 +1590,7 @@ class CleanLearner:
         td_quality_gain = None
         q_scale = None
         raw_action_q_loss = None
+        timestep_action_q_loss = None
         if self.advantage_objective == "margin":
             per_agent_loss = sample_weight * F.relu(
                 teacher_margin.detach()
@@ -1600,6 +1603,25 @@ class CleanLearner:
             # This loss is differentiated only into the observation gate;
             # it cannot inflate the Q-network weights to reduce itself.
             per_agent_loss = -sample_weight * masked_action_q
+        elif self.advantage_objective == "action_q_episode_mean":
+            per_agent_values = -sample_weight * masked_action_q
+            per_episode_count = valid.sum(dim=(1, 2)).clamp(min=1.0)
+            per_episode_loss = (
+                (per_agent_values * valid).sum(dim=(1, 2))
+                / per_episode_count
+            )
+            valid_episodes = (
+                valid.sum(dim=(1, 2)) > 0
+            ).to(per_episode_loss.dtype)
+            loss = (
+                per_episode_loss * valid_episodes
+            ).sum() / valid_episodes.sum().clamp(min=1.0)
+            with th.no_grad():
+                timestep_action_q_loss = (
+                    (per_agent_values.detach() * valid).sum()
+                    / valid.sum().clamp(min=1.0)
+                )
+            per_agent_loss = None
         elif self.advantage_objective == "action_q_scaled":
             # Preserve the raw-Q objective while conditioning its magnitude
             # with one detached teacher/target scale. No mean subtraction is
@@ -1843,6 +1865,15 @@ class CleanLearner:
                             raw_action_q_loss * valid
                         ).sum() / denominator,
                         "scaled_action_q_loss": loss.detach(),
+                    }
+                )
+            if timestep_action_q_loss is not None:
+                stats.update(
+                    {
+                        "episode_equal_action_q_loss": loss.detach(),
+                        "timestep_equal_action_q_loss": (
+                            timestep_action_q_loss
+                        ),
                     }
                 )
         return loss, stats

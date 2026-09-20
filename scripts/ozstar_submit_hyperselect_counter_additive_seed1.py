@@ -23,7 +23,10 @@ DEFAULT_LABELS = (
     "hyperselect_gate_sme_additive",
     "hyperselect_gate_qme_sme_additive",
 )
-ALL_LABELS = DEFAULT_LABELS + ("hyperselect_qme_action_q_scaled",)
+ALL_LABELS = DEFAULT_LABELS + (
+    "hyperselect_qme_action_q_scaled",
+    "hyperselect_qme_action_q_episode_mean",
+)
 PAPER_NAMES = {
     "hyperselect_gate": "gate",
     "hyperselect_gate_ltd_control": "gate_ltd",
@@ -31,6 +34,7 @@ PAPER_NAMES = {
     "hyperselect_gate_sme_additive": "gate_sme",
     "hyperselect_gate_qme_sme_additive": "full",
     "hyperselect_qme_action_q_scaled": "q_scaled",
+    "hyperselect_qme_action_q_episode_mean": "q_episode_mean",
 }
 
 
@@ -118,8 +122,11 @@ def main():
         [sys.executable, "scripts/smoke_test_hyperselect_additive_counter_ablation.py"],
         check=True,
     )
-    if "hyperselect_qme_action_q_scaled" in {
+    if {
         plan["label"] for plan in plans
+    } & {
+        "hyperselect_qme_action_q_scaled",
+        "hyperselect_qme_action_q_episode_mean",
     }:
         subprocess.run(
             [sys.executable, "scripts/smoke_test_hyperselect_stable_qme.py"],
