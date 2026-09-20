@@ -339,6 +339,32 @@ ABLATION_PROFILES = {
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
+    # Stable QME trials. Both retain MaskTD, learn the full-observation path
+    # from its own open-gate Double-Q target, read teacher actions from the
+    # lagged target MAC, preserve teacher action ordering, and continuously
+    # scale QME by observed positive-return readiness after gate warmup.
+    "hyperselect_qme_joint_rank_stable": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True,
+        "advantage_objective": "joint_q_rank",
+        "advantage_stable_target_teacher": True,
+        "nomask_independent_target": True,
+        "advantage_dynamic_readiness": True,
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
+    "hyperselect_qme_tdquality_rank_stable": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True,
+        "advantage_objective": "td_quality_rank",
+        "advantage_stable_target_teacher": True,
+        "nomask_independent_target": True,
+        "advantage_dynamic_readiness": True,
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
@@ -366,6 +392,8 @@ SMAC_PROFILES = (
     "relation_advantage_margin_kl80aux",
     "relation_advantage_weighted_kl80aux",
     "relation_advantage_qvalue_augtd_nomasktd",
+    "hyperselect_qme_joint_rank_stable",
+    "hyperselect_qme_tdquality_rank_stable",
 )
 
 
@@ -444,6 +472,27 @@ def experiment_overrides(label, domain="grf"):
         ),
         "clean_advantage_objective": flags.get(
             "advantage_objective", "margin"
+        ),
+        "clean_advantage_action_rank_coef": flags.get(
+            "advantage_action_rank_coef", 1.0
+        ),
+        "clean_advantage_td_quality_margin": flags.get(
+            "advantage_td_quality_margin", 0.0
+        ),
+        "clean_advantage_stable_target_teacher": bool(
+            flags.get("advantage_stable_target_teacher")
+        ),
+        "clean_nomask_independent_target": bool(
+            flags.get("nomask_independent_target")
+        ),
+        "clean_advantage_dynamic_readiness": bool(
+            flags.get("advantage_dynamic_readiness")
+        ),
+        "clean_advantage_readiness_return_fraction": flags.get(
+            "advantage_readiness_return_fraction", 0.05
+        ),
+        "clean_advantage_readiness_ema_decay": flags.get(
+            "advantage_readiness_ema_decay", 0.95
         ),
         "clean_advantage_margin_auxiliary_coef": 1.0,
         "clean_advantage_margin_warmup_steps": 250000,

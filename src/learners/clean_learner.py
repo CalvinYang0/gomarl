@@ -353,11 +353,40 @@ class CleanLearner:
             "margin",
             "action_advantage",
             "action_q",
+            "joint_q_rank",
+            "td_quality_rank",
         }:
             raise ValueError(
                 "clean_advantage_objective must be margin, "
-                "action_advantage, or action_q"
+                "action_advantage, action_q, joint_q_rank, or "
+                "td_quality_rank"
             )
+        self.advantage_action_rank_coef = float(
+            getattr(args, "clean_advantage_action_rank_coef", 1.0)
+        )
+        self.advantage_td_quality_margin = float(
+            getattr(args, "clean_advantage_td_quality_margin", 0.0)
+        )
+        self.advantage_stable_target_teacher = bool(
+            getattr(args, "clean_advantage_stable_target_teacher", False)
+        )
+        self.nomask_independent_target = bool(
+            getattr(args, "clean_nomask_independent_target", False)
+        )
+        self.advantage_dynamic_readiness = bool(
+            getattr(args, "clean_advantage_dynamic_readiness", False)
+        )
+        self.advantage_readiness_return_fraction = float(
+            getattr(
+                args,
+                "clean_advantage_readiness_return_fraction",
+                0.05,
+            )
+        )
+        self.advantage_readiness_ema_decay = float(
+            getattr(args, "clean_advantage_readiness_ema_decay", 0.95)
+        )
+        self.advantage_positive_return_ema = 0.0
         self.advantage_margin_weight_by_teacher = bool(
             getattr(args, "clean_advantage_margin_weight_by_teacher", False)
         )
@@ -385,6 +414,8 @@ class CleanLearner:
             "advantage_margin_auxiliary_coef",
             "advantage_margin_delta",
             "advantage_margin_confidence_threshold",
+            "advantage_action_rank_coef",
+            "advantage_td_quality_margin",
         ):
             if getattr(self, name) < 0.0:
                 raise ValueError("{} must be non-negative".format(name))
@@ -394,6 +425,14 @@ class CleanLearner:
             )
         if self.advantage_margin_scale_eps <= 0.0:
             raise ValueError("clean_advantage_margin_scale_eps must be positive")
+        if not 0.0 < self.advantage_readiness_return_fraction <= 1.0:
+            raise ValueError(
+                "clean_advantage_readiness_return_fraction must be in (0, 1]"
+            )
+        if not 0.0 <= self.advantage_readiness_ema_decay < 1.0:
+            raise ValueError(
+                "clean_advantage_readiness_ema_decay must be in [0, 1)"
+            )
         self.temporal_param_stability_active |= bool(self.counter_transformer_profile.get("temporal"))
         self.mask_parameter_relation_group_distance = model_type == (
             "grf_abs_dual_branch_binary_concrete_"
@@ -1466,6 +1505,11 @@ class CleanLearner:
         full_action_values,
         avail_actions,
         valid_steps,
+        mixer=None,
+        states=None,
+        replay_actions=None,
+        td_targets=None,
+        full_online_action_values=None,
     ):
         """Make the detached full-observation action easier to select."""
         with th.no_grad():
@@ -1523,6 +1567,14 @@ class CleanLearner:
         sample_weight = confidence
         if self.advantage_margin_weight_by_teacher:
             sample_weight = sample_weight * teacher_margin.detach().clamp(min=0.0)
+        rank_loss = sample_weight * F.relu(
+            teacher_margin.detach()
+            + self.advantage_margin_delta
+            - masked_margin
+        )
+        joint_masked_q = None
+        joint_full_q = None
+        td_quality_gain = None
         if self.advantage_objective == "margin":
             per_agent_loss = sample_weight * F.relu(
                 teacher_margin.detach()
@@ -1531,12 +1583,86 @@ class CleanLearner:
             )
         elif self.advantage_objective == "action_advantage":
             per_agent_loss = -sample_weight * masked_action_advantage
-        else:
+        elif self.advantage_objective == "action_q":
             # This loss is differentiated only into the observation gate;
             # it cannot inflate the Q-network weights to reduce itself.
             per_agent_loss = -sample_weight * masked_action_q
+        elif self.advantage_objective == "joint_q_rank":
+            if mixer is None or states is None:
+                raise RuntimeError(
+                    "joint_q_rank requires the QMIX mixer and states"
+                )
+            masked_teacher_utilities = th.gather(
+                masked_action_values, -1, teacher_actions
+            ).squeeze(-1)
+            full_teacher_utilities = th.gather(
+                full_action_values.detach(), -1, teacher_actions
+            ).squeeze(-1)
+            joint_masked_q = mixer(masked_teacher_utilities, states)
+            with th.no_grad():
+                joint_full_q = mixer(
+                    full_teacher_utilities, states
+                ).detach()
+            team_valid = valid_steps[..., :1].to(joint_masked_q.dtype)
+            team_weight = (
+                confidence.mean(dim=-1, keepdim=True) * team_valid
+            )
+            # A detached RMS only conditions gradient scale; unlike raw
+            # per-agent utility it does not alter which joint values are
+            # preferred by the gate.
+            joint_scale = joint_masked_q.detach().pow(2).mean().sqrt().clamp(
+                min=1.0
+            )
+            joint_loss = -(
+                joint_masked_q / joint_scale * team_weight
+            ).sum() / team_weight.sum().clamp(min=1.0)
+            rank_denominator = valid.sum().clamp(min=1.0)
+            loss = joint_loss + self.advantage_action_rank_coef * (
+                (rank_loss * valid).sum() / rank_denominator
+            )
+            per_agent_loss = None
+        else:
+            if (
+                mixer is None
+                or states is None
+                or replay_actions is None
+                or td_targets is None
+                or full_online_action_values is None
+            ):
+                raise RuntimeError(
+                    "td_quality_rank requires mixer, states, replay actions, "
+                    "TD targets, and online full-observation values"
+                )
+            masked_replay_utilities = th.gather(
+                masked_action_values, -1, replay_actions
+            ).squeeze(-1)
+            full_replay_utilities = th.gather(
+                full_online_action_values, -1, replay_actions
+            ).squeeze(-1)
+            masked_replay_qtot = mixer(masked_replay_utilities, states)
+            full_replay_qtot = mixer(full_replay_utilities, states)
+            team_valid = valid_steps[..., :1].to(masked_replay_qtot.dtype)
+            masked_error_sq = (masked_replay_qtot - td_targets.detach()).pow(2)
+            full_error_sq = (
+                full_replay_qtot.detach() - td_targets.detach()
+            ).pow(2)
+            td_quality_gain = full_error_sq - masked_error_sq.detach()
+            td_quality_loss = (
+                F.relu(
+                    masked_error_sq
+                    - full_error_sq
+                    + self.advantage_td_quality_margin
+                )
+                * team_valid
+            ).sum() / team_valid.sum().clamp(min=1.0)
+            rank_denominator = valid.sum().clamp(min=1.0)
+            loss = td_quality_loss + self.advantage_action_rank_coef * (
+                (rank_loss * valid).sum() / rank_denominator
+            )
+            per_agent_loss = None
         denominator = valid.sum().clamp(min=1.0)
-        loss = (per_agent_loss * valid).sum() / denominator
+        if per_agent_loss is not None:
+            loss = (per_agent_loss * valid).sum() / denominator
         with th.no_grad():
             # Direct paired diagnostics: both margins use the same replay
             # state, recurrent context and detached full-observation teacher
@@ -1632,6 +1758,28 @@ class CleanLearner:
                 ).sum()
                 / denominator,
             }
+            if joint_masked_q is not None:
+                team_valid = valid_steps[..., :1].to(joint_masked_q.dtype)
+                team_denominator = team_valid.sum().clamp(min=1.0)
+                stats.update(
+                    {
+                        "joint_masked_q": (
+                            joint_masked_q.detach() * team_valid
+                        ).sum() / team_denominator,
+                        "joint_full_q": (
+                            joint_full_q * team_valid
+                        ).sum() / team_denominator,
+                        "joint_q_gain_mean": (
+                            (joint_masked_q.detach() - joint_full_q)
+                            * team_valid
+                        ).sum() / team_denominator,
+                    }
+                )
+            if td_quality_gain is not None:
+                team_valid = valid_steps[..., :1].to(td_quality_gain.dtype)
+                stats["td_quality_gain_mean"] = (
+                    td_quality_gain * team_valid
+                ).sum() / team_valid.sum().clamp(min=1.0)
         return loss, stats
 
     def _advantage_contrastive_mask_relation(
@@ -3454,6 +3602,8 @@ class CleanLearner:
             td_loss = (masked_td_error.pow(2).sum()) / td_mask.sum().clamp(min=1.0)
             nomask_td_loss = td_loss.new_zeros(())
             nomask_mac_out = None
+            target_nomask_mac_out = None
+            nomask_targets = targets
             teacher_only_forward_enabled = (
                 self.advantage_margin_teacher_only
                 and self.advantage_margin_auxiliary_active
@@ -3499,6 +3649,79 @@ class CleanLearner:
                 finally:
                     self.mac.set_dynamic_branch_gate_force_open(False)
                 nomask_mac_out = th.stack(nomask_mac_out, dim=1)
+                if (
+                    self.nomask_independent_target
+                    or self.advantage_stable_target_teacher
+                ):
+                    with th.no_grad():
+                        target_nomask_values = []
+                        target_nomask_conditions = (
+                            []
+                            if self.target_relation_mixer_gate is not None
+                            else None
+                        )
+                        self.target_mac.init_hidden(batch.batch_size)
+                        self.target_mac.set_dynamic_branch_gate_force_open(True)
+                        try:
+                            for t in range(batch.max_seq_length):
+                                target_nomask_values.append(
+                                    self.target_mac.forward(batch, t=t)
+                                )
+                                if target_nomask_conditions is not None:
+                                    condition = getattr(
+                                        self.target_mac,
+                                        "latest_condition",
+                                        None,
+                                    )
+                                    if condition is None:
+                                        raise RuntimeError(
+                                            "Open target path requires relation "
+                                            "conditions for its mixer"
+                                        )
+                                    target_nomask_conditions.append(condition)
+                        finally:
+                            self.target_mac.set_dynamic_branch_gate_force_open(False)
+                        target_nomask_mac_out = th.stack(
+                            target_nomask_values, dim=1
+                        )
+                        if target_nomask_conditions is not None:
+                            target_nomask_conditions = th.stack(
+                                target_nomask_conditions, dim=1
+                            )
+                        if self.nomask_independent_target:
+                            detached_nomask = nomask_mac_out.detach().masked_fill(
+                                avail_actions == 0, mask_value
+                            )
+                            nomask_max_actions = detached_nomask.max(
+                                dim=3, keepdim=True
+                            )[1]
+                            target_nomask_agent_qvals = th.gather(
+                                target_nomask_mac_out,
+                                3,
+                                nomask_max_actions,
+                            ).squeeze(3)
+                            if self.target_mixer is not None:
+                                if self.target_relation_mixer_gate is not None:
+                                    target_nomask_agent_qvals = self._apply_relation_gate(
+                                        target_nomask_agent_qvals,
+                                        target_nomask_conditions,
+                                        target=True,
+                                    )
+                                target_nomask_qvals = self.target_mixer(
+                                    target_nomask_agent_qvals,
+                                    batch["state"],
+                                )
+                            else:
+                                target_nomask_qvals = target_nomask_agent_qvals
+                            nomask_targets = build_td_lambda_targets(
+                                rewards,
+                                terminated,
+                                mask,
+                                target_nomask_qvals,
+                                self.args.n_agents,
+                                self.args.gamma,
+                                self.args.td_lambda,
+                            )
                 if self.nomask_td_auxiliary_coef > 0.0:
                     nomask_chosen_qvals = th.gather(
                         nomask_mac_out[:, :-1], dim=3, index=actions
@@ -3508,7 +3731,7 @@ class CleanLearner:
                             nomask_chosen_qvals, batch["state"][:, :-1]
                         )
                     nomask_td_error = (
-                        nomask_chosen_qvals - targets.detach()
+                        nomask_chosen_qvals - nomask_targets.detach()
                     ) * td_mask
                     nomask_td_loss = (
                         nomask_td_error.pow(2).sum()
@@ -3517,6 +3740,27 @@ class CleanLearner:
             advantage_margin_loss = td_loss.new_zeros(())
             advantage_margin_stats = {}
             advantage_margin_coef = 0.0
+            advantage_readiness_weight = 1.0
+            positive_return_fraction = 0.0
+            if self.advantage_dynamic_readiness:
+                with th.no_grad():
+                    valid_rewards = rewards * mask
+                    positive_return_fraction = float(
+                        (valid_rewards.sum(dim=1) > 0.0)
+                        .to(rewards.dtype)
+                        .mean()
+                        .item()
+                    )
+                decay = self.advantage_readiness_ema_decay
+                self.advantage_positive_return_ema = (
+                    decay * self.advantage_positive_return_ema
+                    + (1.0 - decay) * positive_return_fraction
+                )
+                advantage_readiness_weight = min(
+                    1.0,
+                    self.advantage_positive_return_ema
+                    / self.advantage_readiness_return_fraction,
+                )
             if (
                 self.advantage_margin_auxiliary_active
                 and nomask_mac_out is not None
@@ -3526,11 +3770,20 @@ class CleanLearner:
                 advantage_margin_loss, advantage_margin_stats = (
                     self._advantage_margin_gate_loss(
                         mac_out[:, :-1],
-                        nomask_mac_out[:, :-1],
+                        (
+                            target_nomask_mac_out[:, :-1]
+                            if self.advantage_stable_target_teacher
+                            else nomask_mac_out[:, :-1]
+                        ),
                         avail_actions[:, :-1],
                         mask.expand(
                             -1, -1, self.args.n_agents
                         ),
+                        mixer=self.mixer,
+                        states=batch["state"][:, :-1],
+                        replay_actions=actions,
+                        td_targets=nomask_targets,
+                        full_online_action_values=nomask_mac_out[:, :-1],
                     )
                 )
                 if self.advantage_margin_ramp_steps == 0:
@@ -3548,7 +3801,22 @@ class CleanLearner:
                         ),
                     )
                 advantage_margin_coef = (
-                    self.advantage_margin_auxiliary_coef * ramp
+                    self.advantage_margin_auxiliary_coef
+                    * ramp
+                    * advantage_readiness_weight
+                )
+                advantage_margin_stats.update(
+                    {
+                        "readiness_weight": td_loss.new_tensor(
+                            advantage_readiness_weight
+                        ),
+                        "positive_return_fraction": td_loss.new_tensor(
+                            positive_return_fraction
+                        ),
+                        "positive_return_ema": td_loss.new_tensor(
+                            self.advantage_positive_return_ema
+                        ),
+                    }
                 )
             if (
                 self.memory_efficient_multi_path
@@ -4458,6 +4726,29 @@ class CleanLearner:
                     self.nomask_td_auxiliary_coef * nomask_td_loss.item(),
                     t_env,
                 )
+                if self.nomask_independent_target:
+                    target_denominator = td_mask.sum().clamp(min=1.0)
+                    masked_target_mean = (
+                        targets.detach() * td_mask
+                    ).sum() / target_denominator
+                    full_target_mean = (
+                        nomask_targets.detach() * td_mask
+                    ).sum() / target_denominator
+                    self.logger.log_stat(
+                        "train_gate/qme_target/masked_mean",
+                        masked_target_mean.item(),
+                        t_env,
+                    )
+                    self.logger.log_stat(
+                        "train_gate/qme_target/full_mean",
+                        full_target_mean.item(),
+                        t_env,
+                    )
+                    self.logger.log_stat(
+                        "train_gate/qme_target/full_minus_masked_mean",
+                        (full_target_mean - masked_target_mean).item(),
+                        t_env,
+                    )
             if self.advantage_margin_auxiliary_active:
                 self.logger.log_stat(
                     "loss_advantage_margin",
