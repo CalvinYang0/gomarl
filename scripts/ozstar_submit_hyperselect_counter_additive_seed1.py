@@ -26,6 +26,9 @@ DEFAULT_LABELS = (
 ALL_LABELS = DEFAULT_LABELS + (
     "hyperselect_qme_action_q_scaled",
     "hyperselect_qme_action_q_episode_mean",
+    "hyperselect_qme_full_behavior",
+    "hyperselect_qme_mixed_behavior",
+    "hyperselect_qme_open_win_ready",
 )
 PAPER_NAMES = {
     "hyperselect_gate": "gate",
@@ -35,6 +38,9 @@ PAPER_NAMES = {
     "hyperselect_gate_qme_sme_additive": "full",
     "hyperselect_qme_action_q_scaled": "q_scaled",
     "hyperselect_qme_action_q_episode_mean": "q_episode_mean",
+    "hyperselect_qme_full_behavior": "full_behavior",
+    "hyperselect_qme_mixed_behavior": "mixed_behavior",
+    "hyperselect_qme_open_win_ready": "openwin_ready",
 }
 
 
@@ -122,14 +128,29 @@ def main():
         [sys.executable, "scripts/smoke_test_hyperselect_additive_counter_ablation.py"],
         check=True,
     )
-    if {
-        plan["label"] for plan in plans
-    } & {
+    selected_labels = {plan["label"] for plan in plans}
+    if selected_labels & {
         "hyperselect_qme_action_q_scaled",
         "hyperselect_qme_action_q_episode_mean",
+        "hyperselect_qme_full_behavior",
+        "hyperselect_qme_mixed_behavior",
+        "hyperselect_qme_open_win_ready",
     }:
         subprocess.run(
             [sys.executable, "scripts/smoke_test_hyperselect_stable_qme.py"],
+            check=True,
+        )
+    if selected_labels & {
+        "hyperselect_qme_full_behavior",
+        "hyperselect_qme_mixed_behavior",
+    }:
+        subprocess.run(
+            [sys.executable, "scripts/smoke_test_hyperselect_behavior_sampling.py"],
+            check=True,
+        )
+    if "hyperselect_qme_open_win_ready" in selected_labels:
+        subprocess.run(
+            [sys.executable, "scripts/smoke_test_advantage_margin_gate.py"],
             check=True,
         )
 
