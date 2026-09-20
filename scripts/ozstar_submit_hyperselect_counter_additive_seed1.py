@@ -16,19 +16,21 @@ from ozstar_submit_counter_transformer_nine import build_plans as counter_plans,
 from ozstar_submit_relation_advantage_mixer_nine import route_runtime
 
 
-ALL_LABELS = (
+DEFAULT_LABELS = (
     "hyperselect_gate",
     "hyperselect_gate_ltd_control",
     "hyperselect_gate_qme_additive",
     "hyperselect_gate_sme_additive",
     "hyperselect_gate_qme_sme_additive",
 )
+ALL_LABELS = DEFAULT_LABELS + ("hyperselect_qme_action_q_scaled",)
 PAPER_NAMES = {
     "hyperselect_gate": "gate",
     "hyperselect_gate_ltd_control": "gate_ltd",
     "hyperselect_gate_qme_additive": "gate_qme",
     "hyperselect_gate_sme_additive": "gate_sme",
     "hyperselect_gate_qme_sme_additive": "full",
+    "hyperselect_qme_action_q_scaled": "q_scaled",
 }
 
 
@@ -39,7 +41,7 @@ def _replace_arg(arguments, prefix, value):
 def build_plans(repo):
     requested = tuple(
         item
-        for item in os.environ.get("LABELS", " ".join(ALL_LABELS)).split()
+        for item in os.environ.get("LABELS", " ".join(DEFAULT_LABELS)).split()
         if item
     )
     if not requested:
@@ -116,6 +118,13 @@ def main():
         [sys.executable, "scripts/smoke_test_hyperselect_additive_counter_ablation.py"],
         check=True,
     )
+    if "hyperselect_qme_action_q_scaled" in {
+        plan["label"] for plan in plans
+    }:
+        subprocess.run(
+            [sys.executable, "scripts/smoke_test_hyperselect_stable_qme.py"],
+            check=True,
+        )
 
     user = run(["id", "-un"])
     names = {plan["job_name"] for plan in plans}
