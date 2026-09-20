@@ -170,10 +170,10 @@ def evaluate_sequential(args, runner):
     runner.close_env()
 
 
-def _run_force_open_test(args, runner, n_test_runs):
+def _run_force_open_test(args, runner, n_test_runs, learner=None):
     """Evaluate the same checkpoint once more with the observation gate open."""
     if not bool(getattr(args, "clean_dual_gate_test", False)):
-        return
+        return None
     if not hasattr(runner.mac, "set_dynamic_branch_gate_force_open"):
         raise RuntimeError(
             "clean_dual_gate_test requires a controller with force-open gate support"
@@ -186,6 +186,13 @@ def _run_force_open_test(args, runner, n_test_runs):
     runner.logger.console_logger.info(
         "Evaluating the same checkpoint with the observation gate forced open"
     )
+    metric_keys = (
+        "test_open_game_win_mean",
+        "test_open_battle_won_mean",
+    )
+    previous_counts = {
+        key: len(runner.logger.stats.get(key, ())) for key in metric_keys
+    }
     runner.set_test_log_prefix("test_open_")
     runner.mac.set_dynamic_branch_gate_force_open(True)
     try:
@@ -194,6 +201,20 @@ def _run_force_open_test(args, runner, n_test_runs):
     finally:
         runner.mac.set_dynamic_branch_gate_force_open(False)
         runner.set_test_log_prefix("test_")
+
+    open_win_rate = None
+    for key in metric_keys:
+        values = runner.logger.stats.get(key, ())
+        if len(values) > previous_counts[key]:
+            open_win_rate = float(values[-1][1])
+            break
+    if open_win_rate is None:
+        raise RuntimeError(
+            "Force-open evaluation did not log game_win or battle_won"
+        )
+    if learner is not None and hasattr(learner, "update_qme_open_win_rate"):
+        learner.update_qme_open_win_rate(open_win_rate)
+    return open_win_rate
 
 def run_sequential(args, logger):
 
@@ -406,7 +427,7 @@ def run_sequential(args, logger):
                     if save_one_test_video:
                         test_video_written = True
 
-            _run_force_open_test(args, runner, n_test_runs)
+            _run_force_open_test(args, runner, n_test_runs, learner=learner)
 
         if args.save_model and (runner.t_env - model_save_time >= args.save_model_interval or model_save_time == 0):
             model_save_time = runner.t_env

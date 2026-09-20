@@ -1086,6 +1086,11 @@ clean_nomask_independent_target: False
 clean_advantage_dynamic_readiness: False
 clean_advantage_readiness_return_fraction: 0.05
 clean_advantage_readiness_ema_decay: 0.95
+# Optionally latch QME on only after the real force-open evaluation win rate
+# strictly exceeds this threshold. Before the first qualifying evaluation the
+# QME coefficient is zero; ordinary TD/SME training continues unchanged.
+clean_advantage_open_win_readiness: False
+clean_advantage_open_win_threshold: 0.1
 # Multiply each hinge term by the detached normalized full-observation
 # advantage. This emphasizes high-confidence/high-margin teacher decisions.
 clean_advantage_margin_weight_by_teacher: False

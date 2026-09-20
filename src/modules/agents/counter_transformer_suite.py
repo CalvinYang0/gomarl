@@ -419,6 +419,15 @@ ABLATION_PROFILES = {
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
+    "hyperselect_qme_open_win_ready": {
+        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "advantage_open_win_readiness": True,
+        "advantage_open_win_threshold": 0.1,
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.
@@ -455,6 +464,7 @@ SMAC_PROFILES = (
     "hyperselect_qme_action_q_episode_mean",
     "hyperselect_qme_full_behavior",
     "hyperselect_qme_mixed_behavior",
+    "hyperselect_qme_open_win_ready",
 )
 
 
@@ -557,6 +567,12 @@ def experiment_overrides(label, domain="grf"):
         ),
         "clean_advantage_readiness_ema_decay": flags.get(
             "advantage_readiness_ema_decay", 0.95
+        ),
+        "clean_advantage_open_win_readiness": bool(
+            flags.get("advantage_open_win_readiness")
+        ),
+        "clean_advantage_open_win_threshold": flags.get(
+            "advantage_open_win_threshold", 0.1
         ),
         "clean_train_behavior_gate_mode": flags.get(
             "train_behavior_gate_mode", "masked"

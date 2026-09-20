@@ -115,7 +115,8 @@ def check_dual_test_logging_contract():
             self.test_log_prefix = "test_"
             self.calls = []
             self.logger = type("Log", (), {
-                "console_logger": logging.getLogger("dual-test-smoke")
+                "console_logger": logging.getLogger("dual-test-smoke"),
+                "stats": {},
             })()
 
         def set_test_log_prefix(self, prefix):
@@ -125,16 +126,30 @@ def check_dual_test_logging_contract():
             self.calls.append(
                 (test_mode, self.test_log_prefix, self.mac.force_open)
             )
+            if len(self.calls) == 2:
+                self.logger.stats["test_open_game_win_mean"] = [
+                    (123, 0.125)
+                ]
+
+    class FakeLearner:
+        def __init__(self):
+            self.open_win_rate = None
+
+        def update_qme_open_win_rate(self, value):
+            self.open_win_rate = value
 
     fake = FakeRunner()
+    learner = FakeLearner()
     args = type("Args", (), {"clean_dual_gate_test": True})()
-    _run_force_open_test(args, fake, 2)
+    open_win_rate = _run_force_open_test(args, fake, 2, learner=learner)
     assert fake.calls == [
         (True, "test_open_", True),
         (True, "test_open_", True),
     ]
     assert fake.test_log_prefix == "test_"
     assert fake.mac.force_open is False
+    assert open_win_rate == 0.125
+    assert learner.open_win_rate == 0.125
 
 
 def check_profile(label):

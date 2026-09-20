@@ -30,6 +30,7 @@ ALL_LABELS = DEFAULT_LABELS + (
     "hyperselect_qme_action_q_scaled",
     "hyperselect_qme_full_behavior",
     "hyperselect_qme_mixed_behavior",
+    "hyperselect_qme_open_win_ready",
 )
 ALL_SCENES = (
     ("3s5z", "3s5z_vs_3s6z"),
@@ -44,6 +45,7 @@ SHORT_NAMES = {
     "hyperselect_qme_action_q_scaled": "q_scaled",
     "hyperselect_qme_full_behavior": "full_behavior",
     "hyperselect_qme_mixed_behavior": "mixed_behavior",
+    "hyperselect_qme_open_win_ready": "openwin_ready",
 }
 
 

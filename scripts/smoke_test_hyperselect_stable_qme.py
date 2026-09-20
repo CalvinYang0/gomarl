@@ -27,6 +27,7 @@ LABELS = (
     "hyperselect_qme_action_q_episode_mean",
     "hyperselect_qme_full_behavior",
     "hyperselect_qme_mixed_behavior",
+    "hyperselect_qme_open_win_ready",
 )
 
 
@@ -55,9 +56,12 @@ def main():
         )
         stable = label == "hyperselect_qme_stable_teacher"
         dynamic = label == "hyperselect_qme_dynamic_readiness"
+        open_ready = label == "hyperselect_qme_open_win_ready"
         assert overrides["clean_advantage_stable_target_teacher"] is stable
         assert overrides["clean_nomask_independent_target"] is stable
         assert overrides["clean_advantage_dynamic_readiness"] is dynamic
+        assert overrides["clean_advantage_open_win_readiness"] is open_ready
+        assert overrides["clean_advantage_open_win_threshold"] == 0.1
 
         check(label)
         _, learner, batch, logger = make_case(label)
@@ -67,6 +71,14 @@ def main():
         if dynamic:
             assert logger.stats[prefix + "readiness_weight"][-1][1] > 0.0
             assert logger.stats[prefix + "positive_return_ema"][-1][1] > 0.0
+        if open_ready:
+            assert logger.stats[prefix + "open_win_readiness_weight"][-1][1] == 0.0
+            learner.update_qme_open_win_rate(0.1)
+            assert learner.advantage_open_win_ready is False
+            learner.update_qme_open_win_rate(0.1001)
+            assert learner.advantage_open_win_ready is True
+            learner.update_qme_open_win_rate(0.0)
+            assert learner.advantage_open_win_ready is True
         if label == "hyperselect_qme_joint_value":
             assert logger.stats[prefix + "joint_masked_q"]
             assert logger.stats[prefix + "joint_full_q"]

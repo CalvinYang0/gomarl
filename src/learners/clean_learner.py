@@ -396,6 +396,14 @@ class CleanLearner:
             getattr(args, "clean_advantage_readiness_ema_decay", 0.95)
         )
         self.advantage_positive_return_ema = 0.0
+        self.advantage_open_win_readiness = bool(
+            getattr(args, "clean_advantage_open_win_readiness", False)
+        )
+        self.advantage_open_win_threshold = float(
+            getattr(args, "clean_advantage_open_win_threshold", 0.1)
+        )
+        self.advantage_open_win_rate = None
+        self.advantage_open_win_ready = False
         self.advantage_margin_weight_by_teacher = bool(
             getattr(args, "clean_advantage_margin_weight_by_teacher", False)
         )
@@ -445,6 +453,10 @@ class CleanLearner:
         if not 0.0 <= self.advantage_q_scale_ema_decay < 1.0:
             raise ValueError(
                 "clean_advantage_q_scale_ema_decay must be in [0, 1)"
+            )
+        if not 0.0 <= self.advantage_open_win_threshold <= 1.0:
+            raise ValueError(
+                "clean_advantage_open_win_threshold must be in [0, 1]"
             )
         self.temporal_param_stability_active |= bool(self.counter_transformer_profile.get("temporal"))
         self.mask_parameter_relation_group_distance = model_type == (
@@ -1511,6 +1523,15 @@ class CleanLearner:
         normalized = centered / scale.detach().unsqueeze(-1)
         chosen = th.gather(normalized, -1, actions).squeeze(-1)
         return chosen, available_count > 1
+
+    def update_qme_open_win_rate(self, win_rate):
+        """Latch QME readiness from a real force-open policy evaluation."""
+        value = float(win_rate)
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("Open-policy win rate must be in [0, 1]")
+        self.advantage_open_win_rate = value
+        if value > self.advantage_open_win_threshold:
+            self.advantage_open_win_ready = True
 
     def _advantage_margin_gate_loss(
         self,
@@ -3837,6 +3858,7 @@ class CleanLearner:
             advantage_margin_stats = {}
             advantage_margin_coef = 0.0
             advantage_readiness_weight = 1.0
+            advantage_open_win_weight = 1.0
             positive_return_fraction = 0.0
             if self.advantage_dynamic_readiness:
                 with th.no_grad():
@@ -3856,6 +3878,10 @@ class CleanLearner:
                     1.0,
                     self.advantage_positive_return_ema
                     / self.advantage_readiness_return_fraction,
+                )
+            if self.advantage_open_win_readiness:
+                advantage_open_win_weight = float(
+                    self.advantage_open_win_ready
                 )
             if (
                 self.advantage_margin_auxiliary_active
@@ -3900,6 +3926,7 @@ class CleanLearner:
                     self.advantage_margin_auxiliary_coef
                     * ramp
                     * advantage_readiness_weight
+                    * advantage_open_win_weight
                 )
                 advantage_margin_stats.update(
                     {
@@ -3911,6 +3938,14 @@ class CleanLearner:
                         ),
                         "positive_return_ema": td_loss.new_tensor(
                             self.advantage_positive_return_ema
+                        ),
+                        "open_win_readiness_weight": td_loss.new_tensor(
+                            advantage_open_win_weight
+                        ),
+                        "open_win_rate": td_loss.new_tensor(
+                            -1.0
+                            if self.advantage_open_win_rate is None
+                            else self.advantage_open_win_rate
                         ),
                     }
                 )
