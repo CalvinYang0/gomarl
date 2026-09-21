@@ -24,6 +24,11 @@ DEFAULT_LABELS = (
     "hyperselect_gate_qme_sme_additive",
 )
 ALL_LABELS = DEFAULT_LABELS + (
+    "hyperselect_qme_joint_value",
+    "hyperselect_qme_td_quality",
+    "hyperselect_qme_action_rank",
+    "hyperselect_qme_stable_teacher",
+    "hyperselect_qme_dynamic_readiness",
     "hyperselect_qme_action_q_scaled",
     "hyperselect_qme_action_q_episode_mean",
     "hyperselect_qme_full_behavior",
@@ -36,6 +41,11 @@ PAPER_NAMES = {
     "hyperselect_gate_qme_additive": "gate_qme",
     "hyperselect_gate_sme_additive": "gate_sme",
     "hyperselect_gate_qme_sme_additive": "full",
+    "hyperselect_qme_joint_value": "joint_value",
+    "hyperselect_qme_td_quality": "td_quality",
+    "hyperselect_qme_action_rank": "action_rank",
+    "hyperselect_qme_stable_teacher": "stable_teacher",
+    "hyperselect_qme_dynamic_readiness": "dynamic_ready",
     "hyperselect_qme_action_q_scaled": "q_scaled",
     "hyperselect_qme_action_q_episode_mean": "q_episode_mean",
     "hyperselect_qme_full_behavior": "full_behavior",
@@ -130,6 +140,11 @@ def main():
     )
     selected_labels = {plan["label"] for plan in plans}
     if selected_labels & {
+        "hyperselect_qme_joint_value",
+        "hyperselect_qme_td_quality",
+        "hyperselect_qme_action_rank",
+        "hyperselect_qme_stable_teacher",
+        "hyperselect_qme_dynamic_readiness",
         "hyperselect_qme_action_q_scaled",
         "hyperselect_qme_action_q_episode_mean",
         "hyperselect_qme_full_behavior",
