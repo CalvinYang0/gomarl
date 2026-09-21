@@ -69,6 +69,12 @@ def _replace_arg(arguments, prefix, value):
 
 
 def build_plans(repo):
+    run_tag = os.environ.get("RUN_TAG", "").strip()
+    if run_tag and not re.fullmatch(r"_[A-Za-z0-9_-]+", run_tag):
+        raise ValueError(
+            "RUN_TAG must be empty or start with '_' and contain only "
+            "letters, digits, '_' or '-'"
+        )
     requested = tuple(
         item
         for item in os.environ.get("LABELS", " ".join(DEFAULT_LABELS)).split()
@@ -103,8 +109,12 @@ def build_plans(repo):
 
     for plan in plans:
         paper_name = PAPER_NAMES[plan["label"]]
-        plan["job_name"] = "grf_counter_additive_{}_s1".format(paper_name)
-        plan["run_name"] = "grf_counter_additive_{}_5m_s1".format(paper_name)
+        plan["job_name"] = "grf_counter_additive_{}_s1{}".format(
+            paper_name, run_tag
+        )
+        plan["run_name"] = "grf_counter_additive_{}_5m_s1{}".format(
+            paper_name, run_tag
+        )
         plan["exports"].update(
             T_MAX="5050000",
             RUN_NAME=plan["run_name"],
