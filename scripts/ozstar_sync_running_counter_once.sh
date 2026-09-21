@@ -34,9 +34,11 @@ job_run_name() {
   if [[ "$job_name" =~ ^(.+)_s([0-9]+)(.*)$ ]]; then
     local prefix="${BASH_REMATCH[1]}"
     local budget="10m"
-    # The paper suite uses a 5.05M environment-step budget and deliberately
-    # omits the budget token from its Slurm job name.
-    if [[ "$prefix" == *_paper_* ]]; then
+    # The paper, corrected additive, and QME diagnostic suites use a 5.05M
+    # budget and deliberately omit the budget token from their Slurm names.
+    if [[ "$prefix" == *_paper_* || \
+          "$prefix" == *_additive_* || \
+          "$prefix" == *_hyperselect_* ]]; then
       budget="5m"
     fi
     printf '%s_%s_s%s%s\n' \
