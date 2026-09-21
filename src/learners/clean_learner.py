@@ -353,6 +353,7 @@ class CleanLearner:
             "margin",
             "action_advantage",
             "action_q",
+            "action_q_rank",
             "action_q_episode_mean",
             "action_q_scaled",
             "joint_q",
@@ -362,7 +363,8 @@ class CleanLearner:
         }:
             raise ValueError(
                 "clean_advantage_objective must be margin, "
-                "action_advantage, action_q, action_q_episode_mean, "
+                "action_advantage, action_q, action_q_rank, "
+                "action_q_episode_mean, "
                 "action_q_scaled, joint_q, joint_q_rank, "
                 "td_quality, or td_quality_rank"
             )
@@ -1624,6 +1626,13 @@ class CleanLearner:
             # This loss is differentiated only into the observation gate;
             # it cannot inflate the Q-network weights to reduce itself.
             per_agent_loss = -sample_weight * masked_action_q
+        elif self.advantage_objective == "action_q_rank":
+            # Preserve the original raw action-Q guidance and add, rather
+            # than substitute, the requested teacher-action ordering term.
+            per_agent_loss = (
+                -sample_weight * masked_action_q
+                + self.advantage_action_rank_coef * rank_loss
+            )
         elif self.advantage_objective == "action_q_episode_mean":
             per_agent_values = -sample_weight * masked_action_q
             per_episode_count = valid.sum(dim=(1, 2)).clamp(min=1.0)

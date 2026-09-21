@@ -428,6 +428,49 @@ ABLATION_PROFILES = {
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
+    # Strict single-variable QME diagnostics relative to the historical paper
+    # model relation_advantage_qvalue_augtd_nomasktd. In particular, MaskTD
+    # remains disabled (main_td_coef=0) in every profile below.
+    "hyperselect_qme_joint_value_isolated": {
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "joint_q",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
+    "hyperselect_qme_td_quality_isolated": {
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "td_quality",
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
+    "hyperselect_qme_action_rank_isolated": {
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q_rank",
+        "advantage_action_rank_coef": 1.0,
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
+    "hyperselect_qme_stable_teacher_isolated": {
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "advantage_stable_target_teacher": True,
+        "nomask_independent_target": True,
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
+    "hyperselect_qme_dynamic_readiness_isolated": {
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
+        "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "advantage_open_win_readiness": True,
+        "advantage_open_win_threshold": 0.1,
+        "aux_identity_warmup": True, "dual_gate_test": True,
+        "memory_efficient_multi_path": True,
+    },
     # Matched hypernetwork baselines.  They share the recurrent policy encoder,
     # generated two-layer Q head and QMIX learner; only the hypernetwork
     # condition source changes.

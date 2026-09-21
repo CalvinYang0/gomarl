@@ -34,6 +34,11 @@ ALL_LABELS = DEFAULT_LABELS + (
     "hyperselect_qme_full_behavior",
     "hyperselect_qme_mixed_behavior",
     "hyperselect_qme_open_win_ready",
+    "hyperselect_qme_joint_value_isolated",
+    "hyperselect_qme_td_quality_isolated",
+    "hyperselect_qme_action_rank_isolated",
+    "hyperselect_qme_stable_teacher_isolated",
+    "hyperselect_qme_dynamic_readiness_isolated",
 )
 PAPER_NAMES = {
     "hyperselect_gate": "gate",
@@ -51,6 +56,11 @@ PAPER_NAMES = {
     "hyperselect_qme_full_behavior": "full_behavior",
     "hyperselect_qme_mixed_behavior": "mixed_behavior",
     "hyperselect_qme_open_win_ready": "openwin_ready",
+    "hyperselect_qme_joint_value_isolated": "joint_value_isolated",
+    "hyperselect_qme_td_quality_isolated": "td_quality_isolated",
+    "hyperselect_qme_action_rank_isolated": "action_rank_isolated",
+    "hyperselect_qme_stable_teacher_isolated": "stable_teacher_isolated",
+    "hyperselect_qme_dynamic_readiness_isolated": "dynamic_ready_isolated",
 }
 
 
@@ -153,6 +163,17 @@ def main():
     }:
         subprocess.run(
             [sys.executable, "scripts/smoke_test_hyperselect_stable_qme.py"],
+            check=True,
+        )
+    if selected_labels & {
+        "hyperselect_qme_joint_value_isolated",
+        "hyperselect_qme_td_quality_isolated",
+        "hyperselect_qme_action_rank_isolated",
+        "hyperselect_qme_stable_teacher_isolated",
+        "hyperselect_qme_dynamic_readiness_isolated",
+    }:
+        subprocess.run(
+            [sys.executable, "scripts/smoke_test_hyperselect_qme_isolated.py"],
             check=True,
         )
     if selected_labels & {
