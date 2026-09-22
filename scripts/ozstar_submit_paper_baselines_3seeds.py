@@ -32,7 +32,7 @@ SCENES = (
     ("smac_5m6m", "5m_vs_6m", "smac"),
     ("smac_mmm2", "MMM2", "smac"),
 )
-METHODS = ("qmix", "obs_hypernet", "id_hypernet")
+METHODS = ("qmix", "id_hypernet", "obs_hypernet")
 
 
 def _load_profiles(repo):
@@ -71,8 +71,10 @@ def _extra_args(profiles, profile_label):
 def build_plans(repo):
     profiles = _load_profiles(repo)
     plans = []
-    for scene_key, map_name, domain in SCENES:
-        for method in METHODS:
+    # Model-major ordering is intentional: submit all QMIX jobs first, then
+    # all ID-HyperNet jobs, and finally all Obs-HyperNet jobs.
+    for method in METHODS:
+        for scene_key, map_name, domain in SCENES:
             profile_label = (
                 "hyper_hypermarl_id"
                 if method == "id_hypernet" else "baseline"
