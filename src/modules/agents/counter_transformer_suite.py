@@ -485,6 +485,11 @@ ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 # arbitrary GRF ablation here can silently apply the wrong entity layout.
 SMAC_PROFILES = (
     "baseline",
+    # Matched ID-conditioned hypernetwork control. It retains the same
+    # Transformer policy representation and generated head as ``baseline``;
+    # only the parameter-generator condition changes from observation-derived
+    # context to a learned agent-identity condition.
+    "hyper_hypermarl_id",
     "relation_kl80aux",
     "obs_gate_kl80aux",
     "relation_kl80aux_mixer",

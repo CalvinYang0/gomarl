@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit the 5M QMIX/Transformer paper baselines on four selected scenes.
+"""Submit three 5M paper baselines on four selected scenes.
 
 The suite is intentionally fixed to seeds 1, 2, and 3.  Every run evaluates
 32 episodes every 10k environment steps, so the complete test win-rate curve
@@ -32,7 +32,7 @@ SCENES = (
     ("smac_5m6m", "5m_vs_6m", "smac"),
     ("smac_mmm2", "MMM2", "smac"),
 )
-METHODS = ("qmix", "transformer")
+METHODS = ("qmix", "obs_hypernet", "id_hypernet")
 
 
 def _load_profiles(repo):
@@ -45,10 +45,10 @@ def _load_profiles(repo):
     return profiles
 
 
-def _extra_args(profiles):
+def _extra_args(profiles, profile_label):
     # Use the same optimization/evaluation settings for both baselines.  The
     # only model difference is the individual action-value network.
-    overrides = profiles.experiment_overrides("baseline")
+    overrides = profiles.experiment_overrides(profile_label)
     overrides.pop("clean_model_type")
     overrides.update(
         torch_num_threads=28,
@@ -73,10 +73,12 @@ def build_plans(repo):
     plans = []
     for scene_key, map_name, domain in SCENES:
         for method in METHODS:
-            model_type = (
-                "qmix_minimal"
-                if method == "qmix"
-                else profiles.model_type_for("baseline", domain)
+            profile_label = (
+                "hyper_hypermarl_id"
+                if method == "id_hypernet" else "baseline"
+            )
+            model_type = "qmix_minimal" if method == "qmix" else (
+                profiles.model_type_for(profile_label, domain)
             )
             walltime = "2-00:00:00" if method == "qmix" else "3-00:00:00"
             memory = (
@@ -116,7 +118,7 @@ def build_plans(repo):
                     "MKL_NUM_THREADS": "28",
                     "OPENBLAS_NUM_THREADS": "1",
                     "NUMEXPR_NUM_THREADS": "1",
-                    "EXTRA_ARGS": _extra_args(profiles) + (
+                    "EXTRA_ARGS": _extra_args(profiles, profile_label) + (
                         " env_args.write_video=False"
                         if domain == "grf" else ""
                     ),
@@ -144,8 +146,8 @@ def build_plans(repo):
                     "exports": exports,
                     "sbatch_args": sbatch_args,
                 })
-    if len(plans) != 24 or len({p["job_name"] for p in plans}) != 24:
-        raise RuntimeError("Expected 24 unique paper-baseline jobs")
+    if len(plans) != 36 or len({p["job_name"] for p in plans}) != 36:
+        raise RuntimeError("Expected 36 unique paper-baseline jobs")
     return plans
 
 
@@ -168,6 +170,10 @@ def main():
             raise RuntimeError("Runtime directory is not writable: " + str(path))
 
     os.chdir(repo)
+    subprocess.run(
+        [sys.executable, "scripts/smoke_test_id_hypernet_smac.py"],
+        check=True,
+    )
     user = run(["id", "-un"])
     names = {plan["job_name"] for plan in plans}
     retained = {}
