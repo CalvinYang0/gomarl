@@ -33,6 +33,14 @@ job_run_name() {
   local job_name="$1"
   if [[ "$job_name" =~ ^(.+)_s([0-9]+)(.*)$ ]]; then
     local prefix="${BASH_REMATCH[1]}"
+    # New paper-baseline Slurm names already carry their budget token, e.g.
+    # ``grf_counter_paper_qmix_5m_s1``.  Their W&B run names are identical;
+    # do not manufacture ``..._5m_5m_s1`` during the config-name fallback.
+    if [[ "$prefix" == *_5m || "$prefix" == *_10m ]]; then
+      printf '%s_s%s%s\n' \
+        "$prefix" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+      return 0
+    fi
     local budget="10m"
     # The paper, corrected additive, and QME diagnostic suites use a 5.05M
     # budget and deliberately omit the budget token from their Slurm names.
