@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit three 5M paper baselines on four selected scenes.
+"""Submit selected 5M paper baselines on four selected scenes.
 
 The suite is intentionally fixed to seeds 1, 2, and 3.  Every run evaluates
 32 episodes every 10k environment steps, so the complete test win-rate curve
@@ -32,7 +32,8 @@ SCENES = (
     ("smac_5m6m", "5m_vs_6m", "smac"),
     ("smac_mmm2", "MMM2", "smac"),
 )
-METHODS = ("qmix", "id_hypernet", "obs_hypernet")
+DEFAULT_METHODS = ("qmix", "id_hypernet", "obs_hypernet")
+SUPPORTED_METHODS = DEFAULT_METHODS + ("vdn",)
 
 
 def _load_profiles(repo):
@@ -45,7 +46,7 @@ def _load_profiles(repo):
     return profiles
 
 
-def _extra_args(profiles, profile_label):
+def _extra_args(profiles, profile_label, method):
     # Use the same optimization/evaluation settings for both baselines.  The
     # only model difference is the individual action-value network.
     overrides = profiles.experiment_overrides(profile_label)
@@ -64,29 +65,44 @@ def _extra_args(profiles, profile_label):
         wandb_team="hjh331-sjtu",
         wandb_project="gomarl",
     )
+    if method == "vdn":
+        overrides["mixer"] = "vdn"
     return " ".join("{}={}".format(key, value)
                     for key, value in overrides.items())
 
 
 def build_plans(repo):
     profiles = _load_profiles(repo)
+    methods = tuple(os.environ.get(
+        "METHODS", " ".join(DEFAULT_METHODS)
+    ).split())
+    if (
+        not methods
+        or len(set(methods)) != len(methods)
+        or set(methods) - set(SUPPORTED_METHODS)
+    ):
+        raise ValueError(
+            "METHODS must select unique values from "
+            + " ".join(SUPPORTED_METHODS)
+        )
     plans = []
     # Model-major ordering is intentional: submit all QMIX jobs first, then
     # all ID-HyperNet jobs, and finally all Obs-HyperNet jobs.
-    for method in METHODS:
+    for method in methods:
         for scene_key, map_name, domain in SCENES:
             profile_label = (
                 "hyper_hypermarl_id"
                 if method == "id_hypernet" else "baseline"
             )
-            model_type = "qmix_minimal" if method == "qmix" else (
+            model_type = "qmix_minimal" if method in {"qmix", "vdn"} else (
                 profiles.model_type_for(profile_label, domain)
             )
-            walltime = "2-00:00:00" if method == "qmix" else "3-00:00:00"
+            fixed_head = method in {"qmix", "vdn"}
+            walltime = "2-00:00:00" if fixed_head else "3-00:00:00"
             memory = (
-                "24G" if domain == "grf" and method == "qmix"
+                "24G" if domain == "grf" and fixed_head
                 else "48G" if domain == "grf"
-                else "48G" if method == "qmix"
+                else "48G" if fixed_head
                 else "96G"
             )
             for seed in SEEDS:
@@ -120,7 +136,9 @@ def build_plans(repo):
                     "MKL_NUM_THREADS": "28",
                     "OPENBLAS_NUM_THREADS": "1",
                     "NUMEXPR_NUM_THREADS": "1",
-                    "EXTRA_ARGS": _extra_args(profiles, profile_label) + (
+                    "EXTRA_ARGS": _extra_args(
+                        profiles, profile_label, method
+                    ) + (
                         " env_args.write_video=False"
                         if domain == "grf" else ""
                     ),
@@ -148,8 +166,14 @@ def build_plans(repo):
                     "exports": exports,
                     "sbatch_args": sbatch_args,
                 })
-    if len(plans) != 36 or len({p["job_name"] for p in plans}) != 36:
-        raise RuntimeError("Expected 36 unique paper-baseline jobs")
+    expected_count = len(methods) * len(SCENES) * len(SEEDS)
+    if (
+        len(plans) != expected_count
+        or len({p["job_name"] for p in plans}) != expected_count
+    ):
+        raise RuntimeError(
+            "Expected {} unique paper-baseline jobs".format(expected_count)
+        )
     return plans
 
 
@@ -172,10 +196,17 @@ def main():
             raise RuntimeError("Runtime directory is not writable: " + str(path))
 
     os.chdir(repo)
-    subprocess.run(
-        [sys.executable, "scripts/smoke_test_id_hypernet_smac.py"],
-        check=True,
-    )
+    selected_methods = {plan["method"] for plan in plans}
+    if "id_hypernet" in selected_methods:
+        subprocess.run(
+            [sys.executable, "scripts/smoke_test_id_hypernet_smac.py"],
+            check=True,
+        )
+    if "vdn" in selected_methods:
+        subprocess.run(
+            [sys.executable, "scripts/smoke_test_vdn_baseline.py"],
+            check=True,
+        )
     user = run(["id", "-un"])
     names = {plan["job_name"] for plan in plans}
     retained = {}

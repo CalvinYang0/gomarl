@@ -19,7 +19,12 @@ from modules.agents.counter_transformer_suite import ALL_PROFILES, PROFILES, exp
 from utils.logging import Logger
 
 
-def make_case(label, scene="academy_counterattack_easy", env_overrides=None):
+def make_case(
+    label,
+    scene="academy_counterattack_easy",
+    env_overrides=None,
+    config_overrides=None,
+):
     config = {}
     smac = not scene.startswith("academy_")
     env_config = "sc2" if smac else scene
@@ -40,6 +45,7 @@ def make_case(label, scene="academy_counterattack_easy", env_overrides=None):
         n_agents, n_actions = config["env_args"]["n_agents"], 19
         obs_dim = state_dim = config["env_args"]["obs_dim"]
     config.update(experiment_overrides(label, "smac" if smac else "grf"))
+    config.update(config_overrides or {})
     config.update(n_agents=n_agents, n_actions=n_actions, state_shape=state_dim, obs_shape=obs_dim,
                   rnn_hidden_dim=16, hypernet_embed=16, clean_condition_dim=16,
                   use_cuda=False, device="cpu", batch_size=2, batch_size_run=2,
