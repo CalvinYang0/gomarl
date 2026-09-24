@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise five isolated HyperSelect QME improvements."""
+"""Verify ten HyperSelect QME trials against one historical control."""
 import logging
 from pathlib import Path
 import sys
@@ -30,6 +30,48 @@ LABELS = (
     "hyperselect_qme_open_win_ready",
 )
 
+REFERENCE = "relation_advantage_qvalue_augtd_nomasktd"
+ALLOWED_DIFFERENCES = {
+    "hyperselect_qme_joint_value": {
+        "clean_model_type", "clean_advantage_objective",
+    },
+    "hyperselect_qme_td_quality": {
+        "clean_model_type", "clean_advantage_objective",
+    },
+    "hyperselect_qme_action_rank": {
+        "clean_model_type", "clean_advantage_objective",
+    },
+    "hyperselect_qme_stable_teacher": {
+        "clean_model_type",
+        "clean_advantage_stable_target_teacher",
+        "clean_nomask_independent_target",
+    },
+    "hyperselect_qme_dynamic_readiness": {
+        "clean_model_type",
+        "clean_advantage_dynamic_readiness",
+        "clean_advantage_margin_warmup_steps",
+        "clean_advantage_margin_ramp_steps",
+    },
+    "hyperselect_qme_action_q_scaled": {
+        "clean_model_type", "clean_advantage_objective",
+    },
+    "hyperselect_qme_action_q_episode_mean": {
+        "clean_model_type", "clean_advantage_objective",
+    },
+    "hyperselect_qme_full_behavior": {
+        "clean_model_type", "clean_train_behavior_gate_mode",
+    },
+    "hyperselect_qme_mixed_behavior": {
+        "clean_model_type", "clean_train_behavior_gate_mode",
+    },
+    "hyperselect_qme_open_win_ready": {
+        "clean_model_type",
+        "clean_advantage_open_win_readiness",
+        "clean_advantage_margin_warmup_steps",
+        "clean_advantage_margin_ramp_steps",
+    },
+}
+
 
 def main():
     logging.disable(logging.CRITICAL)
@@ -37,15 +79,23 @@ def main():
     sacred = yaml.safe_load(
         (ROOT / "src/config/algs/clean_hyper.yaml").read_text()
     )
+    reference = experiment_overrides(REFERENCE)
     for label in LABELS:
         for domain in ("grf", "smac"):
             overrides = experiment_overrides(label, domain)
             missing = set(overrides) - set(sacred)
             assert not missing, (label, domain, sorted(missing))
         overrides = experiment_overrides(label)
-        assert overrides["clean_main_td_coef"] == 1.0
+        assert overrides["clean_main_td_coef"] == 0.0
         assert overrides["clean_nomask_td_auxiliary_coef"] == 1.0
         assert overrides["clean_random_drop_auxiliary_coef"] == 1.0
+        differences = {
+            key for key in overrides
+            if overrides[key] != reference[key]
+        }
+        assert differences == ALLOWED_DIFFERENCES[label], (
+            label, sorted(differences)
+        )
         expected_behavior = {
             "hyperselect_qme_full_behavior": "full",
             "hyperselect_qme_mixed_behavior": "mixed",
@@ -62,6 +112,15 @@ def main():
         assert overrides["clean_advantage_dynamic_readiness"] is dynamic
         assert overrides["clean_advantage_open_win_readiness"] is open_ready
         assert overrides["clean_advantage_open_win_threshold"] == 0.1
+        readiness = dynamic or open_ready
+        assert overrides["clean_advantage_margin_warmup_steps"] == (
+            0 if readiness else 250000
+        )
+        assert overrides["clean_advantage_margin_ramp_steps"] == (
+            0 if readiness else 250000
+        )
+        if label == "hyperselect_qme_action_rank":
+            assert overrides["clean_advantage_objective"] == "action_q_rank"
 
         check(label)
         _, learner, batch, logger = make_case(label)
@@ -100,9 +159,8 @@ def main():
             check_smac_semantics(scene, label)
 
     print(
-        "QME variants passed: joint-Q, TD-quality, action ranking, stable "
-        "teacher, dynamic readiness, raw-Q scale normalization and "
-        "episode-equal aggregation"
+        "Ten controlled QME variants passed: objectives, teacher, readiness, "
+        "scaling, aggregation and replay behaviour"
     )
 
 

@@ -339,11 +339,11 @@ ABLATION_PROFILES = {
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
-    # Five single-change QME trials relative to the corrected additive Full
-    # model. Keep them separate so joint value, TD quality, action ranking,
-    # teacher stability and activation readiness can each be attributed.
+    # Ten single-change QME trials relative to the historical paper model
+    # relation_advantage_qvalue_augtd_nomasktd.  Every trial keeps MaskTD off,
+    # NoMaskTD and KL80/SME on, and changes only the named QME mechanism.
     "hyperselect_qme_joint_value": {
-        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True,
         "advantage_objective": "joint_q",
@@ -351,7 +351,7 @@ ABLATION_PROFILES = {
         "memory_efficient_multi_path": True,
     },
     "hyperselect_qme_td_quality": {
-        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True,
         "advantage_objective": "td_quality",
@@ -359,15 +359,16 @@ ABLATION_PROFILES = {
         "memory_efficient_multi_path": True,
     },
     "hyperselect_qme_action_rank": {
-        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True,
-        "advantage_objective": "margin",
+        "advantage_objective": "action_q_rank",
+        "advantage_action_rank_coef": 1.0,
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
     "hyperselect_qme_stable_teacher": {
-        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True,
         "advantage_objective": "action_q",
@@ -377,16 +378,18 @@ ABLATION_PROFILES = {
         "memory_efficient_multi_path": True,
     },
     "hyperselect_qme_dynamic_readiness": {
-        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True,
         "advantage_objective": "action_q",
         "advantage_dynamic_readiness": True,
+        "advantage_margin_warmup_steps": 0,
+        "advantage_margin_ramp_steps": 0,
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
     "hyperselect_qme_action_q_scaled": {
-        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True,
         "advantage_objective": "action_q_scaled",
@@ -394,17 +397,17 @@ ABLATION_PROFILES = {
         "memory_efficient_multi_path": True,
     },
     "hyperselect_qme_action_q_episode_mean": {
-        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True,
         "advantage_objective": "action_q_episode_mean",
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
-    # Sampling-distribution diagnostics. Both retain the exact Full model and
-    # change only which policy acts in the environment to populate replay.
+    # Sampling-distribution diagnostics. Both retain the exact historical
+    # HyperSelect losses and change only which policy populates replay.
     "hyperselect_qme_full_behavior": {
-        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
         "train_behavior_gate_mode": "full",
@@ -412,7 +415,7 @@ ABLATION_PROFILES = {
         "memory_efficient_multi_path": True,
     },
     "hyperselect_qme_mixed_behavior": {
-        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
         "train_behavior_gate_mode": "mixed",
@@ -420,11 +423,13 @@ ABLATION_PROFILES = {
         "memory_efficient_multi_path": True,
     },
     "hyperselect_qme_open_win_ready": {
-        "gate": True, "aux": "kl80", "main_td_coef": 1.0,
+        "gate": True, "aux": "kl80", "main_td_coef": 0.0,
         "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
         "advantage_open_win_readiness": True,
         "advantage_open_win_threshold": 0.1,
+        "advantage_margin_warmup_steps": 0,
+        "advantage_margin_ramp_steps": 0,
         "aux_identity_warmup": True, "dual_gate_test": True,
         "memory_efficient_multi_path": True,
     },
@@ -626,8 +631,12 @@ def experiment_overrides(label, domain="grf"):
             "train_behavior_gate_mode", "masked"
         ),
         "clean_advantage_margin_auxiliary_coef": 1.0,
-        "clean_advantage_margin_warmup_steps": 250000,
-        "clean_advantage_margin_ramp_steps": 250000,
+        "clean_advantage_margin_warmup_steps": flags.get(
+            "advantage_margin_warmup_steps", 250000
+        ),
+        "clean_advantage_margin_ramp_steps": flags.get(
+            "advantage_margin_ramp_steps", 250000
+        ),
         "clean_advantage_margin_weight_by_teacher": bool(
             flags.get("advantage_weighted")
         ),

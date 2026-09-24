@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit the corrected additive HyperSelect Counter ablation, seed 1."""
+"""Submit controlled HyperSelect Counter ablations, seed 1."""
 import json
 import os
 from pathlib import Path
@@ -23,7 +23,8 @@ DEFAULT_LABELS = (
     "hyperselect_gate_sme_additive",
     "hyperselect_gate_qme_sme_additive",
 )
-ALL_LABELS = DEFAULT_LABELS + (
+QME_CONTROL_LABEL = "relation_advantage_qvalue_augtd_nomasktd"
+QME_TRIAL_LABELS = (
     "hyperselect_qme_joint_value",
     "hyperselect_qme_td_quality",
     "hyperselect_qme_action_rank",
@@ -34,18 +35,16 @@ ALL_LABELS = DEFAULT_LABELS + (
     "hyperselect_qme_full_behavior",
     "hyperselect_qme_mixed_behavior",
     "hyperselect_qme_open_win_ready",
-    "hyperselect_qme_joint_value_isolated",
-    "hyperselect_qme_td_quality_isolated",
-    "hyperselect_qme_action_rank_isolated",
-    "hyperselect_qme_stable_teacher_isolated",
-    "hyperselect_qme_dynamic_readiness_isolated",
 )
+QME_LABELS = (QME_CONTROL_LABEL,) + QME_TRIAL_LABELS
+ALL_LABELS = DEFAULT_LABELS + QME_LABELS
 PAPER_NAMES = {
     "hyperselect_gate": "gate",
     "hyperselect_gate_ltd_control": "gate_ltd",
     "hyperselect_gate_qme_additive": "gate_qme",
     "hyperselect_gate_sme_additive": "gate_sme",
     "hyperselect_gate_qme_sme_additive": "full",
+    QME_CONTROL_LABEL: "control",
     "hyperselect_qme_joint_value": "joint_value",
     "hyperselect_qme_td_quality": "td_quality",
     "hyperselect_qme_action_rank": "action_rank",
@@ -56,11 +55,6 @@ PAPER_NAMES = {
     "hyperselect_qme_full_behavior": "full_behavior",
     "hyperselect_qme_mixed_behavior": "mixed_behavior",
     "hyperselect_qme_open_win_ready": "openwin_ready",
-    "hyperselect_qme_joint_value_isolated": "joint_value_isolated",
-    "hyperselect_qme_td_quality_isolated": "td_quality_isolated",
-    "hyperselect_qme_action_rank_isolated": "action_rank_isolated",
-    "hyperselect_qme_stable_teacher_isolated": "stable_teacher_isolated",
-    "hyperselect_qme_dynamic_readiness_isolated": "dynamic_ready_isolated",
 }
 
 
@@ -81,12 +75,14 @@ def build_plans(repo):
         if item
     )
     if not requested:
-        raise ValueError("LABELS must select at least one additive ablation")
+        raise ValueError("LABELS must select at least one HyperSelect ablation")
     unknown = sorted(set(requested) - set(ALL_LABELS))
     if unknown:
-        raise ValueError("Unknown additive ablation labels: " + ", ".join(unknown))
+        raise ValueError("Unknown HyperSelect ablation labels: " + ", ".join(unknown))
     if len(set(requested)) != len(requested):
-        raise ValueError("LABELS contains a duplicate additive ablation")
+        raise ValueError("LABELS contains a duplicate HyperSelect ablation")
+    if not (set(requested) <= set(DEFAULT_LABELS) or set(requested) <= set(QME_LABELS)):
+        raise ValueError("Do not mix paper ablations and QME trials in one submission")
     previous = {
         key: os.environ.get(key)
         for key in ("SEED", "T_MAX", "RUN_SUFFIX", "MEMORY", "TIME")
@@ -107,18 +103,25 @@ def build_plans(repo):
             else:
                 os.environ[key] = value
 
+    qme_suite = set(requested) <= set(QME_LABELS)
+    suite_tag = "qme" if qme_suite else "additive"
+    group_name = (
+        "hyperselect_counter_qme_single_variable_s1"
+        if qme_suite
+        else "hyperselect_counter_additive_ablation_s1"
+    )
     for plan in plans:
         paper_name = PAPER_NAMES[plan["label"]]
-        plan["job_name"] = "grf_counter_additive_{}_s1{}".format(
-            paper_name, run_tag
+        plan["job_name"] = "grf_counter_{}_{}_s1{}".format(
+            suite_tag, paper_name, run_tag
         )
-        plan["run_name"] = "grf_counter_additive_{}_5m_s1{}".format(
-            paper_name, run_tag
+        plan["run_name"] = "grf_counter_{}_{}_5m_s1{}".format(
+            suite_tag, paper_name, run_tag
         )
         plan["exports"].update(
             T_MAX="5050000",
             RUN_NAME=plan["run_name"],
-            GROUP_NAME="hyperselect_counter_additive_ablation_s1",
+            GROUP_NAME=group_name,
         )
         plan["sbatch_args"] = _replace_arg(
             plan["sbatch_args"], "--job-name=", plan["job_name"]
@@ -173,17 +176,6 @@ def main():
     }:
         subprocess.run(
             [sys.executable, "scripts/smoke_test_hyperselect_stable_qme.py"],
-            check=True,
-        )
-    if selected_labels & {
-        "hyperselect_qme_joint_value_isolated",
-        "hyperselect_qme_td_quality_isolated",
-        "hyperselect_qme_action_rank_isolated",
-        "hyperselect_qme_stable_teacher_isolated",
-        "hyperselect_qme_dynamic_readiness_isolated",
-    }:
-        subprocess.run(
-            [sys.executable, "scripts/smoke_test_hyperselect_qme_isolated.py"],
             check=True,
         )
     if selected_labels & {
