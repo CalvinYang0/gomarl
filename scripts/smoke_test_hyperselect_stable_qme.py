@@ -49,8 +49,6 @@ ALLOWED_DIFFERENCES = {
     "hyperselect_qme_dynamic_readiness": {
         "clean_model_type",
         "clean_advantage_dynamic_readiness",
-        "clean_advantage_margin_warmup_steps",
-        "clean_advantage_margin_ramp_steps",
     },
     "hyperselect_qme_action_q_scaled": {
         "clean_model_type", "clean_advantage_objective",
@@ -67,8 +65,6 @@ ALLOWED_DIFFERENCES = {
     "hyperselect_qme_open_win_ready": {
         "clean_model_type",
         "clean_advantage_open_win_readiness",
-        "clean_advantage_margin_warmup_steps",
-        "clean_advantage_margin_ramp_steps",
     },
 }
 
@@ -112,13 +108,11 @@ def main():
         assert overrides["clean_advantage_dynamic_readiness"] is dynamic
         assert overrides["clean_advantage_open_win_readiness"] is open_ready
         assert overrides["clean_advantage_open_win_threshold"] == 0.1
-        readiness = dynamic or open_ready
-        assert overrides["clean_advantage_margin_warmup_steps"] == (
-            0 if readiness else 250000
-        )
-        assert overrides["clean_advantage_margin_ramp_steps"] == (
-            0 if readiness else 250000
-        )
+        # The main gate is deliberately forced open during its shared 250k
+        # identity warmup. Readiness controls whether QME activates after that
+        # common warmup; it must not create a disconnected pre-warmup loss.
+        assert overrides["clean_advantage_margin_warmup_steps"] == 250000
+        assert overrides["clean_advantage_margin_ramp_steps"] == 250000
         if label == "hyperselect_qme_action_rank":
             assert overrides["clean_advantage_objective"] == "action_q_rank"
 
