@@ -46,7 +46,9 @@ def main():
         run_id = directory.name.rsplit("-", 1)[-1]
         if (directory / ("run-" + run_id + ".wandb")).is_file():
             directories.append(directory)
-    directories.sort(key=lambda path: path.name)
+    # Active jobs are normally the newest directories. Upload newest first so
+    # a backlog of already-synced historical runs cannot delay live curves.
+    directories.sort(key=lambda path: path.name, reverse=True)
 
     if not directories:
         print("No W&B offline runs found on/after " + args.since, flush=True)
