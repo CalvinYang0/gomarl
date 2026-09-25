@@ -46,7 +46,8 @@ job_run_name() {
     # budget and deliberately omit the budget token from their Slurm names.
     if [[ "$prefix" == *_paper_* || \
           "$prefix" == *_additive_* || \
-          "$prefix" == *_hyperselect_* ]]; then
+          "$prefix" == *_hyperselect_* || \
+          "$prefix" == *_qme_* ]]; then
       budget="5m"
     fi
     printf '%s_%s_s%s%s\n' \
