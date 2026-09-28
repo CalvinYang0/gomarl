@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -253,6 +254,22 @@ def fetch_local_run_curve(
 
     candidates = []
     for path in _local_run_files(wandb_root, run_name):
+        stat = path.stat()
+        cache_key = hashlib.sha256(
+            "{}\0{}\0{}\0{}".format(
+                path.resolve(), stat.st_size, stat.st_mtime_ns, metric
+            ).encode("utf-8")
+        ).hexdigest()
+        cache_dir = wandb_root / ".plot-curve-cache"
+        cache_path = cache_dir / (cache_key + ".npz")
+        if cache_path.is_file():
+            with np.load(cache_path) as cached:
+                x = np.asarray(cached["x"], dtype=float)
+                y = np.asarray(cached["y"], dtype=float)
+            if x.size and y.size:
+                candidates.append((float(x[-1]), x.size, x, y, path))
+                continue
+
         points = []
         scanner = DataStore()
         scanner.open_for_scan(str(path))
@@ -275,6 +292,8 @@ def fetch_local_run_curve(
                         item_key = ".".join(item.nested_key)
                     else:
                         item_key = item.key
+                    if item_key not in ("_step", metric):
+                        continue
                     try:
                         parsed = json.loads(item.value_json)
                     except (TypeError, json.JSONDecodeError):
@@ -294,6 +313,10 @@ def fetch_local_run_curve(
             x = np.asarray([point[0] for point in points], dtype=float)
             y = np.asarray([point[1] for point in points], dtype=float)
             x, y = collapse_duplicate_steps(x, y)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            temporary = cache_path.with_suffix(".tmp.npz")
+            np.savez_compressed(temporary, x=x, y=y)
+            temporary.replace(cache_path)
             candidates.append((float(x[-1]), x.size, x, y, path))
 
     if not candidates:
