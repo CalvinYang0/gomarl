@@ -285,7 +285,6 @@ ABLATION_PROFILES = {
         "nomask_td_coef": 1.0, "advantage_margin": True,
         "advantage_objective": "action_q",
         "aux_identity_warmup": True, "dual_gate_test": True,
-        "memory_efficient_multi_path": True,
     },
     # Strict no-Advantage control for the Direct-Q + AugTD + NoMaskTD model.
     # Every TD, masking, warmup and evaluation setting is identical; only the

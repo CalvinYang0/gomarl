@@ -98,6 +98,7 @@ def main():
     _, aggregate_learner, train_batch, _ = make_case(LABEL)
     staged_learner = copy.deepcopy(aggregate_learner)
     aggregate_learner.memory_efficient_multi_path = False
+    staged_learner.memory_efficient_multi_path = True
     th.manual_seed(37)
     aggregate_learner.train(train_batch, t_env=500000, episode_num=1)
     th.manual_seed(37)
