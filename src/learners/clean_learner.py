@@ -1069,12 +1069,15 @@ class CleanLearner:
                 "Gate-only auxiliary backward has no trainable gate parameters"
             )
 
-        auxiliary_gradients = None
-        if auxiliary_active:
-            # Differentiate the gate-only branch first.  The subsequent main
-            # backward can then release the much larger NoMaskTD/AugTD graphs
-            # instead of retaining the whole combined graph for this small
-            # parameter-only gradient.
+        scaled_main_loss = (
+            self.amp_scaler.scale(main_loss) if self.use_amp else main_loss
+        )
+        if not self.memory_efficient_multi_path:
+            # Historical HyperSelect path: backpropagate the complete training
+            # objective first, then add the gate-only auxiliary gradient.
+            scaled_main_loss.backward(retain_graph=auxiliary_active)
+            if not auxiliary_active:
+                return
             scaled_auxiliary_loss = (
                 self.amp_scaler.scale(gate_only_auxiliary_loss)
                 if self.use_amp
@@ -1084,12 +1087,25 @@ class CleanLearner:
                 scaled_auxiliary_loss,
                 selected_gate_parameters,
                 allow_unused=True,
-                retain_graph=True,
             )
-        scaled_main_loss = (
-            self.amp_scaler.scale(main_loss) if self.use_amp else main_loss
-        )
-        scaled_main_loss.backward()
+        else:
+            # Opt-in memory path: differentiate the small gate-only branch
+            # first so the subsequent main backward can release the larger
+            # NoMaskTD/AugTD graphs.
+            auxiliary_gradients = None
+            if auxiliary_active:
+                scaled_auxiliary_loss = (
+                    self.amp_scaler.scale(gate_only_auxiliary_loss)
+                    if self.use_amp
+                    else gate_only_auxiliary_loss
+                )
+                auxiliary_gradients = th.autograd.grad(
+                    scaled_auxiliary_loss,
+                    selected_gate_parameters,
+                    allow_unused=True,
+                    retain_graph=True,
+                )
+            scaled_main_loss.backward()
         if not auxiliary_active:
             return
 
@@ -3085,7 +3101,7 @@ class CleanLearner:
 
         def auxiliary_policy_hidden_cache(policy_hidden_cache):
             if not self.memory_efficient_multi_path:
-                return policy_hidden_cache
+                return None
             return [
                 hidden.detach().requires_grad_(True)
                 for hidden in policy_hidden_cache
@@ -3136,9 +3152,12 @@ class CleanLearner:
                         t in observation_probe_times
                     )
                 mac_out.append(self.mac.forward(batch, t=t))
-                policy_hidden_cache.append(
-                    self.mac.hidden_states[:, :, : self.mac.agent.hidden_dim]
-                )
+                if self.memory_efficient_multi_path:
+                    policy_hidden_cache.append(
+                        self.mac.hidden_states[
+                            :, :, : self.mac.agent.hidden_dim
+                        ]
+                    )
                 if gate_diagnostics is not None:
                     diagnostic_capturer = self.mac.agent.rpg_relation_capturer
                     for suffix, attribute in (("probability", "latest_dynamic_branch_probabilities_graph"),
@@ -3760,7 +3779,11 @@ class CleanLearner:
                                     self.mac.forward(
                                         batch,
                                         t=t,
-                                        policy_hidden_override=nomask_policy_hidden_cache[t],
+                                        policy_hidden_override=(
+                                            None
+                                            if nomask_policy_hidden_cache is None
+                                            else nomask_policy_hidden_cache[t]
+                                        ),
                                     )
                                 )
                     else:
@@ -3769,7 +3792,11 @@ class CleanLearner:
                                 self.mac.forward(
                                     batch,
                                     t=t,
-                                    policy_hidden_override=nomask_policy_hidden_cache[t],
+                                    policy_hidden_override=(
+                                        None
+                                        if nomask_policy_hidden_cache is None
+                                        else nomask_policy_hidden_cache[t]
+                                    ),
                                 )
                             )
                 finally:
@@ -4081,7 +4108,11 @@ class CleanLearner:
                             self.mac.forward(
                                 batch,
                                 t=t,
-                                policy_hidden_override=random_policy_hidden_cache[t],
+                                policy_hidden_override=(
+                                    None
+                                    if random_policy_hidden_cache is None
+                                    else random_policy_hidden_cache[t]
+                                ),
                             )
                         )
                         if (

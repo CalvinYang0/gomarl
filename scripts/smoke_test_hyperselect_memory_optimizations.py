@@ -99,10 +99,34 @@ def main():
     staged_learner = copy.deepcopy(aggregate_learner)
     aggregate_learner.memory_efficient_multi_path = False
     staged_learner.memory_efficient_multi_path = True
+
+    # The paper profile must use the historical independent recurrent
+    # forwards. Hidden-state reuse is allowed only in the explicit opt-in
+    # memory path.
+    aggregate_overrides = []
+    aggregate_forward = aggregate_learner.mac.forward
+
+    def record_aggregate_forward(*args, **kwargs):
+        aggregate_overrides.append(kwargs.get("policy_hidden_override"))
+        return aggregate_forward(*args, **kwargs)
+
+    aggregate_learner.mac.forward = record_aggregate_forward
     th.manual_seed(37)
     aggregate_learner.train(train_batch, t_env=500000, episode_num=1)
+    assert aggregate_overrides
+    assert all(override is None for override in aggregate_overrides)
+
+    staged_overrides = []
+    staged_forward = staged_learner.mac.forward
+
+    def record_staged_forward(*args, **kwargs):
+        staged_overrides.append(kwargs.get("policy_hidden_override"))
+        return staged_forward(*args, **kwargs)
+
+    staged_learner.mac.forward = record_staged_forward
     th.manual_seed(37)
     staged_learner.train(train_batch, t_env=500000, episode_num=1)
+    assert any(override is not None for override in staged_overrides)
     aggregate_parameters = dict(aggregate_learner.mac.agent.named_parameters())
     staged_parameters = dict(staged_learner.mac.agent.named_parameters())
     for name in aggregate_parameters:
