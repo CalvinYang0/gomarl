@@ -4888,6 +4888,32 @@ class CleanLearner:
                 self.main_td_coef * td_loss.item(),
                 t_env,
             )
+            # Keep the optimized objective auditable. Gate-only terms are
+            # differentiated through the gate parameter subset separately,
+            # so expose both sides as well as their scalar sum instead of
+            # making experiment comparison depend on reconstructing it from
+            # several charts.
+            shared_objective_value = float(loss.detach().item())
+            gate_only_objective_value = (
+                0.0
+                if gate_only_importance_loss is None
+                else float(gate_only_importance_loss.detach().item())
+            )
+            self.logger.log_stat(
+                "loss_optimized_shared_objective",
+                shared_objective_value,
+                t_env,
+            )
+            self.logger.log_stat(
+                "loss_optimized_gate_only_objective",
+                gate_only_objective_value,
+                t_env,
+            )
+            self.logger.log_stat(
+                "loss_optimized_effective_objective",
+                shared_objective_value + gate_only_objective_value,
+                t_env,
+            )
             if self.nomask_td_auxiliary_coef > 0.0:
                 self.logger.log_stat(
                     "loss_nomask_td_auxiliary", nomask_td_loss.item(), t_env

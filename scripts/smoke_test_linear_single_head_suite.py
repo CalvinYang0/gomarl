@@ -31,13 +31,11 @@ QME = {
         "action_q_episode_mean", "masked"
     ),
     "linear_qme_td_quality": ("td_quality", "masked"),
-    "linear_qme_stable_teacher": ("action_q", "masked"),
-    "linear_qme_episode_mean_full_behavior": (
-        "action_q_episode_mean", "full"
-    ),
-    "linear_qme_episode_mean_mixed_behavior": (
-        "action_q_episode_mean", "mixed"
-    ),
+    "linear_qme_joint_value": ("joint_q", "masked"),
+    "linear_qme_action_q_scaled": ("action_q_scaled", "masked"),
+    "linear_qme_dynamic_readiness": ("action_q", "masked"),
+    "linear_qme_open_win_readiness": ("action_q", "masked"),
+    "linear_qme_full_behavior": ("action_q", "full"),
 }
 
 
@@ -85,11 +83,16 @@ def check_qme():
         flags = ALL_PROFILES[label]
         overrides = experiment_overrides(label)
         assert flags["branch"] == "linear"
+        assert flags["kl"] and not flags.get("aux")
         assert not flags.get("memory_efficient_multi_path", False)
-        assert overrides["clean_main_td_coef"] == 0.0
-        assert overrides["clean_nomask_td_auxiliary_coef"] == 1.0
+        assert overrides["clean_main_td_coef"] == 1.0
+        assert overrides["clean_nomask_td_auxiliary_coef"] == 0.0
+        assert overrides["clean_advantage_margin_teacher_only"]
         assert overrides["clean_advantage_objective"] == objective
         assert overrides["clean_train_behavior_gate_mode"] == behavior
+        assert overrides["clean_dual_gate_test"] == (
+            label == "linear_qme_open_win_readiness"
+        )
         mac, learner, batch, logger = make_case(label)
         assert mac.agent.rpg_relation_capturer.relation_encoder_style == (
             "linear_only"
@@ -109,7 +112,7 @@ def main():
     check_qme()
     print(
         "Linear single-head suite passed: four scenes, KL80 forms, QME and "
-        "masked/full/mixed sampling"
+        "masked/full sampling"
     )
 
 

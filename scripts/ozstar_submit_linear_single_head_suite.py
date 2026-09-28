@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Submit Linear single-head baselines and controlled Counter ablations.
 
-Baseline: four paper maps, seeds 1/2/3, 5M steps.
-Counter: direct-vs-auxiliary KL80 and restored-graph QME/sampling controls,
+Baseline: four paper maps, seed 1, 5M steps.
+Counter: direct-vs-auxiliary KL80 and detached-teacher QME/sampling controls,
 seed 1 by default.  No Attention-only or RPG dual-head job is constructed.
 """
 
@@ -29,16 +29,18 @@ SCENES = (
     ("smac_5m6m", "5m_vs_6m", "smac", "24G"),
     ("smac_mmm2", "MMM2", "smac", "24G"),
 )
-BASELINE_SEEDS = (1, 2, 3)
+BASELINE_SEEDS = (1,)
 COUNTER_LABELS = (
     "linear_bayesg_kl80_keep",
     "linear_obs_gate_kl80aux_multiply",
     "linear_qme_action_q",
     "linear_qme_action_q_episode_mean",
     "linear_qme_td_quality",
-    "linear_qme_stable_teacher",
-    "linear_qme_episode_mean_full_behavior",
-    "linear_qme_episode_mean_mixed_behavior",
+    "linear_qme_joint_value",
+    "linear_qme_action_q_scaled",
+    "linear_qme_dynamic_readiness",
+    "linear_qme_open_win_readiness",
+    "linear_qme_full_behavior",
 )
 SHORT_NAMES = {
     "linear_bayesg_kl80_keep": "kl80_direct",
@@ -46,9 +48,11 @@ SHORT_NAMES = {
     "linear_qme_action_q": "qme_action_q_masked",
     "linear_qme_action_q_episode_mean": "qme_epmean_masked",
     "linear_qme_td_quality": "qme_tdquality_masked",
-    "linear_qme_stable_teacher": "qme_stable_teacher_masked",
-    "linear_qme_episode_mean_full_behavior": "qme_epmean_full",
-    "linear_qme_episode_mean_mixed_behavior": "qme_epmean_mixed",
+    "linear_qme_joint_value": "qme_joint_value_masked",
+    "linear_qme_action_q_scaled": "qme_q_scaled_masked",
+    "linear_qme_dynamic_readiness": "qme_dynamic_ready_masked",
+    "linear_qme_open_win_readiness": "qme_openwin_ready_masked",
+    "linear_qme_full_behavior": "qme_action_q_full",
 }
 
 
@@ -69,7 +73,6 @@ def _extra_args(profiles, label, domain):
         torch_num_threads=28,
         torch_num_interop_threads=1,
         learner_updates_per_collect=1,
-        clean_dual_gate_test=False,
         env_worker_startup_stagger=0.25,
         env_worker_reset_retries=5,
         env_worker_reset_retry_delay=2.0,
@@ -159,7 +162,7 @@ def build_plans(repo):
                 plans.append(_plan(
                     repo, profiles, scene_key, map_name, domain,
                     "linear_baseline", seed, name, memory,
-                    "paper_linear_singlehead_5m_3seeds",
+                    "paper_linear_singlehead_5m_seed1",
                 ))
     if "counter_ablation" in selected:
         seed = int(os.environ.get("ABLATION_SEED", "1"))
@@ -167,7 +170,7 @@ def build_plans(repo):
             memory = (
                 "16G" if label == "linear_bayesg_kl80_keep"
                 else "32G" if label == "linear_obs_gate_kl80aux_multiply"
-                else "48G"
+                else "24G"
             )
             name = "grf_counter_linear_{}_5m_s{}".format(
                 SHORT_NAMES[label], seed

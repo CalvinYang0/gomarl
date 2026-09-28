@@ -48,51 +48,68 @@ ABLATION_PROFILES = {
     "linear_obs_gate_kl80aux_multiply": {
         "gate": True, "aux": "kl80", "branch": "linear",
     },
-    # Restored-graph Linear QME controls.  All use masked behaviour collection
-    # unless the profile name explicitly says full or mixed.  None opts into
-    # the multi-path hidden-state reuse/ staged-backward implementation.
+    # Restored-graph QME controls built ON TOP OF
+    # ``linear_bayesg_kl80_keep``. Every profile retains exactly the same
+    # MaskTD and direct Bernoulli KL(p(obs)||0.8) main-gate regularizer. The
+    # force-open pass is a detached teacher only: there is no extra NoMaskTD
+    # gradient into the policy, hypernetwork, or mixer. QME is routed only
+    # into the observation gate. The only changes between profiles are the
+    # named QME objective/readiness/behaviour.
     "linear_qme_action_q": {
-        "gate": True, "aux": "kl80", "branch": "linear",
-        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
+        "gate": True, "kl": True, "branch": "linear",
+        "main_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
-        "aux_identity_warmup": True,
+        "advantage_teacher_only": True,
     },
     "linear_qme_action_q_episode_mean": {
-        "gate": True, "aux": "kl80", "branch": "linear",
-        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
+        "gate": True, "kl": True, "branch": "linear",
+        "main_td_coef": 1.0,
         "advantage_margin": True,
         "advantage_objective": "action_q_episode_mean",
-        "aux_identity_warmup": True,
+        "advantage_teacher_only": True,
     },
     "linear_qme_td_quality": {
-        "gate": True, "aux": "kl80", "branch": "linear",
-        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
+        "gate": True, "kl": True, "branch": "linear",
+        "main_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "td_quality",
-        "aux_identity_warmup": True,
+        "advantage_teacher_only": True,
     },
-    "linear_qme_stable_teacher": {
-        "gate": True, "aux": "kl80", "branch": "linear",
-        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
+    "linear_qme_joint_value": {
+        "gate": True, "kl": True, "branch": "linear",
+        "main_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "joint_q",
+        "advantage_teacher_only": True,
+    },
+    "linear_qme_action_q_scaled": {
+        "gate": True, "kl": True, "branch": "linear",
+        "main_td_coef": 1.0,
+        "advantage_margin": True,
+        "advantage_objective": "action_q_scaled",
+        "advantage_teacher_only": True,
+    },
+    "linear_qme_dynamic_readiness": {
+        "gate": True, "kl": True, "branch": "linear",
+        "main_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
-        "advantage_stable_target_teacher": True,
-        "nomask_independent_target": True,
-        "aux_identity_warmup": True,
+        "advantage_teacher_only": True,
+        "advantage_dynamic_readiness": True,
     },
-    "linear_qme_episode_mean_full_behavior": {
-        "gate": True, "aux": "kl80", "branch": "linear",
-        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
-        "advantage_margin": True,
-        "advantage_objective": "action_q_episode_mean",
+    "linear_qme_open_win_readiness": {
+        "gate": True, "kl": True, "branch": "linear",
+        "main_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "advantage_teacher_only": True,
+        "advantage_open_win_readiness": True,
+        "advantage_open_win_threshold": 0.1,
+        # Required only to measure the force-open policy used by readiness.
+        "dual_gate_test": True,
+    },
+    "linear_qme_full_behavior": {
+        "gate": True, "kl": True, "branch": "linear",
+        "main_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "advantage_teacher_only": True,
         "train_behavior_gate_mode": "full",
-        "aux_identity_warmup": True,
-    },
-    "linear_qme_episode_mean_mixed_behavior": {
-        "gate": True, "aux": "kl80", "branch": "linear",
-        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
-        "advantage_margin": True,
-        "advantage_objective": "action_q_episode_mean",
-        "train_behavior_gate_mode": "mixed",
-        "aux_identity_warmup": True,
     },
     # Full-observation main/test path. KL80 masking exists only in the second
     # training rollout and therefore acts purely as robustness augmentation.
