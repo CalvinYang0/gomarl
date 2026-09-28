@@ -79,6 +79,10 @@ def check_kl_forms():
 
 
 def check_qme():
+    control = experiment_overrides("linear_bayesg_nomasktd_control")
+    assert control["clean_main_td_coef"] == 1.0
+    assert control["clean_nomask_td_auxiliary_coef"] == 1.0
+    assert not control["clean_advantage_margin_auxiliary"]
     for label, (objective, behavior) in QME.items():
         flags = ALL_PROFILES[label]
         overrides = experiment_overrides(label)
@@ -86,8 +90,8 @@ def check_qme():
         assert flags["kl"] and not flags.get("aux")
         assert not flags.get("memory_efficient_multi_path", False)
         assert overrides["clean_main_td_coef"] == 1.0
-        assert overrides["clean_nomask_td_auxiliary_coef"] == 0.0
-        assert overrides["clean_advantage_margin_teacher_only"]
+        assert overrides["clean_nomask_td_auxiliary_coef"] == 1.0
+        assert not overrides["clean_advantage_margin_teacher_only"]
         assert overrides["clean_advantage_objective"] == objective
         assert overrides["clean_train_behavior_gate_mode"] == behavior
         assert overrides["clean_dual_gate_test"] == (

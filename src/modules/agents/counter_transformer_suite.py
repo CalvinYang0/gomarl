@@ -48,57 +48,57 @@ ABLATION_PROFILES = {
     "linear_obs_gate_kl80aux_multiply": {
         "gate": True, "aux": "kl80", "branch": "linear",
     },
+    # Matched control for the full-observation TD teacher required by QME.
+    # Comparing QME variants against this profile isolates gate-only QME from
+    # the additional NoMaskTD gradient received by the shared main network.
+    "linear_bayesg_nomasktd_control": {
+        "gate": True, "kl": True, "branch": "linear",
+        "main_td_coef": 1.0, "nomask_td_coef": 1.0,
+    },
     # Restored-graph QME controls built ON TOP OF
     # ``linear_bayesg_kl80_keep``. Every profile retains exactly the same
-    # MaskTD and direct Bernoulli KL(p(obs)||0.8) main-gate regularizer. The
-    # force-open pass is a detached teacher only: there is no extra NoMaskTD
-    # gradient into the policy, hypernetwork, or mixer. QME is routed only
-    # into the observation gate. The only changes between profiles are the
-    # named QME objective/readiness/behaviour.
+    # MaskTD, NoMaskTD and direct Bernoulli KL(p(obs)||0.8) main-gate
+    # regularizer. NoMaskTD trains the full-observation Q teacher; its output
+    # is detached inside QME, and QME itself is routed only into the
+    # observation gate. The only changes between QME profiles are the named
+    # objective/readiness/behaviour mechanisms.
     "linear_qme_action_q": {
         "gate": True, "kl": True, "branch": "linear",
-        "main_td_coef": 1.0,
+        "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
-        "advantage_teacher_only": True,
     },
     "linear_qme_action_q_episode_mean": {
         "gate": True, "kl": True, "branch": "linear",
-        "main_td_coef": 1.0,
+        "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True,
         "advantage_objective": "action_q_episode_mean",
-        "advantage_teacher_only": True,
     },
     "linear_qme_td_quality": {
         "gate": True, "kl": True, "branch": "linear",
-        "main_td_coef": 1.0,
+        "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "td_quality",
-        "advantage_teacher_only": True,
     },
     "linear_qme_joint_value": {
         "gate": True, "kl": True, "branch": "linear",
-        "main_td_coef": 1.0,
+        "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "joint_q",
-        "advantage_teacher_only": True,
     },
     "linear_qme_action_q_scaled": {
         "gate": True, "kl": True, "branch": "linear",
-        "main_td_coef": 1.0,
+        "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True,
         "advantage_objective": "action_q_scaled",
-        "advantage_teacher_only": True,
     },
     "linear_qme_dynamic_readiness": {
         "gate": True, "kl": True, "branch": "linear",
-        "main_td_coef": 1.0,
+        "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
-        "advantage_teacher_only": True,
         "advantage_dynamic_readiness": True,
     },
     "linear_qme_open_win_readiness": {
         "gate": True, "kl": True, "branch": "linear",
-        "main_td_coef": 1.0,
+        "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
-        "advantage_teacher_only": True,
         "advantage_open_win_readiness": True,
         "advantage_open_win_threshold": 0.1,
         # Required only to measure the force-open policy used by readiness.
@@ -106,9 +106,8 @@ ABLATION_PROFILES = {
     },
     "linear_qme_full_behavior": {
         "gate": True, "kl": True, "branch": "linear",
-        "main_td_coef": 1.0,
+        "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
-        "advantage_teacher_only": True,
         "train_behavior_gate_mode": "full",
     },
     # Full-observation main/test path. KL80 masking exists only in the second

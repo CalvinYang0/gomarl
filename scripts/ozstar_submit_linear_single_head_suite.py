@@ -2,7 +2,7 @@
 """Submit Linear single-head baselines and controlled Counter ablations.
 
 Baseline: four paper maps, seed 1, 5M steps.
-Counter: direct-vs-auxiliary KL80 and detached-teacher QME/sampling controls,
+Counter: direct-vs-auxiliary KL80 and NoMaskTD-teacher QME/sampling controls,
 seed 1 by default.  No Attention-only or RPG dual-head job is constructed.
 """
 
@@ -33,6 +33,7 @@ BASELINE_SEEDS = (1,)
 COUNTER_LABELS = (
     "linear_bayesg_kl80_keep",
     "linear_obs_gate_kl80aux_multiply",
+    "linear_bayesg_nomasktd_control",
     "linear_qme_action_q",
     "linear_qme_action_q_episode_mean",
     "linear_qme_td_quality",
@@ -45,6 +46,7 @@ COUNTER_LABELS = (
 SHORT_NAMES = {
     "linear_bayesg_kl80_keep": "kl80_direct",
     "linear_obs_gate_kl80aux_multiply": "kl80_aux_multiply",
+    "linear_bayesg_nomasktd_control": "kl80_nomasktd_control",
     "linear_qme_action_q": "qme_action_q_masked",
     "linear_qme_action_q_episode_mean": "qme_epmean_masked",
     "linear_qme_td_quality": "qme_tdquality_masked",
@@ -170,7 +172,7 @@ def build_plans(repo):
             memory = (
                 "16G" if label == "linear_bayesg_kl80_keep"
                 else "32G" if label == "linear_obs_gate_kl80aux_multiply"
-                else "24G"
+                else "32G"
             )
             name = "grf_counter_linear_{}_5m_s{}".format(
                 SHORT_NAMES[label], seed
