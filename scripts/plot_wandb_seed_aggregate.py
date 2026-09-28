@@ -1,24 +1,32 @@
 #!/usr/bin/env python3
 """Plot aligned multi-seed W&B learning curves with uncertainty bands.
 
+The defaults reproduce CASH's public plotting pipeline: compute the mean and
+sample standard deviation across seeds at each timestep, smooth those two
+statistics separately with a centered rolling window, downsample, and draw
+``mean +/- std``.
+
 Examples
 --------
-Reproduce the statistic used by the GoMARL paper (median and IQR)::
+Use the CASH defaults (mean +/- sample std, centered windows of 100, then
+10x downsampling)::
 
     python scripts/plot_wandb_seed_aggregate.py \
       --project hjh331-sjtu/gomarl \
       --metric test_game_win_mean \
       --series 'HyperSelect=grf_counter_paper_hyperselect_10m_s{seed}' \
-      --seeds 1 2 3 --band iqr --percent \
-      --output figures/counter_hyperselect_iqr.pdf
+      --seeds 1 2 3 --percent \
+      --output figures/counter_hyperselect_cash.pdf
 
-Plot a mean curve and a 95% Student-t confidence interval::
+Plot a mean curve and a 95% Student-t confidence interval without CASH-style
+post-aggregation smoothing::
 
     python scripts/plot_wandb_seed_aggregate.py \
       --project hjh331-sjtu/gomarl \
       --metric test_game_win_mean \
       --series 'HyperSelect=grf_counter_paper_hyperselect_10m_s{seed}' \
-      --seeds 1 2 3 --band ci95 --percent \
+      --seeds 1 2 3 --band ci95 --mean-window 1 --std-window 1 \
+      --downsample-factor 1 --percent \
       --output figures/counter_hyperselect_ci95.pdf
 
 Each ``--series`` value is ``LABEL=RUN_NAME_TEMPLATE``.  The template must
@@ -85,6 +93,25 @@ def ema(values: np.ndarray, span: int) -> np.ndarray:
     result[0] = values[0]
     for index in range(1, values.size):
         result[index] = alpha * values[index] + (1.0 - alpha) * result[index - 1]
+    return result
+
+
+def centered_rolling_mean(values: np.ndarray, window: int) -> np.ndarray:
+    """Pandas-compatible centered rolling mean with ``min_periods=1``."""
+    if window <= 1 or values.size == 0:
+        return values.copy()
+    result = np.full(values.shape, np.nan, dtype=float)
+    # pandas ``rolling(window=..., center=True)`` assigns the extra point of
+    # an even-sized window to the left side of the labelled position.
+    left = window // 2
+    right = (window - 1) // 2
+    for index in range(values.size):
+        start = max(0, index - left)
+        stop = min(values.size, index + right + 1)
+        chunk = values[start:stop]
+        finite = chunk[np.isfinite(chunk)]
+        if finite.size:
+            result[index] = float(np.mean(finite))
     return result
 
 
@@ -224,13 +251,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--series", action="append", required=True,
                         help="LABEL=RUN_NAME_TEMPLATE; repeat for comparisons")
     parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])
-    parser.add_argument("--band", choices=("iqr", "ci95", "std", "sem"), default="iqr")
+    parser.add_argument("--band", choices=("iqr", "ci95", "std", "sem"), default="std",
+                        help="Uncertainty band; CASH uses std (default)")
     parser.add_argument("--step-size", type=float, default=10000.0)
     parser.add_argument("--max-step", type=float)
     parser.add_argument("--min-seeds", type=int,
                         help="Minimum contributing seeds; default is all requested seeds")
     parser.add_argument("--smooth-span", type=int, default=1,
-                        help="Causal EMA span applied to each seed before aggregation")
+                        help="Optional pre-aggregation per-seed EMA; CASH leaves this at 1")
+    parser.add_argument("--mean-window", type=int, default=100,
+                        help="Centered rolling window for the aggregate center (CASH: 100)")
+    parser.add_argument("--std-window", type=int, default=100,
+                        help="Centered rolling window for band radius (CASH: 100)")
+    parser.add_argument("--downsample-factor", type=int, default=10,
+                        help="Keep every Nth aggregate point after smoothing (CASH: 10)")
     parser.add_argument("--percent", action="store_true",
                         help="Multiply y values by 100 and label axis as percent")
     parser.add_argument("--title", default="")
@@ -250,6 +284,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         raise ValueError("--step-size must be positive")
     if args.smooth_span < 1:
         raise ValueError("--smooth-span must be at least 1")
+    if args.mean_window < 1 or args.std_window < 1:
+        raise ValueError("--mean-window and --std-window must be at least 1")
+    if args.downsample_factor < 1:
+        raise ValueError("--downsample-factor must be at least 1")
     required = args.min_seeds if args.min_seeds is not None else len(args.seeds)
     if required < 1 or required > len(args.seeds):
         raise ValueError("--min-seeds must be between 1 and the number of seeds")
@@ -295,6 +333,32 @@ def main(argv: Iterable[str] | None = None) -> int:
         upper[insufficient] = np.nan
         summaries[label] = (center, lower, upper, counts)
 
+    # CASH smooths the already aggregated mean and standard deviation
+    # separately, using centered rolling averages, and downsamples afterwards.
+    for label in summaries:
+        center, lower, upper, counts = summaries[label]
+        smooth_center = centered_rolling_mean(center, args.mean_window)
+        if args.band == "iqr":
+            smooth_lower = centered_rolling_mean(lower, args.std_window)
+            smooth_upper = centered_rolling_mean(upper, args.std_window)
+        else:
+            radius = (upper - lower) / 2.0
+            smooth_radius = centered_rolling_mean(radius, args.std_window)
+            smooth_lower = smooth_center - smooth_radius
+            smooth_upper = smooth_center + smooth_radius
+        valid = counts >= required
+        smooth_center[~valid] = np.nan
+        smooth_lower[~valid] = np.nan
+        smooth_upper[~valid] = np.nan
+        summaries[label] = (smooth_center, smooth_lower, smooth_upper, counts)
+
+    keep = np.arange(0, grid.size, args.downsample_factor)
+    grid = grid[keep]
+    summaries = {
+        label: tuple(array[keep] for array in summary)
+        for label, summary in summaries.items()
+    }
+
     plt.rcParams.update({
         "font.family": "serif",
         "font.size": 11,
@@ -329,7 +393,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     write_csv(csv_path, grid, summaries)
     print("wrote figure: " + str(args.output))
     print("wrote aggregate data: " + str(csv_path))
-    print("statistic: " + ("median + 25/75 percentiles" if args.band == "iqr" else "mean + " + args.band))
+    statistic = "median + 25/75 percentiles" if args.band == "iqr" else "mean + " + args.band
+    print(
+        "statistic: {}; centered windows center={} band={}; downsample={}".format(
+            statistic, args.mean_window, args.std_window, args.downsample_factor
+        )
+    )
     return 0
 
 

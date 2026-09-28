@@ -14,6 +14,7 @@ from plot_wandb_seed_aggregate import (
     align_curves,
     collapse_duplicate_steps,
     common_grid,
+    centered_rolling_mean,
     ema,
     parse_series,
     summarize,
@@ -28,6 +29,14 @@ def main():
     np.testing.assert_allclose(x, [10.0, 20.0])
     np.testing.assert_allclose(y, [1.5, 3.0])
     np.testing.assert_allclose(ema(np.array([0.0, 1.0, 1.0]), 3), [0.0, 0.5, 0.75])
+    np.testing.assert_allclose(
+        centered_rolling_mean(np.array([1.0, 2.0, 3.0, 4.0]), 3),
+        [1.5, 2.0, 3.0, 3.5],
+    )
+    np.testing.assert_allclose(
+        centered_rolling_mean(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), 4),
+        [1.5, 2.0, 2.5, 3.5, 4.0],
+    )
 
     curves = [
         (np.array([0.0, 10.0, 20.0]), np.array([0.0, 1.0, 2.0])),
