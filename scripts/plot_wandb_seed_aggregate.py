@@ -271,12 +271,18 @@ def fetch_local_run_curve(
                 )
                 value = None
                 for item in record.history.item:
-                    if item.key == "_step" and step is None:
+                    if item.nested_key:
+                        item_key = ".".join(item.nested_key)
+                    else:
+                        item_key = item.key
+                    try:
                         parsed = json.loads(item.value_json)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    if item_key == "_step" and step is None:
                         if isinstance(parsed, (int, float)):
                             step = float(parsed)
-                    elif item.key == metric:
-                        parsed = json.loads(item.value_json)
+                    elif item_key == metric:
                         if isinstance(parsed, (int, float)):
                             value = float(parsed)
                 if step is not None and value is not None:
