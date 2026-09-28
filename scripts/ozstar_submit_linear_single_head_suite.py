@@ -174,13 +174,14 @@ def build_plans(repo):
                 else "32G" if label == "linear_obs_gate_kl80aux_multiply"
                 else "32G"
             )
-            name = "grf_counter_linear_{}_5m_s{}".format(
+            name = "grf_counter_linear_{}_5m_s{}_controlled15".format(
                 SHORT_NAMES[label], seed
             )
             plans.append(_plan(
                 repo, profiles, "grf_counter",
                 "academy_counterattack_easy", "grf", label, seed, name,
-                memory, "counter_linear_kl80_qme_sampling_s{}".format(seed),
+                memory,
+                "counter_linear_kl80_qme_controlled15_s{}".format(seed),
             ))
     if len({plan["job_name"] for plan in plans}) != len(plans):
         raise RuntimeError("Duplicate Linear suite job name")
