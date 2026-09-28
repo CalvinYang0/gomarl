@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit matched Linear-only and Transformer-only KL80 gate controls."""
+"""Submit the Linear-only KL80 gate control (no Attention job)."""
 
 import json
 import os
@@ -18,14 +18,12 @@ from ozstar_submit_counter_transformer_nine import build_plans, run
 
 LABELS = (
     "linear_bayesg_kl80_keep",
-    "transformer_bayesg_kl80_keep",
 )
 MEMORY_BY_LABEL = {
     # The supplied Linear baseline trace peaks at roughly 13.3 GB.  Sixteen GB
     # leaves useful allocator/worker headroom without requesting the 24 GB
     # needed by the Transformer branch.
     "linear_bayesg_kl80_keep": "16G",
-    "transformer_bayesg_kl80_keep": "24G",
 }
 
 

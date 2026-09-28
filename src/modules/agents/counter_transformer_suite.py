@@ -29,6 +29,9 @@ PROFILES = {
 # Keep the original nine-model submission unchanged. These controls are
 # opt-in and submitted separately, without cancelling the original runs.
 ABLATION_PROFILES = {
+    # One condition branch and one generated Q head.  ``linear_only`` is used
+    # on both GRF and SMAC; no attention branch or RPG dual-head path exists.
+    "linear_baseline": {"branch": "linear"},
     "obs_gate_kl80aux": {"gate": True, "aux": "kl80"},
     # Strict single-branch counterparts of the historical dual-branch
     # ``bayesg_kl80_keep`` run.  Both use one masked TD path and a Bernoulli
@@ -37,6 +40,59 @@ ABLATION_PROFILES = {
     "transformer_bayesg_kl80_keep": {"gate": True, "kl": True},
     "linear_bayesg_kl80_keep": {
         "gate": True, "kl": True, "branch": "linear",
+    },
+    # Same learned observation gate as the direct-KL control, but KL80 is a
+    # separate observation-conditioned auxiliary mask.  Its sampled mask is
+    # multiplied pointwise with the learned main mask in the auxiliary TD
+    # rollout; the main rollout is unchanged.
+    "linear_obs_gate_kl80aux_multiply": {
+        "gate": True, "aux": "kl80", "branch": "linear",
+    },
+    # Restored-graph Linear QME controls.  All use masked behaviour collection
+    # unless the profile name explicitly says full or mixed.  None opts into
+    # the multi-path hidden-state reuse/ staged-backward implementation.
+    "linear_qme_action_q": {
+        "gate": True, "aux": "kl80", "branch": "linear",
+        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "aux_identity_warmup": True,
+    },
+    "linear_qme_action_q_episode_mean": {
+        "gate": True, "aux": "kl80", "branch": "linear",
+        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
+        "advantage_margin": True,
+        "advantage_objective": "action_q_episode_mean",
+        "aux_identity_warmup": True,
+    },
+    "linear_qme_td_quality": {
+        "gate": True, "aux": "kl80", "branch": "linear",
+        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "td_quality",
+        "aux_identity_warmup": True,
+    },
+    "linear_qme_stable_teacher": {
+        "gate": True, "aux": "kl80", "branch": "linear",
+        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
+        "advantage_margin": True, "advantage_objective": "action_q",
+        "advantage_stable_target_teacher": True,
+        "nomask_independent_target": True,
+        "aux_identity_warmup": True,
+    },
+    "linear_qme_episode_mean_full_behavior": {
+        "gate": True, "aux": "kl80", "branch": "linear",
+        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
+        "advantage_margin": True,
+        "advantage_objective": "action_q_episode_mean",
+        "train_behavior_gate_mode": "full",
+        "aux_identity_warmup": True,
+    },
+    "linear_qme_episode_mean_mixed_behavior": {
+        "gate": True, "aux": "kl80", "branch": "linear",
+        "main_td_coef": 0.0, "nomask_td_coef": 1.0,
+        "advantage_margin": True,
+        "advantage_objective": "action_q_episode_mean",
+        "train_behavior_gate_mode": "mixed",
+        "aux_identity_warmup": True,
     },
     # Full-observation main/test path. KL80 masking exists only in the second
     # training rollout and therefore acts purely as robustness augmentation.
@@ -493,6 +549,7 @@ ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 # arbitrary GRF ablation here can silently apply the wrong entity layout.
 SMAC_PROFILES = (
     "baseline",
+    "linear_baseline",
     # Matched ID-conditioned hypernetwork control. It retains the same
     # Transformer policy representation and generated head as ``baseline``;
     # only the parameter-generator condition changes from observation-derived
@@ -530,7 +587,11 @@ def model_type_for(label, domain="grf"):
     if domain == "smac":
         if label not in SMAC_PROFILES:
             raise ValueError("SMAC suite currently supports " + ", ".join(SMAC_PROFILES))
-        return "smac_single_transformer_suite_{}_hypercond".format(label)
+        branch = ALL_PROFILES[label].get("branch", "transformer")
+        variant = label[len("linear_"):] if branch == "linear" else label
+        return "smac_single_{}_suite_{}_hypercond".format(
+            branch, variant
+        )
     branch = ALL_PROFILES[label].get("branch", "transformer")
     variant = label[len("linear_"):] if branch == "linear" else label
     return "grf_abs_single_{}_suite_{}_hypercond".format(branch, variant)

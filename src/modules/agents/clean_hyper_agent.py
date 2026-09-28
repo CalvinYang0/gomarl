@@ -8214,8 +8214,12 @@ class SMACSingleTransformerCapturer(GRFPublicPrivateBiasTransformerCapturer):
         obs_dim = (layout["move_dim"] + layout["own_dim"]
                    + layout["n_enemies"] * layout["enemy_feat_dim"]
                    + layout["n_allies"] * layout["ally_feat_dim"])
-        if kwargs.get("relation_encoder_style") != "attention_only":
-            raise ValueError("SMAC suite adapter requires attention_only")
+        if kwargs.get("relation_encoder_style") not in {
+            "attention_only", "linear_only"
+        }:
+            raise ValueError(
+                "SMAC suite adapter requires one attention or linear branch"
+            )
         super().__init__(observation_dim=obs_dim, **kwargs)
         self.n_opponents = layout["n_enemies"]
         self.self_encoder = self._make_encoder(layout["move_dim"] + layout["own_dim"])
