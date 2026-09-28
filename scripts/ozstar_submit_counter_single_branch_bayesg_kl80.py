@@ -66,7 +66,7 @@ def build_single_branch_plans(repo):
         plan["sbatch_args"] = [
             arg
             if not arg.startswith("--time=")
-            else "--time=" + os.environ.get("TIME", "5-00:00:00")
+            else "--time=" + os.environ.get("TIME", "2-00:00:00")
             for arg in plan["sbatch_args"]
         ]
         plan["sbatch_args"] = [
