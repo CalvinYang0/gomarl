@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 from pathlib import Path
 import re
@@ -226,6 +227,79 @@ def fetch_run_curve(api, project: str, run_name: str, metric: str) -> Tuple[np.n
     return x, y, run_id
 
 
+def _local_run_files(wandb_root: Path, run_name: str) -> List[Path]:
+    matches = []
+    for directory in wandb_root.glob("offline-run-*"):
+        config = directory / "files" / "config.yaml"
+        if not config.is_file():
+            continue
+        try:
+            if run_name not in config.read_text(errors="ignore"):
+                continue
+        except OSError:
+            continue
+        files = list(directory.glob("run-*.wandb"))
+        if len(files) == 1:
+            matches.append(files[0])
+    return matches
+
+
+def fetch_local_run_curve(
+    wandb_root: Path, run_name: str, metric: str
+) -> Tuple[np.ndarray, np.ndarray, str]:
+    """Read a scalar history directly from retained offline W&B records."""
+    from wandb.proto import wandb_internal_pb2
+    from wandb.sdk.internal.datastore import DataStore
+
+    candidates = []
+    for path in _local_run_files(wandb_root, run_name):
+        points = []
+        scanner = DataStore()
+        scanner.open_for_scan(str(path))
+        try:
+            while True:
+                data = scanner.scan_data()
+                if data is None:
+                    break
+                record = wandb_internal_pb2.Record()
+                record.ParseFromString(data)
+                if not record.HasField("history"):
+                    continue
+                step = (
+                    float(record.history.step.num)
+                    if record.history.HasField("step") else None
+                )
+                value = None
+                for item in record.history.item:
+                    if item.key == "_step" and step is None:
+                        parsed = json.loads(item.value_json)
+                        if isinstance(parsed, (int, float)):
+                            step = float(parsed)
+                    elif item.key == metric:
+                        parsed = json.loads(item.value_json)
+                        if isinstance(parsed, (int, float)):
+                            value = float(parsed)
+                if step is not None and value is not None:
+                    points.append((step, value))
+        finally:
+            if hasattr(scanner, "close"):
+                scanner.close()
+        if points:
+            x = np.asarray([point[0] for point in points], dtype=float)
+            y = np.asarray([point[1] for point in points], dtype=float)
+            x, y = collapse_duplicate_steps(x, y)
+            candidates.append((float(x[-1]), x.size, x, y, path))
+
+    if not candidates:
+        raise RuntimeError(
+            "No retained offline history for {!r} metric {!r}".format(
+                run_name, metric
+            )
+        )
+    _, _, x, y, path = max(candidates, key=lambda item: (item[0], item[1]))
+    return x, y, str(path)
+
+
 def write_csv(path: Path, grid: np.ndarray, summaries: Dict[str, Tuple[np.ndarray, ...]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     labels = list(summaries)
@@ -247,6 +321,8 @@ def write_csv(path: Path, grid: np.ndarray, summaries: Dict[str, Tuple[np.ndarra
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", required=True, help="W&B ENTITY/PROJECT")
+    parser.add_argument("--wandb-root", type=Path,
+                        help="Retained offline-run root; preferred over cloud W&B")
     parser.add_argument("--metric", required=True)
     parser.add_argument("--series", action="append", required=True,
                         help="LABEL=RUN_NAME_TEMPLATE; repeat for comparisons")
@@ -299,14 +375,27 @@ def main(argv: Iterable[str] | None = None) -> int:
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter
 
-    api = wandb.Api()
+    api = None
     loaded: Dict[str, List[Tuple[np.ndarray, np.ndarray]]] = {}
     all_curves: List[Tuple[np.ndarray, np.ndarray]] = []
     for label, template in series:
         curves = []
         for seed in args.seeds:
             run_name = template.format(seed=seed)
-            x, y, run_id = fetch_run_curve(api, args.project, run_name, args.metric)
+            source = None
+            if args.wandb_root is not None:
+                try:
+                    x, y, source = fetch_local_run_curve(
+                        args.wandb_root.resolve(), run_name, args.metric
+                    )
+                except RuntimeError as exc:
+                    print("WARNING: {}; falling back to cloud".format(exc), file=sys.stderr)
+            if source is None:
+                if api is None:
+                    api = wandb.Api()
+                x, y, source = fetch_run_curve(
+                    api, args.project, run_name, args.metric
+                )
             y = ema(y, args.smooth_span)
             if args.percent:
                 y = y * 100.0
@@ -314,7 +403,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             all_curves.append((x, y))
             print(
                 "loaded label={!r} seed={} run={} id={} points={} end_step={:g}".format(
-                    label, seed, run_name, run_id, x.size, x[-1]
+                    label, seed, run_name, source, x.size, x[-1]
                 )
             )
         loaded[label] = curves

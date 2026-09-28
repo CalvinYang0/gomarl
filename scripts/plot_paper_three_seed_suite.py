@@ -11,6 +11,7 @@ smoothing and downsampling pipeline.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -81,6 +82,21 @@ def fetch_run_names(project: str) -> Sequence[str]:
     return [run.name for run in api.runs(project, per_page=500)]
 
 
+def fetch_local_run_names(wandb_root: Path) -> Sequence[str]:
+    pattern = re.compile(
+        r"(?:grf_(?:counter|pass)|smac_(?:5m6m|mmm2))_paper_"
+        r"(?:vdn|qmix|id_hypernet|obs_hypernet|hyperselect)_"
+        r"(?:5m|10m)_s[123]"
+    )
+    names = set()
+    for config in wandb_root.glob("offline-run-*/files/config.yaml"):
+        try:
+            names.update(pattern.findall(config.read_text(errors="ignore")))
+        except OSError:
+            continue
+    return sorted(names)
+
+
 def git_push_outputs(outputs: Sequence[Path], remote: str, branch: str) -> None:
     relative = [str(path.relative_to(ROOT)) for path in outputs]
     subprocess.run(["git", "add", "--"] + relative, cwd=ROOT, check=True)
@@ -104,6 +120,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", default="hjh331-sjtu/gomarl")
     parser.add_argument(
+        "--wandb-root",
+        type=Path,
+        default=Path(os.environ.get(
+            "WANDB_ROOT",
+            "/home/kyang/gomarl-runtime/gomarl-dual-branch/wandb",
+        )),
+        help="Retained local offline-run root (preferred over cloud discovery)",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=ROOT / "docs" / "figures" / "main_results",
@@ -119,8 +144,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    run_names = fetch_run_names(args.project)
-    print("Discovered {} W&B runs".format(len(run_names)))
+    run_names = fetch_local_run_names(args.wandb_root.resolve())
+    if run_names:
+        print("Discovered {} retained local main-result runs".format(len(run_names)))
+    else:
+        print("No retained main-result runs found; falling back to cloud discovery")
+        run_names = fetch_run_names(args.project)
+        print("Discovered {} cloud W&B runs".format(len(run_names)))
 
     outputs: List[Path] = []
     for scene, title, metric, filename in SCENES:
@@ -135,6 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sys.executable,
             str(PLOTTER),
             "--project", args.project,
+            "--wandb-root", str(args.wandb_root.resolve()),
             "--metric", metric,
             "--seeds", "1", "2", "3",
             "--percent",
