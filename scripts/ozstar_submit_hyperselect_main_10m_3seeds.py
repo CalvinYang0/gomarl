@@ -52,6 +52,10 @@ def _extra_args(profiles, domain):
         torch_num_threads=28,
         torch_num_interop_threads=1,
         learner_updates_per_collect=1,
+        # Main-result runs report only the deployed masked policy.  Running a
+        # second force-open evaluation at every 10k-step checkpoint doubles
+        # evaluation episodes without affecting training.
+        clean_dual_gate_test=False,
         env_worker_startup_stagger=0.25,
         env_worker_reset_retries=5,
         env_worker_reset_retry_delay=2.0,
