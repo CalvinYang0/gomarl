@@ -30,6 +30,14 @@ PROFILES = {
 # opt-in and submitted separately, without cancelling the original runs.
 ABLATION_PROFILES = {
     "obs_gate_kl80aux": {"gate": True, "aux": "kl80"},
+    # Strict single-branch counterparts of the historical dual-branch
+    # ``bayesg_kl80_keep`` run.  Both use one masked TD path and a Bernoulli
+    # KL(p(obs) || 0.8) term that directly regularizes only the learned gate;
+    # neither enables the separate KL80 masked-TD auxiliary.
+    "transformer_bayesg_kl80_keep": {"gate": True, "kl": True},
+    "linear_bayesg_kl80_keep": {
+        "gate": True, "kl": True, "branch": "linear",
+    },
     # Full-observation main/test path. KL80 masking exists only in the second
     # training rollout and therefore acts purely as robustness augmentation.
     "kl80aux_augmentation": {"aux": "kl80"},
