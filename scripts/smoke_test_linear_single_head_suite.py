@@ -57,14 +57,16 @@ def check_baselines():
 
 
 def check_kl_forms():
-    direct_mac, direct_learner, direct_batch, _ = make_case(
-        "linear_bayesg_kl80_keep"
-    )
-    direct = direct_mac.agent.rpg_relation_capturer
-    assert direct.relation_encoder_style == "linear_only"
-    assert direct_learner.gate_regularization_active
-    assert not direct_learner.random_drop_auxiliary_active
-    direct_learner.train(direct_batch, t_env=300000, episode_num=1)
+    for scene in SCENES:
+        direct_mac, direct_learner, direct_batch, _ = make_case(
+            "linear_bayesg_kl80_keep", scene
+        )
+        direct = direct_mac.agent.rpg_relation_capturer
+        assert direct.relation_encoder_style == "linear_only"
+        assert direct.dynamic_branch_gate is not None
+        assert direct_learner.gate_regularization_active
+        assert not direct_learner.random_drop_auxiliary_active
+        direct_learner.train(direct_batch, t_env=300000, episode_num=1)
 
     aux_mac, aux_learner, aux_batch, aux_logger = make_case(
         "linear_obs_gate_kl80aux_multiply"

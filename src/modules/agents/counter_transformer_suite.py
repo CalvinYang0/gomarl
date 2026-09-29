@@ -566,6 +566,7 @@ ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 SMAC_PROFILES = (
     "baseline",
     "linear_baseline",
+    "linear_bayesg_kl80_keep",
     # Matched ID-conditioned hypernetwork control. It retains the same
     # Transformer policy representation and generated head as ``baseline``;
     # only the parameter-generator condition changes from observation-derived
