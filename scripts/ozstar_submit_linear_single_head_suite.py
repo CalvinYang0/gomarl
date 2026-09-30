@@ -79,6 +79,8 @@ def _extra_args(profiles, label, domain):
         env_worker_reset_retries=5,
         env_worker_reset_retry_delay=2.0,
         env_worker_response_timeout=180.0,
+        env_worker_run_retries=2,
+        env_worker_run_retry_delay=2.0,
         test_nepisode=32,
         save_model=True,
         save_model_interval=1000000,

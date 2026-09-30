@@ -8,6 +8,11 @@ import torch as th
 import time
 import traceback
 
+
+class EnvironmentWorkerError(RuntimeError):
+    """Infrastructure failure while communicating with an environment worker."""
+
+
 class ParallelRunner:
 
     def __init__(self, args, logger):
@@ -31,27 +36,26 @@ class ParallelRunner:
         self.worker_response_timeout = float(
             getattr(self.args, "env_worker_response_timeout", 180.0)
         )
+        self.worker_run_retries = int(
+            getattr(self.args, "env_worker_run_retries", 0)
+        )
+        self.worker_run_retry_delay = float(
+            getattr(self.args, "env_worker_run_retry_delay", 2.0)
+        )
+        if self.worker_run_retries < 0:
+            raise ValueError("env_worker_run_retries must be non-negative")
         self._initial_reset = True
         self._closed = False
-
-        self.parent_conns, self.worker_conns = zip(*[Pipe() for _ in range(self.batch_size)])
+        self._worker_restart_count = 0
         env_fn = env_REGISTRY[self.args.env]
-        self.ps = []
-        for i, worker_conn in enumerate(self.worker_conns):
-            ps = Process(
-                target=env_worker,
-                args=(
-                    worker_conn,
-                    CloudpickleWrapper(partial(env_fn, **self.args.env_args)),
-                    self.worker_reset_retries,
-                    self.worker_reset_retry_delay,
-                ),
-            )
-            self.ps.append(ps)
+        self._env_fn = CloudpickleWrapper(
+            partial(env_fn, **self.args.env_args)
+        )
 
-        for p in self.ps:
-            p.daemon = True
-            p.start()
+        self.parent_conns = ()
+        self.worker_conns = ()
+        self.ps = []
+        self._start_workers()
 
         self._send_worker(0, "get_env_info", None)
         self.env_info = self._recv_worker(0, "get_env_info")
@@ -72,6 +76,68 @@ class ParallelRunner:
         self.last_battle_trace = None
         self.latest_snapshots = [None for _ in range(self.batch_size)]
         self.latest_render_frames = [None for _ in range(self.batch_size)]
+
+    def _start_workers(self):
+        pipes = [Pipe() for _ in range(self.batch_size)]
+        self.parent_conns, self.worker_conns = zip(*pipes)
+        self.ps = []
+        for worker_conn in self.worker_conns:
+            process = Process(
+                target=env_worker,
+                args=(
+                    worker_conn,
+                    self._env_fn,
+                    self.worker_reset_retries,
+                    self.worker_reset_retry_delay,
+                ),
+            )
+            process.daemon = True
+            process.start()
+            self.ps.append(process)
+
+    def _stop_workers(self, graceful):
+        if graceful:
+            for env_idx, process in enumerate(self.ps):
+                if process.is_alive():
+                    try:
+                        self.parent_conns[env_idx].send(("close", None))
+                    except (BrokenPipeError, EOFError, OSError):
+                        pass
+
+        for process in self.ps:
+            if graceful:
+                process.join(timeout=5)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=5)
+
+        for conn in self.parent_conns:
+            try:
+                conn.close()
+            except (OSError, AttributeError):
+                pass
+        for conn in self.worker_conns:
+            try:
+                conn.close()
+            except (OSError, AttributeError):
+                pass
+
+    def _restart_workers(self):
+        # A timed-out worker may still be blocked inside env.step(). Kill the
+        # complete worker set so no stale responses from the abandoned rollout
+        # can leak into its retry.
+        self._stop_workers(graceful=False)
+        if self.worker_run_retry_delay > 0:
+            time.sleep(self.worker_run_retry_delay)
+        self._start_workers()
+        self._initial_reset = True
+        self._worker_restart_count += 1
+        self.latest_snapshots = [None for _ in range(self.batch_size)]
+        self.latest_render_frames = [None for _ in range(self.batch_size)]
+
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -103,14 +169,14 @@ class ParallelRunner:
     def _send_worker(self, env_idx, command, data):
         process = self.ps[env_idx]
         if not process.is_alive():
-            raise RuntimeError(
+            raise EnvironmentWorkerError(
                 "Environment worker {} exited before command {!r} "
                 "(exitcode={}).".format(env_idx, command, process.exitcode)
             )
         try:
             self.parent_conns[env_idx].send((command, data))
         except (BrokenPipeError, EOFError, OSError) as err:
-            raise RuntimeError(
+            raise EnvironmentWorkerError(
                 "Failed to send command {!r} to environment worker {} "
                 "(alive={}, exitcode={}).".format(
                     command, env_idx, process.is_alive(), process.exitcode
@@ -121,7 +187,7 @@ class ParallelRunner:
         parent_conn = self.parent_conns[env_idx]
         process = self.ps[env_idx]
         if not parent_conn.poll(self.worker_response_timeout):
-            raise RuntimeError(
+            raise EnvironmentWorkerError(
                 "Timed out after {:.1f}s waiting for environment worker {} "
                 "to answer {!r} (alive={}, exitcode={}).".format(
                     self.worker_response_timeout,
@@ -134,13 +200,13 @@ class ParallelRunner:
         try:
             response = parent_conn.recv()
         except (EOFError, OSError) as err:
-            raise RuntimeError(
+            raise EnvironmentWorkerError(
                 "Environment worker {} closed its pipe while handling {!r} "
                 "(exitcode={}).".format(env_idx, command, process.exitcode)
             ) from err
 
         if isinstance(response, dict) and response.get("__worker_error__"):
-            raise RuntimeError(
+            raise EnvironmentWorkerError(
                 "Environment worker {} failed while handling {!r}: {}\n{}".format(
                     env_idx,
                     response.get("command", command),
@@ -154,17 +220,7 @@ class ParallelRunner:
         if self._closed:
             return
         self._closed = True
-        for env_idx, process in enumerate(self.ps):
-            if process.is_alive():
-                try:
-                    self.parent_conns[env_idx].send(("close", None))
-                except (BrokenPipeError, EOFError, OSError):
-                    pass
-        for process in self.ps:
-            process.join(timeout=5)
-            if process.is_alive():
-                process.terminate()
-                process.join(timeout=5)
+        self._stop_workers(graceful=True)
 
     def reset(self, test_mode=False):
         self.batch = self.new_batch()
@@ -200,6 +256,40 @@ class ParallelRunner:
         self.env_steps_this_run = 0
 
     def run(self, test_mode=False):
+        trace_request = self.battle_trace_request
+        for attempt in range(self.worker_run_retries + 1):
+            if attempt > 0 and trace_request is not None:
+                self.battle_trace_request = dict(trace_request)
+            try:
+                return self._run_once(test_mode=test_mode)
+            except EnvironmentWorkerError as err:
+                if attempt >= self.worker_run_retries:
+                    raise RuntimeError(
+                        "Environment rollout failed after {} attempt(s); "
+                        "the incomplete rollout was discarded.".format(
+                            attempt + 1
+                        )
+                    ) from err
+                self.logger.console_logger.warning(
+                    "Environment rollout failed at t_env={} (attempt {}/{}): "
+                    "{} Restarting all environment workers and discarding "
+                    "the incomplete rollout.".format(
+                        self.t_env,
+                        attempt + 1,
+                        self.worker_run_retries + 1,
+                        err,
+                    )
+                )
+                self._restart_workers()
+                self.logger.log_stat(
+                    "env_worker_restarts",
+                    self._worker_restart_count,
+                    self.t_env,
+                )
+
+        raise AssertionError("unreachable")
+
+    def _run_once(self, test_mode=False):
         self.reset(test_mode=test_mode)
         if test_mode and hasattr(
             self.mac, "reset_test_gate_probability_trajectory"
