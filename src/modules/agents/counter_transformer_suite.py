@@ -568,9 +568,6 @@ LINEAR_QME_BASE_LABELS = (
     "linear_qme_td_quality",
     "linear_qme_joint_value",
     "linear_qme_action_q_scaled",
-    "linear_qme_dynamic_readiness",
-    "linear_qme_open_win_readiness",
-    "linear_qme_full_behavior",
 )
 ABLATION_PROFILES["linear_directkl_nomasktd_control"] = {
     "gate": True,

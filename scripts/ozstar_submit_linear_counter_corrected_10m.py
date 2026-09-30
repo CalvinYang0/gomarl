@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Submit the 10M Counter Linear two-framework QME matrix, seed 1.
 
-Eight QME mechanisms are evaluated under matched Direct-KL and Aux-Multiply
+Five QME objectives are evaluated under matched Direct-KL and Aux-Multiply
 KL80 frameworks. Each framework also has a MaskTD+NoMaskTD no-QME control.
 The script can cancel only obsolete active jobs from superseded suites;
 completed runs and valid standalone KL/baseline runs are kept.
@@ -35,9 +35,6 @@ QME_VARIANTS = (
     ("td_quality", "tdquality_masked"),
     ("joint_value", "joint_value_masked"),
     ("action_q_scaled", "q_scaled_masked"),
-    ("dynamic_readiness", "dynamic_ready_masked"),
-    ("open_win_readiness", "openwin_ready_masked"),
-    ("full_behavior", "action_q_full"),
 )
 
 EXPERIMENTS = [
@@ -101,9 +98,9 @@ def build_plans(repo):
             for arg in plan["sbatch_args"]
         ]
         plans.append(plan)
-    if len(plans) != 19:
+    if len(plans) != 13:
         raise RuntimeError(
-            "Expected one baseline, two framework controls and 16 QME jobs"
+            "Expected one baseline, two framework controls and 10 QME jobs"
         )
     return plans
 

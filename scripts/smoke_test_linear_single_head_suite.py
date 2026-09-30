@@ -38,6 +38,20 @@ QME = {
     "linear_qme_full_behavior": ("action_q", "full"),
 }
 
+# Only genuine QME objective choices belong in the matched KL80 matrix.
+# Readiness heuristics and behavior-sampling changes remain available as
+# historical profiles, but are deliberately excluded from this experiment.
+MATRIX_QME = {
+    label: QME[label]
+    for label in (
+        "linear_qme_action_q",
+        "linear_qme_action_q_episode_mean",
+        "linear_qme_td_quality",
+        "linear_qme_joint_value",
+        "linear_qme_action_q_scaled",
+    )
+}
+
 QME_FRAMEWORKS = {
     "directkl": (True, False),
     "auxmultiply": (False, True),
@@ -138,7 +152,7 @@ def check_qme():
         assert control_overrides["clean_nomask_td_auxiliary_coef"] == 1.0
         assert not control_overrides["clean_advantage_margin_auxiliary"]
 
-        for base_label, (objective, behavior) in QME.items():
+        for base_label, (objective, behavior) in MATRIX_QME.items():
             suffix = base_label[len("linear_qme_"):]
             label = "linear_{}_qme_{}".format(framework, suffix)
             flags = ALL_PROFILES[label]
@@ -163,8 +177,8 @@ def main():
     check_kl_forms()
     check_qme()
     print(
-        "Linear single-head suite passed: four scenes, KL80 forms, QME and "
-        "masked/full sampling"
+        "Linear single-head suite passed: four scenes, KL80 forms, five-QME "
+        "matrix and historical sampling/readiness profiles"
     )
 
 
