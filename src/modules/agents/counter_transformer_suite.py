@@ -557,6 +557,47 @@ ABLATION_PROFILES = {
     "hyper_cash_obs_type": {"hyper_condition": "obs_agent_type"},
     "hyper_rpg_relation": {"hyper_condition": "rpg_relation"},
 }
+
+# Matched two-framework QME matrix.  These are derived from the no-KL QME
+# definitions above so objective/readiness/behaviour settings cannot drift
+# between frameworks.  Direct-KL regularizes the active main gate; Aux-Multiply
+# instead adds an independently sampled KL80 mask to the auxiliary TD path.
+LINEAR_QME_BASE_LABELS = (
+    "linear_qme_action_q",
+    "linear_qme_action_q_episode_mean",
+    "linear_qme_td_quality",
+    "linear_qme_joint_value",
+    "linear_qme_action_q_scaled",
+    "linear_qme_dynamic_readiness",
+    "linear_qme_open_win_readiness",
+    "linear_qme_full_behavior",
+)
+ABLATION_PROFILES["linear_directkl_nomasktd_control"] = {
+    "gate": True,
+    "kl": True,
+    "branch": "linear",
+    "main_td_coef": 1.0,
+    "nomask_td_coef": 1.0,
+}
+ABLATION_PROFILES["linear_auxmultiply_nomasktd_control"] = {
+    "gate": True,
+    "aux": "kl80",
+    "branch": "linear",
+    "main_td_coef": 1.0,
+    "nomask_td_coef": 1.0,
+}
+for _base_label in LINEAR_QME_BASE_LABELS:
+    _suffix = _base_label[len("linear_qme_"):]
+    _base_profile = ABLATION_PROFILES[_base_label]
+    ABLATION_PROFILES["linear_directkl_qme_" + _suffix] = dict(
+        _base_profile,
+        kl=True,
+    )
+    ABLATION_PROFILES["linear_auxmultiply_qme_" + _suffix] = dict(
+        _base_profile,
+        aux="kl80",
+    )
+
 ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 
 # Variants whose observation-gate semantics have an explicit SMAC adapter and

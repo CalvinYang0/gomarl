@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Submit the corrected 10M Counter Linear baseline/KL/QME suite, seed 1.
+"""Submit the 10M Counter Linear two-framework QME matrix, seed 1.
 
-KL-form experiments are isolated from the no-KL NoMaskTD/QME study.  The
-script can also cancel only the obsolete active jobs from the incorrect 5M
-suite; completed runs and the valid pure-Linear/aux-multiply runs are kept.
+Eight QME mechanisms are evaluated under matched Direct-KL and Aux-Multiply
+KL80 frameworks. Each framework also has a MaskTD+NoMaskTD no-QME control.
+The script can cancel only obsolete active jobs from superseded suites;
+completed runs and valid standalone KL/baseline runs are kept.
 """
 
 import json
@@ -28,24 +29,47 @@ from ozstar_submit_relation_advantage_mixer_nine import (  # noqa: E402
 )
 
 
-EXPERIMENTS = (
-    ("linear_baseline", "paper_linear_singlehead", "16G"),
-    ("linear_bayesg_kl80_keep", "kl80_direct", "16G"),
-    ("linear_obs_gate_kl80aux_multiply", "kl80_aux_multiply", "32G"),
-    ("linear_bayesg_nomasktd_control", "nomasktd_control_nokl", "32G"),
-    ("linear_qme_action_q", "qme_action_q_masked_nokl", "32G"),
-    ("linear_qme_action_q_episode_mean", "qme_epmean_masked_nokl", "32G"),
-    ("linear_qme_td_quality", "qme_tdquality_masked_nokl", "32G"),
-    ("linear_qme_joint_value", "qme_joint_value_masked_nokl", "32G"),
-    ("linear_qme_action_q_scaled", "qme_q_scaled_masked_nokl", "32G"),
-    ("linear_qme_dynamic_readiness", "qme_dynamic_ready_masked_nokl", "32G"),
-    ("linear_qme_open_win_readiness", "qme_openwin_ready_masked_nokl", "32G"),
-    ("linear_qme_full_behavior", "qme_action_q_full_nokl", "32G"),
+QME_VARIANTS = (
+    ("action_q", "action_q_masked"),
+    ("action_q_episode_mean", "epmean_masked"),
+    ("td_quality", "tdquality_masked"),
+    ("joint_value", "joint_value_masked"),
+    ("action_q_scaled", "q_scaled_masked"),
+    ("dynamic_readiness", "dynamic_ready_masked"),
+    ("open_win_readiness", "openwin_ready_masked"),
+    ("full_behavior", "action_q_full"),
 )
+
+EXPERIMENTS = [
+    ("linear_baseline", "paper_linear_singlehead", "16G"),
+    (
+        "linear_directkl_nomasktd_control",
+        "directkl_nomasktd_control",
+        "32G",
+    ),
+    (
+        "linear_auxmultiply_nomasktd_control",
+        "auxmul_nomasktd_control",
+        "32G",
+    ),
+]
+for _profile_suffix, _run_suffix in QME_VARIANTS:
+    EXPERIMENTS.append((
+        "linear_directkl_qme_" + _profile_suffix,
+        "directkl_qme_" + _run_suffix,
+        "32G",
+    ))
+    EXPERIMENTS.append((
+        "linear_auxmultiply_qme_" + _profile_suffix,
+        "auxmul_qme_" + _run_suffix,
+        "32G",
+    ))
+EXPERIMENTS = tuple(EXPERIMENTS)
 
 OBSOLETE_PATTERN = re.compile(
     r"^(?:grf_(?:counter|pass)|smac_(?:5m6m|mmm2))_linear_kl80_direct_5m_s[123]_controlled15(?:_retry1)?$"
     r"|^grf_counter_linear_(?:kl80_nomasktd_control|qme_(?:action_q_masked|epmean_masked|tdquality_masked|joint_value_masked|q_scaled_masked|dynamic_ready_masked|openwin_ready_masked|action_q_full))_5m_s1_controlled15(?:_retry1)?$"
+    r"|^grf_counter_linear_(?:nomasktd_control_nokl|qme_.+_nokl)_10m_s1_corrected16$"
 )
 
 
@@ -53,7 +77,11 @@ def build_plans(repo):
     profiles = _load_profiles(repo)
     plans = []
     for label, short_name, memory in EXPERIMENTS:
-        name = "grf_counter_linear_{}_10m_s1_corrected16".format(short_name)
+        name = (
+            "grf_counter_linear_paper_linear_singlehead_10m_s1_corrected16"
+            if label == "linear_baseline"
+            else "grf_counter_linear_{}_10m_s1_controlled17".format(short_name)
+        )
         plan = _plan(
             repo,
             profiles,
@@ -64,7 +92,7 @@ def build_plans(repo):
             1,
             name,
             memory,
-            "counter_linear_corrected_nokl_qme_10m_s1",
+            "counter_linear_two_kl80_qme_10m_s1",
         )
         plan["exports"]["T_MAX"] = os.environ.get("T_MAX", "10050000")
         plan["sbatch_args"] = [
@@ -73,8 +101,10 @@ def build_plans(repo):
             for arg in plan["sbatch_args"]
         ]
         plans.append(plan)
-    if len(plans) != 12:
-        raise RuntimeError("Expected baseline plus exactly 11 Counter ablations")
+    if len(plans) != 19:
+        raise RuntimeError(
+            "Expected one baseline, two framework controls and 16 QME jobs"
+        )
     return plans
 
 

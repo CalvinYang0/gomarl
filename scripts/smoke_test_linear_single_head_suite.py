@@ -38,6 +38,11 @@ QME = {
     "linear_qme_full_behavior": ("action_q", "full"),
 }
 
+QME_FRAMEWORKS = {
+    "directkl": (True, False),
+    "auxmultiply": (False, True),
+}
+
 
 def check_baselines():
     for scene in SCENES:
@@ -122,6 +127,33 @@ def check_qme():
         assert logger.stats["loss_advantage_margin"][-1][1] == (
             logger.stats["loss_advantage_margin"][-1][1]
         )
+
+    for framework, (expect_direct_kl, expect_aux_kl) in QME_FRAMEWORKS.items():
+        control_label = "linear_{}_nomasktd_control".format(framework)
+        control_flags = ALL_PROFILES[control_label]
+        control_overrides = experiment_overrides(control_label)
+        assert bool(control_flags.get("kl")) == expect_direct_kl
+        assert bool(control_flags.get("aux")) == expect_aux_kl
+        assert control_overrides["clean_main_td_coef"] == 1.0
+        assert control_overrides["clean_nomask_td_auxiliary_coef"] == 1.0
+        assert not control_overrides["clean_advantage_margin_auxiliary"]
+
+        for base_label, (objective, behavior) in QME.items():
+            suffix = base_label[len("linear_qme_"):]
+            label = "linear_{}_qme_{}".format(framework, suffix)
+            flags = ALL_PROFILES[label]
+            overrides = experiment_overrides(label)
+            assert bool(flags.get("kl")) == expect_direct_kl
+            assert bool(flags.get("aux")) == expect_aux_kl
+            assert overrides["clean_advantage_objective"] == objective
+            assert overrides["clean_train_behavior_gate_mode"] == behavior
+            mac, learner, batch, logger = make_case(label)
+            assert learner.gate_regularization_active == expect_direct_kl
+            assert learner.random_drop_auxiliary_active == expect_aux_kl
+            learner.train(batch, t_env=500000, episode_num=1)
+            assert logger.stats["loss_advantage_margin"][-1][1] == (
+                logger.stats["loss_advantage_margin"][-1][1]
+            )
 
 
 def main():
