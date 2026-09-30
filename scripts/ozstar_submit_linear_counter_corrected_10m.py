@@ -56,7 +56,7 @@ OBSOLETE_PATTERN = re.compile(
     r"|^(?:grf_(?:counter|pass)|smac_(?:5m6m|mmm2))_linear_kl80_direct_5m_s[123]_controlled15(?:_retry1)?$"
     r"|^grf_counter_linear_(?:kl80_nomasktd_control|qme_(?:action_q_masked|epmean_masked|tdquality_masked|joint_value_masked|q_scaled_masked|dynamic_ready_masked|openwin_ready_masked|action_q_full))_5m_s1_controlled15(?:_retry1)?$"
     r"|^grf_counter_linear_(?:paper_linear_singlehead|nomasktd_control_nokl|qme_.+_nokl)_10m_s1_corrected16$"
-    r"|^grf_counter_linear_(?:directkl|auxmul)_(?:nomasktd_control|qme_.+)_10m_s1_controlled17$"
+    r"|^grf_counter_linear_(?:directkl|auxmul)_(?:nomasktd_control|qme_.+)_10m_s1_controlled1[78]$"
 )
 
 
@@ -64,7 +64,7 @@ def build_plans(repo):
     profiles = _load_profiles(repo)
     plans = []
     for label, short_name, memory in EXPERIMENTS:
-        name = "grf_counter_linear_{}_10m_s1_controlled18".format(short_name)
+        name = "grf_counter_linear_{}_10m_s1_controlled19".format(short_name)
         plan = _plan(
             repo,
             profiles,
@@ -125,6 +125,16 @@ def main():
             raise RuntimeError("Runtime directory is not writable: " + str(path))
 
     os.chdir(repo)
+    default_config = (repo / "src/config/default.yaml").read_text()
+    missing_worker_keys = [
+        key for key in ("env_worker_run_retries", "env_worker_run_retry_delay")
+        if not re.search(r"^{}\s*:".format(key), default_config, re.MULTILINE)
+    ]
+    if missing_worker_keys:
+        raise RuntimeError(
+            "Worker recovery settings are absent from Sacred defaults: "
+            + ", ".join(missing_worker_keys)
+        )
     subprocess.run(
         [sys.executable, "scripts/smoke_test_linear_single_head_suite.py"],
         check=True,
