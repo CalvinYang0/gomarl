@@ -2,8 +2,9 @@
 """Submit Linear single-head baselines and controlled Counter ablations.
 
 Baseline: four paper maps, seed 1, 5M steps.
-Counter: direct-vs-auxiliary KL80 and NoMaskTD-teacher QME/sampling controls,
-seed 1 by default.  No Attention-only or RPG dual-head job is constructed.
+Counter: direct-vs-auxiliary KL80 plus no-KL NoMaskTD-teacher QME/sampling
+controls, seed 1 by default. No Attention-only or RPG dual-head job is
+constructed.
 """
 
 import importlib.util
@@ -46,15 +47,15 @@ COUNTER_LABELS = (
 SHORT_NAMES = {
     "linear_bayesg_kl80_keep": "kl80_direct",
     "linear_obs_gate_kl80aux_multiply": "kl80_aux_multiply",
-    "linear_bayesg_nomasktd_control": "kl80_nomasktd_control",
-    "linear_qme_action_q": "qme_action_q_masked",
-    "linear_qme_action_q_episode_mean": "qme_epmean_masked",
-    "linear_qme_td_quality": "qme_tdquality_masked",
-    "linear_qme_joint_value": "qme_joint_value_masked",
-    "linear_qme_action_q_scaled": "qme_q_scaled_masked",
-    "linear_qme_dynamic_readiness": "qme_dynamic_ready_masked",
-    "linear_qme_open_win_readiness": "qme_openwin_ready_masked",
-    "linear_qme_full_behavior": "qme_action_q_full",
+    "linear_bayesg_nomasktd_control": "nomasktd_control_nokl",
+    "linear_qme_action_q": "qme_action_q_masked_nokl",
+    "linear_qme_action_q_episode_mean": "qme_epmean_masked_nokl",
+    "linear_qme_td_quality": "qme_tdquality_masked_nokl",
+    "linear_qme_joint_value": "qme_joint_value_masked_nokl",
+    "linear_qme_action_q_scaled": "qme_q_scaled_masked_nokl",
+    "linear_qme_dynamic_readiness": "qme_dynamic_ready_masked_nokl",
+    "linear_qme_open_win_readiness": "qme_openwin_ready_masked_nokl",
+    "linear_qme_full_behavior": "qme_action_q_full_nokl",
 }
 
 

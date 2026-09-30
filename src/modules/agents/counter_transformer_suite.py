@@ -52,51 +52,50 @@ ABLATION_PROFILES = {
     # Comparing QME variants against this profile isolates gate-only QME from
     # the additional NoMaskTD gradient received by the shared main network.
     "linear_bayesg_nomasktd_control": {
-        "gate": True, "kl": True, "branch": "linear",
+        "gate": True, "branch": "linear",
         "main_td_coef": 1.0, "nomask_td_coef": 1.0,
     },
-    # Restored-graph QME controls built ON TOP OF
-    # ``linear_bayesg_kl80_keep``. Every profile retains exactly the same
-    # MaskTD, NoMaskTD and direct Bernoulli KL(p(obs)||0.8) main-gate
-    # regularizer. NoMaskTD trains the full-observation Q teacher; its output
-    # is detached inside QME, and QME itself is routed only into the
-    # observation gate. The only changes between QME profiles are the named
-    # objective/readiness/behaviour mechanisms.
+    # No-KL QME controls. Every profile retains exactly the same MaskTD and
+    # NoMaskTD paths, but deliberately has no direct or auxiliary KL80 term.
+    # NoMaskTD trains the full-observation Q teacher; its output is detached
+    # inside QME, and QME itself is routed only into the observation gate. The
+    # only changes between QME profiles are the named objective/readiness/
+    # behaviour mechanisms.
     "linear_qme_action_q": {
-        "gate": True, "kl": True, "branch": "linear",
+        "gate": True, "branch": "linear",
         "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
     },
     "linear_qme_action_q_episode_mean": {
-        "gate": True, "kl": True, "branch": "linear",
+        "gate": True, "branch": "linear",
         "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True,
         "advantage_objective": "action_q_episode_mean",
     },
     "linear_qme_td_quality": {
-        "gate": True, "kl": True, "branch": "linear",
+        "gate": True, "branch": "linear",
         "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "td_quality",
     },
     "linear_qme_joint_value": {
-        "gate": True, "kl": True, "branch": "linear",
+        "gate": True, "branch": "linear",
         "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "joint_q",
     },
     "linear_qme_action_q_scaled": {
-        "gate": True, "kl": True, "branch": "linear",
+        "gate": True, "branch": "linear",
         "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True,
         "advantage_objective": "action_q_scaled",
     },
     "linear_qme_dynamic_readiness": {
-        "gate": True, "kl": True, "branch": "linear",
+        "gate": True, "branch": "linear",
         "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
         "advantage_dynamic_readiness": True,
     },
     "linear_qme_open_win_readiness": {
-        "gate": True, "kl": True, "branch": "linear",
+        "gate": True, "branch": "linear",
         "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
         "advantage_open_win_readiness": True,
@@ -105,7 +104,7 @@ ABLATION_PROFILES = {
         "dual_gate_test": True,
     },
     "linear_qme_full_behavior": {
-        "gate": True, "kl": True, "branch": "linear",
+        "gate": True, "branch": "linear",
         "main_td_coef": 1.0, "nomask_td_coef": 1.0,
         "advantage_margin": True, "advantage_objective": "action_q",
         "train_behavior_gate_mode": "full",

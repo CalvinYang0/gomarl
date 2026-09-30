@@ -3125,8 +3125,9 @@ class PublicTransformerRelationCapturer(nn.Module):
                 if self.dynamic_branch_gate_regularizer == "bernoulli_kl":
                     eps = 1e-6
                     probability = raw_probabilities.clamp(eps, 1.0 - eps)
-                    if getattr(self, "counter_transformer_profile", None):
-                        # Only the attention branch is used by this suite.
+                    if self.relation_encoder_style == "linear_only":
+                        probability = probability[0:1]
+                    elif self.relation_encoder_style == "attention_only":
                         probability = probability[1:2]
                     prior = probability.new_tensor(
                         self.dynamic_branch_gate_prior_keep

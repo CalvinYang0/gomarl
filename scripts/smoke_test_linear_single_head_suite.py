@@ -66,6 +66,18 @@ def check_kl_forms():
         assert direct.dynamic_branch_gate is not None
         assert direct_learner.gate_regularization_active
         assert not direct_learner.random_drop_auxiliary_active
+        direct_mac.init_hidden(direct_batch.batch_size)
+        direct_mac.set_dynamic_branch_gate_t_env(300000)
+        direct_mac.forward(direct_batch, t=0)
+        final_gate_layer = direct.dynamic_branch_gate.gate_network[-1]
+        branch_gradient = th.autograd.grad(
+            direct_mac.latest_aux_loss,
+            final_gate_layer.bias,
+            retain_graph=True,
+        )[0]
+        group_count = direct.dynamic_branch_gate.group_count
+        assert branch_gradient[:group_count].abs().sum() > 0.0
+        assert branch_gradient[group_count:].abs().sum() == 0.0
         direct_learner.train(direct_batch, t_env=300000, episode_num=1)
 
     aux_mac, aux_learner, aux_batch, aux_logger = make_case(
@@ -84,12 +96,13 @@ def check_qme():
     control = experiment_overrides("linear_bayesg_nomasktd_control")
     assert control["clean_main_td_coef"] == 1.0
     assert control["clean_nomask_td_auxiliary_coef"] == 1.0
+    assert not ALL_PROFILES["linear_bayesg_nomasktd_control"].get("kl", False)
     assert not control["clean_advantage_margin_auxiliary"]
     for label, (objective, behavior) in QME.items():
         flags = ALL_PROFILES[label]
         overrides = experiment_overrides(label)
         assert flags["branch"] == "linear"
-        assert flags["kl"] and not flags.get("aux")
+        assert not flags.get("kl", False) and not flags.get("aux")
         assert not flags.get("memory_efficient_multi_path", False)
         assert overrides["clean_main_td_coef"] == 1.0
         assert overrides["clean_nomask_td_auxiliary_coef"] == 1.0
@@ -104,6 +117,7 @@ def check_qme():
             "linear_only"
         )
         assert not learner.memory_efficient_multi_path
+        assert not learner.gate_regularization_active
         learner.train(batch, t_env=500000, episode_num=1)
         assert logger.stats["loss_advantage_margin"][-1][1] == (
             logger.stats["loss_advantage_margin"][-1][1]
