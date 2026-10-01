@@ -88,13 +88,15 @@ def route_runtime(plans, runtime_root):
         exports["EXTRA_ARGS"] += " local_results_path={}".format(
             paths["results"]
         )
-        # Nine concurrent runs otherwise create image batches quickly enough
-        # to exhaust the filesystem inode quota. This does not change scalar
-        # metric, evaluation, or learner logging cadence.
+        # Render/upload image diagnostics every 0.1M environment steps.  This
+        # does not change scalar metric, evaluation, or learner logging cadence.
+        media_interval = int(os.environ.get("MEDIA_INTERVAL", "100000"))
+        if media_interval <= 0:
+            raise ValueError("MEDIA_INTERVAL must be a positive integer")
         exports["EXTRA_ARGS"] += (
-            " wandb_media_interval=1000000"
-            " clean_train_gate_image_interval=1000000"
-        )
+            " wandb_media_interval={0}"
+            " clean_train_gate_image_interval={0}"
+        ).format(media_interval)
         plan["sbatch_args"] = [
             arg
             for arg in plan["sbatch_args"]
