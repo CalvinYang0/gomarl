@@ -37,6 +37,11 @@ THREE_SEED_GROUPS = {
     "hyperselect_paper_main_10m_3seeds",
     "paper_linear_singlehead_5m_3seeds",
     "paper_linear_kl80_direct_5m_3seeds",
+    # Seed 1 of these studies was submitted before the missing seeds were
+    # scheduled, so its group name does not say ``3seeds``.
+    "paper_linear_singlehead_5m_seed1",
+    "counter_linear_kl80_qme_controlled15_s1",
+    "counter_linear_worker_recovery_retries",
 }
 
 
@@ -49,10 +54,10 @@ def retained_run(path):
     return THREE_SEED_RUN.search(text.lower()) is not None
 
 
-def retained_group_entry(path):
+def retained_group_entry(path, retained_groups):
     return any(
         path.name == group or path.name.startswith(group + "__")
-        for group in THREE_SEED_GROUPS
+        for group in retained_groups
     )
 
 
@@ -70,9 +75,33 @@ def children(path):
         return []
 
 
+def discover_retained_groups(sacred_root):
+    """Find legacy groups containing a run that belongs to a kept study."""
+    retained = set(THREE_SEED_GROUPS)
+    for scene_dir in children(sacred_root):
+        if not scene_dir.is_dir():
+            continue
+        for group_dir in children(scene_dir):
+            if not group_dir.is_dir():
+                continue
+            for config in group_dir.glob("*/config.json"):
+                try:
+                    text = config.read_text(errors="ignore").lower()
+                except OSError:
+                    continue
+                if THREE_SEED_RUN.search(text):
+                    retained.add(group_dir.name)
+                    break
+    return retained
+
+
 def deletion_plan(runtime_root):
     targets = []
     kept = []
+
+    results_root = runtime_root / "results"
+    sacred_root = results_root / "sacred"
+    retained_groups = discover_retained_groups(sacred_root)
 
     wandb_root = runtime_root / "wandb"
     for entry in children(wandb_root):
@@ -83,20 +112,22 @@ def deletion_plan(runtime_root):
             # reproducible and are not experiment records.
             targets.append(entry)
 
-    results_root = runtime_root / "results"
     for category in ("models", "tb_logs", "battle_traces"):
         for entry in children(results_root / category):
-            (kept if retained_group_entry(entry) else targets).append(entry)
+            (
+                kept if retained_group_entry(entry, retained_groups)
+                else targets
+            ).append(entry)
 
-    sacred_root = results_root / "sacred"
     for scene_dir in children(sacred_root):
         if not scene_dir.is_dir():
             targets.append(scene_dir)
             continue
         for group_dir in children(scene_dir):
-            (kept if retained_group_entry(group_dir) else targets).append(
-                group_dir
-            )
+            (
+                kept if retained_group_entry(group_dir, retained_groups)
+                else targets
+            ).append(group_dir)
 
     logs_root = runtime_root / "ozstar_logs"
     for entry in children(logs_root):
@@ -105,7 +136,7 @@ def deletion_plan(runtime_root):
     # De-duplicate without resolving symlinks outside the runtime root.
     targets = sorted(set(targets), key=lambda item: str(item))
     kept = sorted(set(kept), key=lambda item: str(item))
-    return targets, kept
+    return targets, kept, retained_groups
 
 
 def allocated_bytes(path):
@@ -174,10 +205,13 @@ def main():
                 "Refusing cleanup while Slurm jobs are active or pending"
             )
 
-    targets, kept = deletion_plan(runtime_root)
+    targets, kept, retained_groups = deletion_plan(runtime_root)
     reclaimable = sum(allocated_bytes(path) for path in targets)
     kept_bytes = sum(allocated_bytes(path) for path in kept)
 
+    print("RETAINED GROUPS:")
+    for group in sorted(retained_groups):
+        print("GROUP " + group)
     print("KEEP {} entries ({})".format(len(kept), human_size(kept_bytes)))
     for path in kept:
         print("KEEP " + str(path))
