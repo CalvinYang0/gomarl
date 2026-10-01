@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit the 10M Counter Linear two-framework QME matrix, seed 1.
+"""Submit the 5M Counter Linear two-framework QME matrix, seed 1.
 
 Five QME objectives are evaluated under matched Direct-KL and Aux-Multiply
 KL80 frameworks. No baseline or no-QME controls are submitted.  The script can
@@ -56,7 +56,7 @@ OBSOLETE_PATTERN = re.compile(
     r"|^(?:grf_(?:counter|pass)|smac_(?:5m6m|mmm2))_linear_kl80_direct_5m_s[123]_controlled15(?:_retry1)?$"
     r"|^grf_counter_linear_(?:kl80_nomasktd_control|qme_(?:action_q_masked|epmean_masked|tdquality_masked|joint_value_masked|q_scaled_masked|dynamic_ready_masked|openwin_ready_masked|action_q_full))_5m_s1_controlled15(?:_retry1)?$"
     r"|^grf_counter_linear_(?:paper_linear_singlehead|nomasktd_control_nokl|qme_.+_nokl)_10m_s1_corrected16$"
-    r"|^grf_counter_linear_(?:directkl|auxmul)_(?:nomasktd_control|qme_.+)_10m_s1_controlled1[78]$"
+    r"|^grf_counter_linear_(?:directkl|auxmul)_(?:nomasktd_control|qme_.+)_10m_s1_controlled1[789]$"
 )
 
 
@@ -64,7 +64,7 @@ def build_plans(repo):
     profiles = _load_profiles(repo)
     plans = []
     for label, short_name, memory in EXPERIMENTS:
-        name = "grf_counter_linear_{}_10m_s1_controlled19".format(short_name)
+        name = "grf_counter_linear_{}_5m_s1_controlled20".format(short_name)
         plan = _plan(
             repo,
             profiles,
@@ -75,11 +75,11 @@ def build_plans(repo):
             1,
             name,
             memory,
-            "counter_linear_two_kl80_qme_10m_s1",
+            "counter_linear_two_kl80_qme_5m_s1",
         )
-        plan["exports"]["T_MAX"] = os.environ.get("T_MAX", "10050000")
+        plan["exports"]["T_MAX"] = os.environ.get("T_MAX", "5050000")
         plan["sbatch_args"] = [
-            "--time=" + os.environ.get("TIME", "4-00:00:00")
+            "--time=" + os.environ.get("TIME", "2-00:00:00")
             if arg.startswith("--time=") else arg
             for arg in plan["sbatch_args"]
         ]
@@ -171,13 +171,13 @@ def main():
         cancelled = cancel_obsolete_active_jobs(repo, user)
 
     manifest = paths["logs"] / (
-        "linear_counter_corrected_10m_{}_{}.json".format(
+        "linear_counter_corrected_5m_{}_{}.json".format(
             time.strftime("%Y%m%d_%H%M%S"), os.getpid()
         )
     )
     record = {
         "commit": run(["git", "rev-parse", "HEAD"]),
-        "t_max": 10050000,
+        "t_max": int(plans[0]["exports"]["T_MAX"]),
         "cancelled": cancelled,
         "plans": plans,
         "retained": retained,
