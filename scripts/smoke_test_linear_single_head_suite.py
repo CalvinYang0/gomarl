@@ -170,12 +170,43 @@ def check_qme():
             )
 
 
+def check_selected_smac_directkl_qme():
+    for scene in ("5m_vs_6m", "MMM2"):
+        for label, objective in (
+            ("linear_directkl_qme_action_q_episode_mean", "action_q_episode_mean"),
+            ("linear_directkl_qme_td_quality", "td_quality"),
+        ):
+            overrides = experiment_overrides(label, "smac")
+            assert overrides["clean_advantage_objective"] == objective
+            assert overrides["clean_nomask_td_auxiliary_coef"] == 1.0
+            assert overrides["clean_random_drop_auxiliary_coef"] == 0.0
+            mac, learner, batch, logger = make_case(label, scene)
+            capturer = mac.agent.rpg_relation_capturer
+            assert capturer.relation_encoder_style == "linear_only"
+            assert learner.gate_regularization_active
+            assert learner.advantage_margin_auxiliary_active
+            mac.init_hidden(batch.batch_size)
+            mac.set_dynamic_branch_gate_t_env(500000)
+            mac.forward(batch, t=0)
+            gate_bias = capturer.dynamic_branch_gate.gate_network[-1].bias
+            branch_gradient = th.autograd.grad(
+                mac.latest_aux_loss, gate_bias, retain_graph=True,
+            )[0]
+            group_count = capturer.dynamic_branch_gate.group_count
+            assert branch_gradient[:group_count].abs().sum() > 0
+            assert branch_gradient[group_count:].abs().sum() == 0
+            learner.train(batch, t_env=500000, episode_num=1)
+            assert th.isfinite(th.tensor(logger.stats["loss_advantage_margin"][-1][1]))
+            assert all(th.isfinite(parameter).all() for parameter in mac.parameters())
+
+
 def main():
     th.set_num_threads(1)
     th.manual_seed(41)
     check_baselines()
     check_kl_forms()
     check_qme()
+    check_selected_smac_directkl_qme()
     print(
         "Linear single-head suite passed: four scenes, KL80 forms, five-QME "
         "matrix and historical sampling/readiness profiles"

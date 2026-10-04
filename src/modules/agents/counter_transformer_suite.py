@@ -604,6 +604,8 @@ SMAC_PROFILES = (
     "baseline",
     "linear_baseline",
     "linear_bayesg_kl80_keep",
+    "linear_directkl_qme_action_q_episode_mean",
+    "linear_directkl_qme_td_quality",
     # Matched ID-conditioned hypernetwork control. It retains the same
     # Transformer policy representation and generated head as ``baseline``;
     # only the parameter-generator condition changes from observation-derived
