@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Submit five matched single-head Linear conditions, four maps, three seeds.
+"""Submit three matched single-head Linear conditions on Counter/MMM2, three seeds.
 
-All 60 runs are new 10M runs: no 5M history is reused. Run without
+All 18 runs are new 10M runs: no 5M history is reused. Run without
 SUBMIT=YES for a read-only plan summary. SUBMIT=YES performs smoke and Slurm
 preflight checks for every missing job before submitting any of them.
 """
@@ -27,16 +27,16 @@ from ozstar_submit_linear_single_head_suite import (  # noqa: E402
 from ozstar_submit_relation_advantage_mixer_nine import route_runtime  # noqa: E402
 
 
-GROUP = "linear_five_model_10m_3seeds_home2d"
+GROUP = "linear_three_model_counter_mmm2_10m_3seeds_home2d"
+SELECTED_SCENES = tuple(
+    scene for scene in SCENES if scene[0] in {"grf_counter", "smac_mmm2"}
+)
 MODELS = (
     ("linear_bayesg_kl80_keep", "directkl"),
     ("linear_obs_gate_kl80aux_multiply", "auxmul"),
-    ("linear_auxmultiply_qme_action_q_episode_mean", "auxmul_epmean"),
-    ("linear_directkl_qme_action_q_episode_mean", "directkl_epmean"),
     ("linear_baseline", "singlehead_baseline"),
 )
-QME_LABELS = {MODELS[2][0], MODELS[3][0]}
-EXPECTED_RUNS = len(SCENES) * len(MODELS) * 3
+EXPECTED_RUNS = len(SELECTED_SCENES) * len(MODELS) * 3
 MIN_HOME_FREE_GIB = 5.0
 
 
@@ -62,31 +62,22 @@ def home_quota_free_gib():
         if limit_kib <= 0:
             raise RuntimeError("/home has no readable hard quota: " + line)
         return (limit_kib - used_kib) / (1024 ** 2)
-    raise RuntimeError("Could not verify /home quota; refusing 60 offline runs: " + result.stdout)
+    raise RuntimeError("Could not verify /home quota; refusing 18 offline runs: " + result.stdout)
 
 
 def build_plans(repo):
     profiles = _load_profiles(repo)
     plans = []
-    for scene, map_name, domain, baseline_memory in SCENES:
+    for scene, map_name, domain, baseline_memory in SELECTED_SCENES:
         for label, suffix in MODELS:
             flags = profiles.ALL_PROFILES[label]
             assert flags.get("branch") == "linear"
             assert bool(flags.get("gate")) == (label != "linear_baseline")
-            assert bool(flags.get("kl")) == (
-                label.startswith("linear_directkl_qme_")
-                or label == "linear_bayesg_kl80_keep"
-            )
-            assert bool(flags.get("aux")) == (
-                label.startswith("linear_auxmultiply_qme_")
-                or label == "linear_obs_gate_kl80aux_multiply"
-            )
-            if label in QME_LABELS:
-                assert flags.get("nomask_td_coef") == 1.0
-                assert flags.get("advantage_objective") == "action_q_episode_mean"
+            assert bool(flags.get("kl")) == (label == "linear_bayesg_kl80_keep")
+            assert bool(flags.get("aux")) == (label == "linear_obs_gate_kl80aux_multiply")
             for seed in (1, 2, 3):
-                name = "{}_{}_10m_s{}_home2d".format(scene, suffix, seed)
-                memory = "32G" if label in QME_LABELS or label == "linear_obs_gate_kl80aux_multiply" else baseline_memory
+                name = "{}_{}_10m_s{}_threeway".format(scene, suffix, seed)
+                memory = "32G" if label == "linear_obs_gate_kl80aux_multiply" else baseline_memory
                 plan = _plan(repo, profiles, scene, map_name, domain, label,
                              seed, name, memory, GROUP)
                 plan["exports"]["T_MAX"] = "10050000"
@@ -150,7 +141,7 @@ def main():
     )).resolve()
     runtime_root = Path(os.environ.get(
         "RUNTIME_ROOT", "/home/kyang/gomarl-runtime/gomarl-dual-branch"
-    )).resolve()
+    ))
     plans = build_plans(repo)
     paths = guard_and_route(plans, runtime_root)
     for plan in plans:
@@ -168,7 +159,7 @@ def main():
     if free_gib < MIN_HOME_FREE_GIB:
         raise RuntimeError(
             "Only {:.2f} GiB free in /home; at least {:.1f} GiB required "
-            "before submitting 60 offline runs (not a guarantee against "
+            "before submitting 18 offline runs (not a guarantee against "
             "later quota exhaustion)".format(free_gib, MIN_HOME_FREE_GIB)
         )
 
@@ -178,15 +169,27 @@ def main():
             raise RuntimeError("Runtime directory is not writable: " + str(path))
     os.chdir(repo)
     subprocess.run([sys.executable, "scripts/smoke_test_linear_single_head_suite.py"], check=True)
-    with (paths["logs"] / ".linear_five_model_10m.lock").open("a") as lock:
+    with (paths["logs"] / ".linear_three_model_10m.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         user = run(["id", "-un"])
         names = {p["job_name"] for p in plans}
-        previous_names = {name.replace("_home2d", "_fiveway") for name in names}
+        previous_names = {
+            "{}_{}_10m_s{}_{}".format(scene, suffix, seed, variant)
+            for scene, _, _, _ in SCENES
+            for _, suffix in (
+                ("linear_bayesg_kl80_keep", "directkl"),
+                ("linear_obs_gate_kl80aux_multiply", "auxmul"),
+                ("linear_auxmultiply_qme_action_q_episode_mean", "auxmul_epmean"),
+                ("linear_directkl_qme_action_q_episode_mean", "directkl_epmean"),
+                ("linear_baseline", "singlehead_baseline"),
+            )
+            for seed in (1, 2, 3)
+            for variant in ("home2d", "fiveway")
+        }
         previous_active = active_jobs(user, repo, previous_names)
         if previous_active:
             raise RuntimeError(
-                "Earlier fiveway jobs are still active; inspect/cancel only "
+                "Earlier fiveway/home2d jobs are still active; inspect/cancel only "
                 "those jobs before starting a differently configured rerun: "
                 + str(previous_active)
             )
@@ -204,7 +207,7 @@ def main():
                 ["sbatch", "--test-only"] + plan["sbatch_args"] + [train_script],
                 env=dict(os.environ, **plan["exports"]), check=True,
             )
-        manifest = paths["logs"] / "linear_five_model_10m_{}.json".format(
+        manifest = paths["logs"] / "linear_three_model_10m_{}.json".format(
             time.strftime("%Y%m%d_%H%M%S")
         )
         record = {
