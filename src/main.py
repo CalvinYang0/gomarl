@@ -13,7 +13,7 @@ import yaml
 
 from run import REGISTRY as run_REGISTRY
 
-SETTINGS['CAPTURE_MODE'] = "fd" # set to "no" if you want to see stdout/stderr in console
+SETTINGS['CAPTURE_MODE'] = os.environ.get("GOMARL_SACRED_CAPTURE_MODE", "fd")
 logger = get_logger()
 
 ex = Experiment("pymarl")

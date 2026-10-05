@@ -200,6 +200,30 @@ def check_selected_smac_directkl_qme():
             assert all(th.isfinite(parameter).all() for parameter in mac.parameters())
 
 
+def check_selected_smac_auxmultiply():
+    for scene in ("5m_vs_6m", "MMM2"):
+        for label, qme in (
+            ("linear_obs_gate_kl80aux_multiply", False),
+            ("linear_auxmultiply_qme_action_q_episode_mean", True),
+        ):
+            overrides = experiment_overrides(label, "smac")
+            assert overrides["clean_random_drop_auxiliary_coef"] > 0.0
+            assert overrides["clean_random_drop_auxiliary_combine_mode"] == "multiply"
+            assert overrides["clean_nomask_td_auxiliary_coef"] == (1.0 if qme else 0.0)
+            mac, learner, batch, logger = make_case(label, scene)
+            capturer = mac.agent.rpg_relation_capturer
+            assert capturer.relation_encoder_style == "linear_only"
+            assert capturer.dynamic_branch_gate is not None
+            assert not learner.gate_regularization_active
+            assert learner.kl80_random_drop_auxiliary
+            learner.train(batch, t_env=500000, episode_num=1)
+            assert logger.stats["loss_random_drop_td_auxiliary"][-1][1] > 0.0
+            if qme:
+                qme_loss = logger.stats["loss_advantage_margin"][-1][1]
+                assert th.isfinite(th.tensor(qme_loss))
+            assert all(th.isfinite(parameter).all() for parameter in mac.parameters())
+
+
 def main():
     th.set_num_threads(1)
     th.manual_seed(41)
@@ -207,6 +231,7 @@ def main():
     check_kl_forms()
     check_qme()
     check_selected_smac_directkl_qme()
+    check_selected_smac_auxmultiply()
     print(
         "Linear single-head suite passed: four scenes, KL80 forms, five-QME "
         "matrix and historical sampling/readiness profiles"

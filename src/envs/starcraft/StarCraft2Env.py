@@ -233,6 +233,10 @@ class StarCraft2Env(MultiAgentEnv):
         self.heuristic_ai = heuristic_ai
         self.heuristic_rest = heuristic_rest
         self.debug = debug
+        # SMAC's per-step absl debug messages otherwise dominate long Slurm
+        # stderr logs; retain warnings/errors unless debugging is requested.
+        if not debug:
+            logging.set_verbosity(logging.WARNING)
         self.window_size = (window_size_x, window_size_y)
         self.replay_dir = replay_dir
         self.replay_prefix = replay_prefix
