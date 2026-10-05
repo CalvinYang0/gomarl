@@ -10,6 +10,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import time
@@ -38,6 +39,35 @@ MODELS = (
 )
 EXPECTED_RUNS = len(SELECTED_SCENES) * len(MODELS) * 3
 MIN_HOME_FREE_GIB = 5.0
+
+
+def validate_config_keys(repo, plans):
+    """Catch undeclared CLI overrides before submitting any training jobs."""
+    import yaml
+
+    for plan in plans:
+        exports = plan["exports"]
+        config = {}
+        for relative in (
+            "default.yaml", "envs/" + exports["ENV_CONFIG"] + ".yaml",
+            "algs/" + exports["CONFIG"] + ".yaml",
+        ):
+            with (repo / "src/config" / relative).open() as handle:
+                values = yaml.safe_load(handle)
+            for key, value in values.items():
+                if isinstance(value, dict) and isinstance(config.get(key), dict):
+                    config[key].update(value)
+                else:
+                    config[key] = value
+        for argument in shlex.split(exports["EXTRA_ARGS"]):
+            key = argument.split("=", 1)[0]
+            current = config
+            for part in key.split("."):
+                if not isinstance(current, dict) or part not in current:
+                    raise RuntimeError(
+                        "Undeclared config override {} in {}".format(key, plan["job_name"])
+                    )
+                current = current[part]
 
 
 def home_quota_free_gib():
@@ -154,6 +184,7 @@ def main():
         print("Plan only: {} jobs. Set SUBMIT=YES to validate and submit.".format(EXPECTED_RUNS))
         return
 
+    validate_config_keys(repo, plans)
     free_gib = home_quota_free_gib()
     print("/home quota free: {:.2f} GiB".format(free_gib))
     if free_gib < MIN_HOME_FREE_GIB:
