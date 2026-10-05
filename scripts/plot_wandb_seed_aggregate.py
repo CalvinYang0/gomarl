@@ -245,15 +245,15 @@ def _local_run_files(wandb_root: Path, run_name: str) -> List[Path]:
     return matches
 
 
-def fetch_local_run_curve(
-    wandb_root: Path, run_name: str, metric: str
+def fetch_local_run_curve_by_paths(
+    wandb_root: Path, paths: Sequence[Path], metric: str
 ) -> Tuple[np.ndarray, np.ndarray, str]:
-    """Read a scalar history directly from retained offline W&B records."""
+    """Read one metric from exact retained W&B files, preferring longest history."""
     from wandb.proto import wandb_internal_pb2
     from wandb.sdk.internal.datastore import DataStore
 
     candidates = []
-    for path in _local_run_files(wandb_root, run_name):
+    for path in paths:
         stat = path.stat()
         cache_key = hashlib.sha256(
             "{}\0{}\0{}\0{}".format(
@@ -320,13 +320,25 @@ def fetch_local_run_curve(
             candidates.append((float(x[-1]), x.size, x, y, path))
 
     if not candidates:
+        raise RuntimeError("No retained offline history for metric {!r}".format(metric))
+    _, _, x, y, path = max(candidates, key=lambda item: (item[0], item[1]))
+    return x, y, str(path)
+
+
+def fetch_local_run_curve(
+    wandb_root: Path, run_name: str, metric: str
+) -> Tuple[np.ndarray, np.ndarray, str]:
+    """Read a scalar history directly from retained offline W&B records."""
+    try:
+        return fetch_local_run_curve_by_paths(
+            wandb_root, _local_run_files(wandb_root, run_name), metric
+        )
+    except RuntimeError as exc:
         raise RuntimeError(
             "No retained offline history for {!r} metric {!r}".format(
                 run_name, metric
             )
-        )
-    _, _, x, y, path = max(candidates, key=lambda item: (item[0], item[1]))
-    return x, y, str(path)
+        ) from exc
 
 
 def write_csv(path: Path, grid: np.ndarray, summaries: Dict[str, Tuple[np.ndarray, ...]]) -> None:
