@@ -83,8 +83,10 @@ def _extra_args(profiles, label, domain):
         env_worker_run_retries=2,
         env_worker_run_retry_delay=2.0,
         test_nepisode=32,
-        save_model=True,
-        save_model_interval=1000000,
+        # Keep scalar and media histories, but do not write model checkpoints.
+        save_model=False,
+        save_model_at_end=False,
+        wandb_save_model=False,
         wandb_team="hjh331-sjtu",
         wandb_project="gomarl",
     )
