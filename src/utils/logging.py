@@ -19,6 +19,7 @@ class Logger:
         # compact by default: only the requested performance, loss, and gate
         # probability summaries are uploaded.
         self.wandb_minimal_logging = True
+        self.wandb_test_gate_trajectory = True
         self.media_interval = 100000
         self._media_last = {}
 
@@ -102,6 +103,9 @@ class Logger:
         self.wandb_module = wandb
         self.wandb_minimal_logging = bool(
             config.get("wandb_minimal_logging", True)
+        )
+        self.wandb_test_gate_trajectory = bool(
+            config.get("wandb_test_gate_trajectory", True)
         )
         self.media_interval = max(
             1, int(config.get("wandb_media_interval", self.media_interval))
@@ -247,8 +251,11 @@ class Logger:
             return
         # Keep this diagnostic independent from the gate-probability figure:
         # either plot should still be uploaded if the other one fails.
-        self._log_test_generated_parameter_pca(trajectory, t)
+        if trajectory.get("generated_parameter_vectors") is not None:
+            self._log_test_generated_parameter_pca(trajectory, t)
         self._log_test_mask_probability_heatmaps(trajectory, t)
+        if not self.wandb_test_gate_trajectory:
+            return
         try:
             import matplotlib.pyplot as plt
 
