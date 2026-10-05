@@ -43,6 +43,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import sys
@@ -260,7 +261,9 @@ def fetch_local_run_curve_by_paths(
                 path.resolve(), stat.st_size, stat.st_mtime_ns, metric
             ).encode("utf-8")
         ).hexdigest()
-        cache_dir = wandb_root / ".plot-curve-cache"
+        cache_dir = Path(os.environ.get(
+            "PLOT_CACHE_DIR", str(wandb_root / ".plot-curve-cache")
+        )).resolve()
         cache_path = cache_dir / (cache_key + ".npz")
         if cache_path.is_file():
             with np.load(cache_path) as cached:
