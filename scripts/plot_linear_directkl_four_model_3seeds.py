@@ -287,9 +287,11 @@ def main():
     parser.add_argument("--wandb-root", type=Path, default=Path(os.environ.get(
         "WANDB_ROOT", "/home/kyang/gomarl-runtime/gomarl-dual-branch/wandb"
     )))
+    parser.add_argument("--additional-wandb-root", type=Path, action="append",
+                        default=[])
     parser.add_argument("--output-dir", type=Path, default=Path(os.environ.get(
         "PLOT_OUTPUT_DIR",
-        "/home/kyang/gomarl-runtime/gomarl-dual-branch/figures/linear_four_model"
+        "/fred/oz501/kyang/gomarl-runtime/gomarl-dual-branch/figures/linear_four_model"
     )))
     parser.add_argument("--local-only", action="store_true")
     parser.add_argument("--no-upload", action="store_true")
@@ -301,12 +303,26 @@ def main():
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("PLOT_CACHE_DIR", str(output_dir / "curve_cache"))
     plans = build_plans(ROOT)
     wanted = {
         name for plan in plans
         for name in [plan["job_name"]] + plan["historical_candidates"]
     }
-    local = local_run_index(args.wandb_root.resolve(), wanted)
+    local: dict[str, list[Path]] = {}
+    roots = [
+        args.wandb_root,
+        Path("/fred/oz501/kyang/gomarl-runtime/gomarl-dual-branch/wandb"),
+        *args.additional_wandb_root,
+    ]
+    seen_roots = set()
+    for root in roots:
+        resolved = root.resolve()
+        if resolved in seen_roots or not resolved.is_dir():
+            continue
+        seen_roots.add(resolved)
+        for name, paths in local_run_index(resolved, wanted).items():
+            local.setdefault(name, []).extend(paths)
     print("Local indexed run names: {}".format(len(local)))
     cloud = {}
     if not args.local_only:

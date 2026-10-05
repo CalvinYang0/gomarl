@@ -198,7 +198,7 @@ def main():
         "REPO_DIR", "/home/kyang/code/gomarl-dual-branch"
     )).resolve()
     runtime_root = Path(os.environ.get(
-        "RUNTIME_ROOT", "/home/kyang/gomarl-runtime/gomarl-dual-branch"
+        "RUNTIME_ROOT", "/fred/oz501/kyang/gomarl-runtime/gomarl-dual-branch"
     )).resolve()
     plans = build_plans(repo)
     if os.environ.get("DRY_RUN") == "YES":
