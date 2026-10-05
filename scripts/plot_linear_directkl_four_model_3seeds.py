@@ -271,7 +271,14 @@ def upload_outputs(project: str, outputs: dict[str, Path], inventory: list[dict[
             slug = TITLES[scene][1]
             payload[slug + "_three_seed"] = wandb.Image(str(path))
         run.log(payload)
-        print("Uploaded {} figures to {}".format(len(outputs), run.url))
+        artifact = wandb.Artifact(GROUP + "_aggregate", type="dataset")
+        artifact.add_file(str(next(iter(outputs.values())).parent / "seed_inventory.csv"))
+        for path in outputs.values():
+            artifact.add_file(str(path.with_suffix(".csv")))
+        run.log_artifact(artifact)
+        print("Uploaded {} figures and {} CSV files to {}".format(
+            len(outputs), len(outputs) + 1, run.url
+        ))
 
 
 def main():
