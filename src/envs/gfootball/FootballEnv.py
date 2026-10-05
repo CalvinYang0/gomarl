@@ -4,6 +4,7 @@ from gfootball.env import observation_preprocessing
 from ..multiagentenv import MultiAgentEnv
 import gym
 import torch as th
+import logging
 
 
 class GoogleFootballEnv(MultiAgentEnv):
@@ -59,6 +60,11 @@ class GoogleFootballEnv(MultiAgentEnv):
             number_of_right_players_agent_controls=self.number_of_right_players_agent_controls,
             channel_dimensions=(observation_preprocessing.SMM_WIDTH, observation_preprocessing.SMM_HEIGHT))
         self.env.seed(self.seed)
+
+        # gfootball emits per-episode summaries and disabled-dump messages via
+        # absl. Mute those INFO/DEBUG lines after environment setup, retaining
+        # absl warnings/errors and the training metrics on the root logger.
+        logging.getLogger("absl").setLevel(logging.WARNING)
 
         obs_space_low = self.env.observation_space.low[0]
         obs_space_high = self.env.observation_space.high[0]
