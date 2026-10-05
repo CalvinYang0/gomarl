@@ -4,6 +4,8 @@
 All 18 runs are new 10M runs: no 5M history is reused. Run without
 SUBMIT=YES for a read-only plan summary. SUBMIT=YES performs smoke and Slurm
 preflight checks for every missing job before submitting any of them.
+RESTART_SUITE=YES cancels active jobs belonging to these exact 18 names and
+submits all 18 again after preflight; prior completed runs are not reused.
 """
 
 import fcntl
@@ -39,6 +41,21 @@ MODELS = (
 )
 EXPECTED_RUNS = len(SELECTED_SCENES) * len(MODELS) * 3
 MIN_HOME_FREE_GIB = 5.0
+
+
+def cancel_suite_jobs(user, repo, names):
+    # active_jobs validates each job's WorkDir before it can be cancelled.
+    active = active_jobs(user, repo, names)
+    if not active:
+        return {}
+    print("Cancelling current suite jobs: " + str(active), flush=True)
+    run(["scancel"] + sorted(active.values()))
+    deadline = time.monotonic() + 60.0
+    while active_jobs(user, repo, names):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Suite cancellation is still pending; no replacement jobs submitted")
+        time.sleep(2)
+    return active
 
 
 def validate_config_keys(repo, plans):
@@ -224,9 +241,10 @@ def main():
                 "those jobs before starting a differently configured rerun: "
                 + str(previous_active)
             )
-        completed = completed_jobs(user)
+        restart = os.environ.get("RESTART_SUITE") == "YES"
+        completed = {} if restart else completed_jobs(user)
         active = active_jobs(user, repo, names)
-        retained = {
+        retained = {} if restart else {
             p["job_name"]: ("active", active[p["job_name"]])
             if p["job_name"] in active else ("completed", completed[p["job_name"]])
             for p in plans if p["job_name"] in active or p["job_name"] in completed
@@ -245,6 +263,7 @@ def main():
             "commit": run(["git", "rev-parse", "HEAD"]),
             "group": GROUP, "expected_runs": EXPECTED_RUNS,
             "retained": retained, "submitted": {}, "plans": plans,
+            "restart_suite": restart, "cancelled": {},
         }
         def persist():
             with manifest.open("w") as handle:
@@ -252,6 +271,9 @@ def main():
                 handle.flush()
                 os.fsync(handle.fileno())
         persist()
+        if restart:
+            record["cancelled"] = cancel_suite_jobs(user, repo, names)
+            persist()
         print("Preflight passed; retained {}, submitting {}.".format(len(retained), len(missing)))
         for plan in missing:
             job_id = run(
