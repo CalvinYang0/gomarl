@@ -110,6 +110,44 @@ def check_kl_forms():
     aux_learner.train(aux_batch, t_env=300000, episode_num=1)
     assert aux_logger.stats["loss_random_drop_td_auxiliary"][-1][1] > 0.0
 
+    # The corrected objective has exactly one differentiable TD rollout.
+    # Warmup must still train, despite the reference/main coefficient being 0.
+    for scene in ("academy_counterattack_easy", "MMM2"):
+        for t_env in (10, 300000):
+            mac, learner, batch, logger = make_case(
+                "linear_obs_gate_kl80aux_multiply_singlepath", scene
+            )
+            assert learner.main_td_coef == 0.0
+            assert learner.random_drop_auxiliary_coef == 1.0
+            assert learner.random_drop_auxiliary_identity_warmup
+            assert learner.diagnostic_main_no_grad
+            assert not learner.gate_regularization_active
+            assert learner.nomask_td_auxiliary_coef == 0.0
+            assert not learner.advantage_margin_auxiliary_active
+            calls = []
+            original_forward = mac.forward
+
+            def recording_forward(*args, **kwargs):
+                output = original_forward(*args, **kwargs)
+                calls.append((th.is_grad_enabled(), output.requires_grad))
+                return output
+
+            mac.forward = recording_forward
+            learner.train(batch, t_env=t_env, episode_num=1)
+            assert all(not enabled and not requires_grad
+                       for enabled, requires_grad in calls[:batch.max_seq_length])
+            assert any(enabled and requires_grad
+                       for enabled, requires_grad in calls[batch.max_seq_length:])
+            assert logger.stats["weighted_loss_main_td"][-1][1] == 0.0
+            assert logger.stats["weighted_loss_random_drop_td_auxiliary"][-1][1] > 0.0
+            assert any(p.grad is not None and p.grad.abs().sum() > 0
+                       for p in mac.agent.rpg_relation_capturer.dual_linear_encoder.parameters())
+            if t_env >= 250000:
+                capturer = mac.agent.rpg_relation_capturer
+                for gate in (capturer.dynamic_branch_gate, capturer.kl80_auxiliary_gate):
+                    assert any(p.grad is not None and p.grad.abs().sum() > 0
+                               for p in gate.parameters())
+
 
 def check_qme():
     control = experiment_overrides("linear_bayesg_nomasktd_control")

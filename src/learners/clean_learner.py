@@ -513,6 +513,11 @@ class CleanLearner:
             )
         )
         self.main_td_coef = float(getattr(args, "clean_main_td_coef", 1.0))
+        self.diagnostic_main_no_grad = bool(
+            self.counter_transformer_profile.get("diagnostic_main_no_grad")
+        )
+        if self.diagnostic_main_no_grad and self.main_td_coef != 0.0:
+            raise ValueError("Single-path auxiliary control requires clean_main_td_coef=0")
         self.nomask_td_auxiliary_coef = float(
             getattr(args, "clean_nomask_td_auxiliary_coef", 0.0)
         )
@@ -3151,7 +3156,11 @@ class CleanLearner:
                     semantic_router.capture_semantic_observation_score = (
                         t in observation_probe_times
                     )
-                mac_out.append(self.mac.forward(batch, t=t))
+                # Retain the reference Q values for Double-Q action selection
+                # and TD-scale diagnostics, but never build a second training
+                # graph for the corrected auxiliary-only experiment.
+                with th.set_grad_enabled(th.is_grad_enabled() and not self.diagnostic_main_no_grad):
+                    mac_out.append(self.mac.forward(batch, t=t))
                 if self.memory_efficient_multi_path:
                     policy_hidden_cache.append(
                         self.mac.hidden_states[
@@ -3739,7 +3748,8 @@ class CleanLearner:
                         chosen_action_qvals, relation_conditions[:, :-1], target=False
                     )
                 chosen_agent_qvals = chosen_action_qvals
-                chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])
+                with th.set_grad_enabled(th.is_grad_enabled() and not self.diagnostic_main_no_grad):
+                    chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])
 
             td_error = chosen_action_qvals - targets.detach()
             td_mask = mask.expand_as(td_error)

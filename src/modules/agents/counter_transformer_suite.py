@@ -48,6 +48,14 @@ ABLATION_PROFILES = {
     "linear_obs_gate_kl80aux_multiply": {
         "gate": True, "aux": "kl80", "branch": "linear",
     },
+    # Corrected single-TD-path control. Keep the old dual-TD profile intact
+    # so historical runs cannot be mistaken for this objective. During gate
+    # warmup the auxiliary path is an identity mask, not a zero-loss update.
+    "linear_obs_gate_kl80aux_multiply_singlepath": {
+        "gate": True, "aux": "kl80", "branch": "linear",
+        "main_td_coef": 0.0, "aux_identity_warmup": True,
+        "diagnostic_main_no_grad": True,
+    },
     # Matched control for the full-observation TD teacher required by QME.
     # Comparing QME variants against this profile isolates gate-only QME from
     # the additional NoMaskTD gradient received by the shared main network.
@@ -605,6 +613,7 @@ SMAC_PROFILES = (
     "linear_baseline",
     "linear_bayesg_kl80_keep",
     "linear_obs_gate_kl80aux_multiply",
+    "linear_obs_gate_kl80aux_multiply_singlepath",
     "linear_directkl_qme_action_q_episode_mean",
     "linear_auxmultiply_qme_action_q_episode_mean",
     "linear_directkl_qme_td_quality",

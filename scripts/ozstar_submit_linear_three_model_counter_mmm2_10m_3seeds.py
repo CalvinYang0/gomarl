@@ -36,7 +36,7 @@ SELECTED_SCENES = tuple(
 )
 MODELS = (
     ("linear_bayesg_kl80_keep", "directkl"),
-    ("linear_obs_gate_kl80aux_multiply", "auxmul"),
+    ("linear_obs_gate_kl80aux_multiply_singlepath", "auxmul_singlepath"),
     ("linear_baseline", "singlehead_baseline"),
 )
 EXPECTED_RUNS = len(SELECTED_SCENES) * len(MODELS) * 3
@@ -121,10 +121,14 @@ def build_plans(repo):
             assert flags.get("branch") == "linear"
             assert bool(flags.get("gate")) == (label != "linear_baseline")
             assert bool(flags.get("kl")) == (label == "linear_bayesg_kl80_keep")
-            assert bool(flags.get("aux")) == (label == "linear_obs_gate_kl80aux_multiply")
+            assert bool(flags.get("aux")) == (label == "linear_obs_gate_kl80aux_multiply_singlepath")
+            if flags.get("aux"):
+                assert flags["main_td_coef"] == 0.0
+                assert flags["aux_identity_warmup"]
+                assert flags["diagnostic_main_no_grad"]
             for seed in (1, 2, 3):
                 name = "{}_{}_10m_s{}_threeway".format(scene, suffix, seed)
-                memory = "32G" if label == "linear_obs_gate_kl80aux_multiply" else baseline_memory
+                memory = "32G" if flags.get("aux") else baseline_memory
                 plan = _plan(repo, profiles, scene, map_name, domain, label,
                              seed, name, memory, GROUP)
                 plan["exports"]["T_MAX"] = "10050000"
@@ -190,6 +194,12 @@ def main():
         "RUNTIME_ROOT", "/home/kyang/gomarl-runtime/gomarl-dual-branch"
     ))
     plans = build_plans(repo)
+    replace_auxmul = os.environ.get("REPLACE_AUXMUL") == "YES"
+    if replace_auxmul:
+        if os.environ.get("RESTART_SUITE") == "YES":
+            raise RuntimeError("Do not combine REPLACE_AUXMUL with RESTART_SUITE")
+        plans = [p for p in plans if p["label"] == "linear_obs_gate_kl80aux_multiply_singlepath"]
+        assert len(plans) == 6
     paths = guard_and_route(plans, runtime_root)
     for plan in plans:
         print("{} {} {} {} {}".format(
@@ -198,7 +208,7 @@ def main():
             plan["memory"], paths["logs"]
         ))
     if os.environ.get("SUBMIT") != "YES":
-        print("Plan only: {} jobs. Set SUBMIT=YES to validate and submit.".format(EXPECTED_RUNS))
+        print("Plan only: {} jobs. Set SUBMIT=YES to validate and submit.".format(len(plans)))
         return
 
     validate_config_keys(repo, plans)
@@ -207,8 +217,8 @@ def main():
     if free_gib < MIN_HOME_FREE_GIB:
         raise RuntimeError(
             "Only {:.2f} GiB free in /home; at least {:.1f} GiB required "
-            "before submitting 18 offline runs (not a guarantee against "
-            "later quota exhaustion)".format(free_gib, MIN_HOME_FREE_GIB)
+            "before submitting {} offline runs (not a guarantee against "
+            "later quota exhaustion)".format(free_gib, MIN_HOME_FREE_GIB, len(plans))
         )
 
     for path in paths.values():
@@ -234,7 +244,7 @@ def main():
             for seed in (1, 2, 3)
             for variant in ("home2d", "fiveway")
         }
-        previous_active = active_jobs(user, repo, previous_names)
+        previous_active = {} if replace_auxmul else active_jobs(user, repo, previous_names)
         if previous_active:
             raise RuntimeError(
                 "Earlier fiveway/home2d jobs are still active; inspect/cancel only "
@@ -261,9 +271,9 @@ def main():
         )
         record = {
             "commit": run(["git", "rev-parse", "HEAD"]),
-            "group": GROUP, "expected_runs": EXPECTED_RUNS,
+            "group": GROUP, "expected_runs": len(plans),
             "retained": retained, "submitted": {}, "plans": plans,
-            "restart_suite": restart, "cancelled": {},
+            "restart_suite": restart, "replace_auxmul": replace_auxmul, "cancelled": {},
         }
         def persist():
             with manifest.open("w") as handle:
@@ -273,6 +283,13 @@ def main():
         persist()
         if restart:
             record["cancelled"] = cancel_suite_jobs(user, repo, names)
+            persist()
+        if replace_auxmul:
+            old_auxmul_names = {
+                "{}_auxmul_10m_s{}_threeway".format(scene, seed)
+                for scene, _, _, _ in SELECTED_SCENES for seed in (1, 2, 3)
+            }
+            record["cancelled"] = cancel_suite_jobs(user, repo, old_auxmul_names)
             persist()
         print("Preflight passed; retained {}, submitting {}.".format(len(retained), len(missing)))
         for plan in missing:

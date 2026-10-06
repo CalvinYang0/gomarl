@@ -33,7 +33,7 @@ SCENES = {
 LABELS = {
     "linear_baseline": ("Single-head Linear (no gate)", "#1f77b4"),
     "linear_bayesg_kl80_keep": ("Linear + direct KL80", "#ff7f0e"),
-    "linear_obs_gate_kl80aux_multiply": ("Linear + auxiliary KL80 multiply", "#9467bd"),
+    "linear_obs_gate_kl80aux_multiply_singlepath": ("Linear + auxiliary KL80 multiply (single TD)", "#9467bd"),
 }
 FIELDS = (
     "scene", "model", "seed", "run_name", "run_id", "source",
