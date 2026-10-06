@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import csv
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -214,8 +213,10 @@ def render(scene, entries, output_dir, plotter, window):
 def upload(project, output_dir, outputs, inventory, window):
     import wandb
     entity, project_name = project.split("/", 1)
+    # Deleted W&B run IDs cannot be reused. Each upload is a new snapshot;
+    # the stable group/name still associates snapshots with this experiment.
     with wandb.init(entity=entity, project=project_name,
-                    id=hashlib.sha1((GROUP + "_plots").encode()).hexdigest()[:8], resume="allow",
+                    id=wandb.util.generate_id(), resume="never",
                     name=GROUP + "_figures", group=GROUP, job_type="analysis", mode="online",
                     dir=str(output_dir), config={"target_steps": TARGET_STEPS, "mean_window": window,
                                                 "selection": "latest attempt per seed", "seeds": [1, 2, 3]}) as run:
