@@ -8,6 +8,7 @@ import torch as th
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from modules.mixers.qmix import QMixer
+from modules.mixers.vdn import VDNMixer
 from utils.value_diagnostics import ValueDiagnosticSummary, collect_value_diagnostics, episode_value_samples
 from utils.logging import Logger
 
@@ -48,6 +49,10 @@ def main():
     assert mean('episode_discounted_return') == 3
     assert mean('q_mc_bias') == 0 and mean('q_mc_abs_error') == 0
     assert mean('naturally_terminal_episode') == .5
+    vdn_summary = ValueDiagnosticSummary()
+    episode_value_samples(th.ones(2, 3, 2, 2), VDNMixer(), batch, .5, vdn_summary)
+    assert vdn_summary.moments == summary.moments
+    assert 'mixer_w1' not in vdn_summary.moments
     # Inserting a dead agent must only change its utility count, not Q_tot.
     batch['avail_actions'][0, 0, 1, 1] = 0
     masked = ValueDiagnosticSummary()
