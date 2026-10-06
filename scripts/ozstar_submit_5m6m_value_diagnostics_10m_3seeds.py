@@ -14,7 +14,7 @@ from ozstar_submit_linear_single_head_suite import _extra_args, _load_profiles, 
 GROUP = "5m6m_obslinear_id_value_diagnostics_10m_3seeds"
 
 
-def build_plans(repo):
+def build_plans(repo, scene_key="smac_5m6m", map_name="5m_vs_6m", group=GROUP):
     profiles = _load_profiles(repo)
     plans = []
     for label, suffix, memory in (
@@ -25,11 +25,11 @@ def build_plans(repo):
         if any(flags.get(k) for k in ("gate", "kl", "aux", "advantage_margin")):
             raise RuntimeError("This suite must contain ungated main-TD-only baselines")
         for seed in (1, 2, 3):
-            name = "smac_5m6m_{}_10m_s{}_valuediag".format(suffix, seed)
+            name = "{}_{}_10m_s{}_valuediag".format(scene_key, suffix, seed)
             # Reuse matched rollout/optimization settings, then replace the
             # architecture/profile for the historical ID-conditioned model.
-            plan = _plan(repo, profiles, "smac_5m6m", "5m_vs_6m", "smac",
-                         "linear_baseline", seed, name, memory, GROUP)
+            plan = _plan(repo, profiles, scene_key, map_name, "smac",
+                         "linear_baseline", seed, name, memory, group)
             plan["label"] = label
             exports = plan["exports"]
             exports["MODEL_TYPE"] = profiles.model_type_for(label, "smac")
