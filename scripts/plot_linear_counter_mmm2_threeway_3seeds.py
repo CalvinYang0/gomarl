@@ -42,6 +42,16 @@ FIELDS = (
 TARGET_STEPS = 10000000
 
 
+def inventory_table_data(inventory):
+    """Keep missing numeric cells nullable, never string-valued, for W&B."""
+    numeric_fields = {"seed", "points", "start_step", "end_step"}
+    return [
+        [None if field in numeric_fields and row.get(field) in ("", None)
+         else row.get(field) for field in FIELDS]
+        for row in inventory
+    ]
+
+
 def timestamp(value):
     if not value:
         return 0.0
@@ -221,7 +231,7 @@ def upload(project, output_dir, outputs, inventory, window):
                     dir=str(output_dir), config={"target_steps": TARGET_STEPS, "mean_window": window,
                                                 "selection": "latest attempt per seed", "seeds": [1, 2, 3]}) as run:
         payload = {"seed_inventory": wandb.Table(columns=list(FIELDS),
-                    data=[[row[field] for field in FIELDS] for row in inventory])}
+                    data=inventory_table_data(inventory))}
         for scene, paths in outputs.items():
             payload[scene + "_three_seed"] = wandb.Image(str(paths[0]))
             payload[scene + "_individual_seeds"] = wandb.Image(str(paths[-1]))
@@ -264,7 +274,8 @@ def main():
                                              sacred, wandb_root, plotter)
         row = dict.fromkeys(FIELDS, "")
         row.update(scene=scene, model=model, seed=seed, run_name=plan["job_name"],
-                   points=0, coverage="missing", note=note, **details)
+                   points=0, start_step=None, end_step=None,
+                   coverage="missing", note=note, **details)
         if curve is not None:
             x, y = curve
             entries[scene][model].append((seed, curve))
