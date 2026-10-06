@@ -66,6 +66,8 @@ battle_trace_similarity_sample_size: 256 # Max agent-time samples for similarity
 wandb_test_trajectory_video: False
 wandb_test_gate_trajectory: True # Suites can disable the test gate line figure
 wandb_test_parameter_pca: True
+test_value_diagnostics: False # Scalar Q/mixer/Monte Carlo diagnostics; no training loss changes
+test_value_diagnostics_interval: 100000
 
 # --- RL hyperparameters ---
 gamma: 0.99

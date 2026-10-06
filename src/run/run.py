@@ -9,6 +9,7 @@ from types import SimpleNamespace as SN
 from utils.logging import Logger
 from utils.battle_trace import save_battle_trace, render_battle_trace
 from utils.timehelper import time_left, time_str
+from utils.value_diagnostics import ValueDiagnosticSummary, collect_value_diagnostics
 from os.path import dirname, abspath
 
 from learners import REGISTRY as le_REGISTRY
@@ -317,6 +318,16 @@ def run_sequential(args, logger):
     # start training
     episode = 0
     last_test_T = -args.test_interval - 1
+    last_value_diagnostics_T = -int(getattr(args, "test_value_diagnostics_interval", 100000))
+    if getattr(args, "test_value_diagnostics", False):
+        if int(args.test_value_diagnostics_interval) <= 0:
+            raise ValueError("test_value_diagnostics_interval must be positive")
+        if args.action_selector != "epsilon_greedy":
+            raise ValueError("Value diagnostics currently require epsilon_greedy (zero exploration in tests)")
+        if float(getattr(args, "test_noise", 0.0)) != 0.0:
+            raise ValueError("Value calibration requires test_noise=0")
+        if getattr(learner, "mixer", None) is None or getattr(learner, "relation_mixer_gate", None) is not None:
+            raise ValueError("Value diagnostics currently support ungated QMIX/VDN baselines")
     last_log_T = 0
     model_save_time = 0
     last_battle_trace_T = 0
@@ -417,16 +428,25 @@ def run_sequential(args, logger):
                 trace_prefix = "{}_{}_t{}".format(args.name, map_name, runner.t_env)
                 logger.console_logger.info("Collecting battle trace at t_env={}".format(runner.t_env))
 
+            value_summary = None
+            if (getattr(args, "test_value_diagnostics", False)
+                    and runner.t_env - last_value_diagnostics_T >= args.test_value_diagnostics_interval):
+                value_summary = ValueDiagnosticSummary()
             for test_run_idx in range(n_test_runs):
                 if should_trace and test_run_idx == 0:
                     runner.request_battle_trace(prefix=trace_prefix, t_env=runner.t_env)
-                runner.run(test_mode=True)
+                test_batch = runner.run(test_mode=True)
+                if value_summary is not None:
+                    collect_value_diagnostics(mac, learner.mixer, test_batch, args.gamma, value_summary)
                 if should_trace and test_run_idx == 0:
                     _write_battle_trace_outputs(args, logger, runner.pop_battle_trace())
                     last_battle_trace_T = runner.t_env
                     if save_one_test_video:
                         test_video_written = True
 
+            if value_summary is not None:
+                value_summary.log(logger, runner.t_env)
+                last_value_diagnostics_T = runner.t_env
             _run_force_open_test(args, runner, n_test_runs, learner=learner)
 
         if args.save_model and (runner.t_env - model_save_time >= args.save_model_interval or model_save_time == 0):
