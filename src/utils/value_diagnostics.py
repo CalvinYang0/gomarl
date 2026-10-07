@@ -9,6 +9,12 @@ import random
 import numpy as np
 import torch as th
 
+CORE_VALUE_METRICS = frozenset("test_value/" + key for key in (
+    "q_tot_mean", "q_tot_std", "agent_q_mean", "q_mc_bias_mean",
+    "q_mc_abs_error_mean", "mixer_dqtot_dqi_mean", "mixer_w1_mean",
+    "mixer_w_final_mean", "naturally_terminal_episode_mean", "q_mc_bias_count",
+))
+
 
 class ValueDiagnosticSummary:
     def __init__(self):
@@ -31,10 +37,11 @@ class ValueDiagnosticSummary:
         for name, (count, total, squared, max_abs) in self.moments.items():
             mean = total / count
             prefix = "test_value/" + name
-            logger.log_stat(prefix + "_mean", mean, t_env)
-            logger.log_stat(prefix + "_std", max(0., squared / count - mean ** 2) ** .5, t_env)
-            logger.log_stat(prefix + "_max_abs", max_abs, t_env)
-            logger.log_stat(prefix + "_count", count, t_env)
+            values = {"_mean": mean, "_std": max(0., squared / count - mean ** 2) ** .5,
+                      "_count": count}
+            for suffix, value in values.items():
+                if prefix + suffix in CORE_VALUE_METRICS:
+                    logger.log_stat(prefix + suffix, value, t_env)
 
 
 def episode_value_samples(agent_q, mixer, batch, gamma, summary):
