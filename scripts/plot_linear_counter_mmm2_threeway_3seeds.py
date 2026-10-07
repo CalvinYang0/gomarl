@@ -40,6 +40,8 @@ FIELDS = (
     "older_wandb_run_ids", "note",
 )
 TARGET_STEPS = 10000000
+DEFAULT_OUTPUT_SUBDIR = "linear_threeway_10m"
+RESULTS_TITLE = "current threeway results"
 
 
 def inventory_table_data(inventory):
@@ -171,7 +173,7 @@ def render(scene, entries, output_dir, plotter, window):
                               np.clip((center + radius)[keep] * 100, 0, 100),
                               color=color, alpha=0.18, linewidth=0)
         rows.extend(zip([model] * grid.size, grid, center, radius, [len(seeds)] * grid.size))
-    axis.set(title=title + " — current threeway results", xlabel="Environment Steps",
+    axis.set(title=title + " — " + RESULTS_TITLE, xlabel="Environment Steps",
              ylabel="Test Win Rate (%)", xlim=(0, TARGET_STEPS), ylim=(0, 100))
     if rows:
         axis.set_xlim(0, min(TARGET_STEPS, max(100000, np.ceil(max(row[1] for row in rows) / 100000) * 100000)))
@@ -197,10 +199,15 @@ def render(scene, entries, output_dir, plotter, window):
 
     # Show individual seeds separately so early truncation and seed variance
     # are visible instead of disappearing behind the shared-interval average.
-    fig, axes = plt.subplots(1, 3, figsize=(13.8, 4.2), constrained_layout=True, sharey=True)
+    panel_models = [(model, labels) for model, labels in LABELS.items() if entries[model]]
+    if not panel_models:
+        panel_models = list(LABELS.items())
+    fig, axes = plt.subplots(1, len(panel_models), figsize=(4.6 * len(panel_models), 4.2),
+                             constrained_layout=True, sharey=True, squeeze=False)
+    axes = axes[0]
     seed_ends = [x[-1] for seeds in entries.values() for _, (x, _) in seeds]
     seed_horizon = min(TARGET_STEPS, max(100000, np.ceil(max(seed_ends, default=TARGET_STEPS) / 100000) * 100000))
-    for axis, (model, (label, _)) in zip(axes, LABELS.items()):
+    for axis, (model, (label, _)) in zip(axes, panel_models):
         for seed, (x, y) in entries[model]:
             axis.plot(x, y * 100, alpha=0.2, linewidth=0.6, color="C" + str(seed - 1))
             axis.plot(x, plotter.centered_rolling_mean(y, window) * 100,
@@ -255,7 +262,7 @@ def main():
     args = parser.parse_args()
     if args.mean_window < 1 or "/" not in args.project:
         parser.error("positive --mean-window and ENTITY/PROJECT are required")
-    output_dir = args.output_dir or args.runtime_root / "figures/linear_threeway_10m"
+    output_dir = args.output_dir or args.runtime_root / "figures" / DEFAULT_OUTPUT_SUBDIR
     output_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("PLOT_CACHE_DIR", str(output_dir / "curve_cache"))
     os.environ.setdefault("MPLCONFIGDIR", str(output_dir / "matplotlib"))

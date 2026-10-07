@@ -36,3 +36,15 @@ Submission checks real Corridor dimensions with synthetic padded episodes for
 both fixed-head learners and diagnostic paths. No StarCraft launch is performed
 by the smoke test; actual training remains a cluster-side verification.
 New runs use separate names/group and do not cancel or duplicate obs/ID jobs.
+
+## Baseline figures
+
+Run `scripts/plot_corridor_5m6m_baselines_3seeds.py` to plot/upload the exact
+18 value-diagnostic run names: six 5m6m obs/ID runs and twelve Corridor
+obs/ID/VDN/QMIX runs. It does not submit training jobs or reuse historical
+5M data. Default output is `figures/corridor_5m6m_baselines_10m` under the
+runtime root. Each map has mean/sample-std and individual-seed figures,
+raw curves and seed inventory CSVs. Latest attempts are selected; aggregation
+uses only available seeds and their shared interval with explicit seed counts.
+An empty map produces an empty-data figure/inventory, not invented curves.
+Each W&B upload uses a fresh run ID to avoid deleted-run-ID failures.
