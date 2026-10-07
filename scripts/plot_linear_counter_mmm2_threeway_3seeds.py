@@ -262,12 +262,15 @@ def main():
     args = parser.parse_args()
     if args.mean_window < 1 or "/" not in args.project:
         parser.error("positive --mean-window and ENTITY/PROJECT are required")
+    plans = build_plans(ROOT)
+    if not plans:
+        print("No selected running jobs; skipping data reads, plotting and upload.")
+        return
     output_dir = args.output_dir or args.runtime_root / "figures" / DEFAULT_OUTPUT_SUBDIR
     output_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("PLOT_CACHE_DIR", str(output_dir / "curve_cache"))
     os.environ.setdefault("MPLCONFIGDIR", str(output_dir / "matplotlib"))
     import plot_wandb_seed_aggregate as plotter
-    plans = build_plans(ROOT)
     wanted = {p["job_name"] for p in plans}
     wandb_root = args.runtime_root / "wandb"
     local = local_run_index(wandb_root, wanted) if wandb_root.is_dir() else {}
