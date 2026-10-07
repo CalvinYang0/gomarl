@@ -48,3 +48,11 @@ raw curves and seed inventory CSVs. Latest attempts are selected; aggregation
 uses only available seeds and their shared interval with explicit seed counts.
 An empty map produces an empty-data figure/inventory, not invented curves.
 Each W&B upload uses a fresh run ID to avoid deleted-run-ID failures.
+
+The plotter also recovers `smac_5m6m_paper_vdn_5m_s{1,2,3}` and
+`smac_5m6m_paper_qmix_5m_s{1,2,3}` from local/Sacred records or the W&B cloud.
+They have separate historical-5M labels; they are not new 10M replicas or
+proof of matched training configuration. No extrapolation beyond their data.
+Downloaded full scalar histories (not sampled `history()` results) are exported
+to `seed_curves.csv` with source run IDs; inventory records cloud provenance
+and coverage against the historical 5M budget. No media/checkpoints are restored.

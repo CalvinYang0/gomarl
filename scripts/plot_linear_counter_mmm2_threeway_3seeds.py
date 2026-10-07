@@ -279,6 +279,8 @@ def main():
         scene, model, seed = plan["scene"], plan["label"], plan["seed"]
         curve, details, note = select_latest(plan, SCENES[scene][1], local, cloud,
                                              sacred, wandb_root, plotter)
+        if plan.get("inventory_note"):
+            note = "; ".join(filter(None, (plan["inventory_note"], note)))
         row = dict.fromkeys(FIELDS, "")
         row.update(scene=scene, model=model, seed=seed, run_name=plan["job_name"],
                    points=0, start_step=None, end_step=None,
@@ -287,7 +289,7 @@ def main():
             x, y = curve
             entries[scene][model].append((seed, curve))
             row.update(points=int(x.size), start_step=float(x[0]), end_step=float(x[-1]),
-                       coverage="complete" if x[-1] >= TARGET_STEPS else "partial")
+                       coverage="complete" if x[-1] >= plan.get("target_steps", TARGET_STEPS) else "partial")
             raw_rows.extend((scene, model, seed, row["run_id"], step, value) for step, value in zip(x, y))
         inventory.append(row)
         print("{}: {} points={} end={} {}".format(plan["job_name"], row["coverage"],
