@@ -32,6 +32,9 @@ ABLATION_PROFILES = {
     # One condition branch and one generated Q head.  ``linear_only`` is used
     # on both GRF and SMAC; no attention branch or RPG dual-head path exists.
     "linear_baseline": {"branch": "linear"},
+    # Matched to linear_baseline: keep the GRU policy input, replace only
+    # the linear observation condition with a linear one-hot-ID condition.
+    "linear_id_baseline": {"branch": "linear", "hyper_condition": "agent_id_linear"},
     "obs_gate_kl80aux": {"gate": True, "aux": "kl80"},
     # Strict single-branch counterparts of the historical dual-branch
     # ``bayesg_kl80_keep`` run.  Both use one masked TD path and a Bernoulli
@@ -611,6 +614,7 @@ ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 SMAC_PROFILES = (
     "baseline",
     "linear_baseline",
+    "linear_id_baseline",
     "linear_bayesg_kl80_keep",
     "linear_obs_gate_kl80aux_multiply",
     "linear_obs_gate_kl80aux_multiply_singlepath",

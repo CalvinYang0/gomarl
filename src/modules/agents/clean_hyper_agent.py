@@ -10079,13 +10079,15 @@ class CleanHyperAgent(nn.Module):
         self.counter_cash_condition_encoder = None
         self.counter_rpg_condition_encoder = None
         self.counter_transformer_policy_projection = None
-        if source is not None:
+        if source is not None and source != "agent_id_linear":
             # The Transformer representation is always the generated head's
             # data input. Only the parameter-generating condition differs.
             self.counter_transformer_policy_projection = nn.Linear(
                 self.cond_dim, self.hidden_dim
             )
-        if source == "agent_id":
+        if source == "agent_id_linear":
+            self.counter_id_condition_encoder = nn.Linear(self.n_agents, self.cond_dim)
+        elif source == "agent_id":
             self.counter_id_condition_encoder = nn.Sequential(
                 nn.Linear(self.n_agents, self.cond_dim),
                 nn.ReLU(inplace=True),
@@ -10127,7 +10129,7 @@ class CleanHyperAgent(nn.Module):
     def _counter_hyper_condition(self, hidden, context):
         source = self.counter_hyper_condition_source
         batch_size = hidden.size(0)
-        if source == "agent_id":
+        if source in {"agent_id", "agent_id_linear"}:
             ids = th.eye(self.n_agents, device=hidden.device, dtype=hidden.dtype)
             return self.counter_id_condition_encoder(ids.unsqueeze(0).expand(batch_size, -1, -1))
         if source == "obs_agent_type":
@@ -12723,9 +12725,10 @@ class CleanHyperAgent(nn.Module):
                 )
                 transformer_policy_hidden = hidden
                 if suite_condition_source is not None:
-                    transformer_policy_hidden = self.counter_transformer_policy_projection(
-                        relation_condition
-                    )
+                    if self.counter_transformer_policy_projection is not None:
+                        transformer_policy_hidden = self.counter_transformer_policy_projection(
+                            relation_condition
+                        )
                     relation_condition = self._counter_hyper_condition(hidden, context)
                 capturer_aux_loss = getattr(
                     self.rpg_relation_capturer, "latest_aux_loss", None
