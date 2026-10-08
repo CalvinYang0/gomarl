@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Stop only the six exact historical-attention ID names on the two maps."""
+"""Stop exact historical-attention ID names on the four user-selected maps.
+
+The filename is retained for compatibility with the previous server command.
+"""
 import argparse
 import json
 import os
@@ -10,8 +13,9 @@ import time
 
 from ozstar_submit_counter_transformer_nine import run
 
+SCENES = ("smac_5m6m", "smac_8m9m", "smac_3svs5z", "smac_6h8z")
 NAMES = {"{}_id_baseline_10m_s{}_valuediag".format(scene, seed)
-         for scene in ("smac_5m6m", "smac_8m9m") for seed in (1, 2, 3)}
+         for scene in SCENES for seed in (1, 2, 3)}
 
 
 def resolve_jobs(user, repo):
@@ -41,7 +45,7 @@ def main():
     for job in targets:
         print("{} {} {}".format(job["job_id"], job["name"], job["state"]), flush=True)
     if not targets:
-        print("No active historical ID jobs on 5m6m/8m9m; nothing to cancel.")
+        print("No active historical ID jobs on the four selected maps; nothing to cancel.")
         return
     if not args.execute:
         print("Plan only; --execute cancels exactly the jobs listed above.")
