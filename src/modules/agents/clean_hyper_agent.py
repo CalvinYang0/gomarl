@@ -8211,6 +8211,7 @@ class SMACSingleTransformerCapturer(GRFPublicPrivateBiasTransformerCapturer):
 
     def __init__(self, observation_layout, **kwargs):
         self.observation_layout = dict(observation_layout)
+        self.cyclic_self_first = bool(kwargs.pop("cyclic_self_first", False))
         layout = self.observation_layout
         obs_dim = (layout["move_dim"] + layout["own_dim"]
                    + layout["n_enemies"] * layout["enemy_feat_dim"]
@@ -8229,10 +8230,11 @@ class SMACSingleTransformerCapturer(GRFPublicPrivateBiasTransformerCapturer):
 
     def _build_semantic_slot_layout(self):
         layout = self.observation_layout
-        # Exactly the simulator's flattened order: move, enemies, allies, own.
+        # Match the exact flat order consumed by the condition encoder.
         names = ["self_move_{}".format(i) for i in range(layout["move_dim"])]
         fields = ["move"] * len(names)
-        for side in ("enemy", "ally"):
+
+        def add_entities(side):
             attributes = ["visible_or_attackable", "distance", "relative_x", "relative_y"]
             if layout["obs_all_health"]:
                 attributes += ["health"]
@@ -8248,28 +8250,76 @@ class SMACSingleTransformerCapturer(GRFPublicPrivateBiasTransformerCapturer):
             for entity in range(count):
                 names.extend("{}_{}_{}".format(side, entity, attr) for attr in attributes)
                 fields.extend(attributes)
-        own = []
-        if layout["obs_own_health"]:
-            own += ["health"]
-            if layout["shield_bits_ally"]:
-                own += ["shield"]
-        own += ["unit_type_{}".format(i) for i in range(layout["unit_type_bits"])]
-        if layout["obs_timestep_number"]:
-            own += ["timestep"]
-        if len(own) != layout["own_dim"]:
-            raise ValueError("SMAC own feature layout mismatch")
-        names.extend("self_" + attr for attr in own)
-        fields.extend(own)
+
+        def add_own():
+            own = []
+            if layout["obs_own_health"]:
+                own += ["health"]
+                if layout["shield_bits_ally"]:
+                    own += ["shield"]
+            own += ["unit_type_{}".format(i) for i in range(layout["unit_type_bits"])]
+            if layout["obs_timestep_number"]:
+                own += ["timestep"]
+            if len(own) != layout["own_dim"]:
+                raise ValueError("SMAC own feature layout mismatch")
+            names.extend("self_" + attr for attr in own)
+            fields.extend(own)
+
+        add_entities("enemy")
+        if self.cyclic_self_first:
+            add_own()
+            add_entities("ally")
+        else:
+            add_entities("ally")
+            add_own()
         if len(names) != self.expected_obs_dim:
             raise ValueError("SMAC observation size mismatch")
         return tuple(names), tuple(fields), th.ones(len(names))
 
+    def canonicalize_cyclic_self_first(self, obs):
+        """Move self features before ally slots and order allies cyclically.
+
+        SMAC exposes ally slots in increasing absolute agent-id order with the
+        observing agent omitted. We reorder to (i+1, ..., i-1) modulo N. The
+        enemy and movement blocks remain unchanged. ``obs`` is [..., N, D].
+        """
+        if not self.cyclic_self_first:
+            return obs
+        layout = self.observation_layout
+        if obs.shape[-2:] != (self.n_agents, self.expected_obs_dim):
+            raise ValueError("Cyclic SMAC observation has incompatible shape: " + str(obs.shape))
+        move_end = layout["move_dim"]
+        enemy_end = move_end + layout["n_enemies"] * layout["enemy_feat_dim"]
+        ally_end = enemy_end + layout["n_allies"] * layout["ally_feat_dim"]
+        move = obs[..., :move_end]
+        enemies = obs[..., move_end:enemy_end]
+        ally_flat = obs[..., enemy_end:ally_end]
+        own = obs[..., ally_end:]
+        allies = ally_flat.reshape(*obs.shape[:-1], layout["n_allies"], layout["ally_feat_dim"])
+        indices = []
+        for agent_id in range(self.n_agents):
+            # Existing ally slots correspond to absolute IDs excluding self.
+            roster = [j for j in range(self.n_agents) if j != agent_id]
+            desired = [(agent_id + offset) % self.n_agents for offset in range(1, self.n_agents)]
+            indices.append([roster.index(j) for j in desired])
+        gather_index = th.tensor(indices, device=obs.device, dtype=th.long)
+        gather_index = gather_index.view(*([1] * (allies.dim() - 3)), self.n_agents,
+                                         layout["n_allies"], 1)
+        gather_index = gather_index.expand_as(allies)
+        allies = th.gather(allies, dim=-2, index=gather_index)
+        return th.cat([move, enemies, own, allies.flatten(start_dim=-2)], dim=-1)
+
     def _split_smac_obs(self, obs):
         layout = self.observation_layout
         leading = obs.shape[:-1]
-        move, enemies, allies, own = th.split(obs, [
-            layout["move_dim"], layout["n_enemies"] * layout["enemy_feat_dim"],
-            layout["n_allies"] * layout["ally_feat_dim"], layout["own_dim"]], dim=-1)
+        ally_size = layout["n_allies"] * layout["ally_feat_dim"]
+        enemy_size = layout["n_enemies"] * layout["enemy_feat_dim"]
+        if self.cyclic_self_first:
+            move, enemies, own, allies = th.split(obs, [
+                layout["move_dim"], enemy_size, layout["own_dim"], ally_size], dim=-1)
+        else:
+            move, enemies, allies, own = th.split(obs, [
+                layout["move_dim"], enemy_size, ally_size, layout["own_dim"]], dim=-1)
         return (th.cat([move, own], dim=-1),
                 allies.reshape(*leading, layout["n_allies"], layout["ally_feat_dim"]),
                 enemies.reshape(*leading, layout["n_enemies"], layout["enemy_feat_dim"]))
@@ -9886,7 +9936,13 @@ class CleanHyperAgent(nn.Module):
             if smac_suite
             else GRFPublicPrivateBiasTransformerCapturer
         )
-        adapter_args = {"observation_layout": self.rpg_obs_layout} if smac_suite else {}
+        adapter_args = (
+            {
+                "observation_layout": self.rpg_obs_layout,
+                "cyclic_self_first": bool(suite_profile.get("cyclic_self_first")),
+            }
+            if smac_suite else {}
+        )
         self.rpg_relation_capturer = capturer_class(
             **adapter_args,
             n_agents=self.n_agents,

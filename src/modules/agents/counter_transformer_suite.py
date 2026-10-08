@@ -35,6 +35,12 @@ ABLATION_PROFILES = {
     # Matched to linear_baseline: keep the GRU policy input, replace only
     # the linear observation condition with a linear one-hot-ID condition.
     "linear_id_baseline": {"branch": "linear", "hyper_condition": "agent_id_linear"},
+    # Keep the policy trunk untouched; canonicalize only the SMAC observation
+    # supplied to the linear hypernetwork condition (self block first, allies
+    # in cyclic roster order).
+    "linear_cyclic_obs_baseline": {
+        "branch": "linear", "cyclic_self_first": True,
+    },
     "obs_gate_kl80aux": {"gate": True, "aux": "kl80"},
     # Strict single-branch counterparts of the historical dual-branch
     # ``bayesg_kl80_keep`` run.  Both use one masked TD path and a Bernoulli
@@ -615,6 +621,7 @@ SMAC_PROFILES = (
     "baseline",
     "linear_baseline",
     "linear_id_baseline",
+    "linear_cyclic_obs_baseline",
     "linear_bayesg_kl80_keep",
     "linear_obs_gate_kl80aux_multiply",
     "linear_obs_gate_kl80aux_multiply_singlepath",
@@ -655,6 +662,8 @@ SMAC_PROFILES = (
 def model_type_for(label, domain="grf"):
     if domain not in {"grf", "smac"}:
         raise ValueError("Unknown suite domain: " + domain)
+    if ALL_PROFILES.get(label, {}).get("cyclic_self_first") and domain != "smac":
+        raise ValueError("Cyclic self-first observation profiles are SMAC-only")
     if domain == "smac":
         if label not in SMAC_PROFILES:
             raise ValueError("SMAC suite currently supports " + ", ".join(SMAC_PROFILES))
@@ -671,6 +680,7 @@ def model_type_for(label, domain="grf"):
 MODEL_PROFILES = {
     model_type_for(label): dict(flags, label=label)
     for label, flags in ALL_PROFILES.items()
+    if not flags.get("cyclic_self_first")
 }
 MODEL_PROFILES.update({
     model_type_for(label, "smac"): dict(ALL_PROFILES[label], label=label, domain="smac")

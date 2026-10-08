@@ -609,6 +609,21 @@ class CleanMAC(BasicMAC):
             action_targets = batch["actions"][:, t].reshape(batch_size, self.n_agents)
             action_target_mask = batch["filled"][:, t].reshape(batch_size, 1).expand(-1, self.n_agents)
         observation = self._random_drop_auxiliary_observation(batch["obs"][:, t])
+        capturer = getattr(self.agent, "rpg_relation_capturer", None)
+        if getattr(capturer, "counter_transformer_profile", {}).get(
+            "cyclic_self_first"
+        ):
+            # Canonicalize only the hypernetwork/capturer condition. The GRU
+            # still receives the original local observation, previous action,
+            # and agent-ID inputs, isolating the effect of head conditioning.
+            canonicalize = getattr(capturer, "canonicalize_cyclic_self_first", None)
+            if canonicalize is None:
+                raise RuntimeError(
+                    "cyclic_self_first requires the SMAC observation adapter"
+                )
+            observation = canonicalize(observation)
+            prev_obs = canonicalize(prev_obs)
+            next_obs = canonicalize(next_obs)
         return {
             "obs": observation.reshape(batch_size, self.n_agents, -1),
             "prev_obs": prev_obs.reshape(batch_size, self.n_agents, -1),
