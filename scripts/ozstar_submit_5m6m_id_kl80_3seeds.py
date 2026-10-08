@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit matched 5m_vs_6m Linear-ID, cyclic-obs, and direct-KL80 runs.
+"""Submit matched 5m_vs_6m Linear-ID and direct-KL80 runs.
 
 Three seeds per condition, 5M environment steps, two-day limit. Fresh unique
 names deliberately avoid any older KL80 attempts whose branch/gate may have
@@ -20,12 +20,11 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import ozstar_submit_5m6m_linear_baseline_recheck_3seeds as submitter
 from ozstar_submit_linear_single_head_suite import _extra_args, _load_profiles, _plan
 
-GROUP = "smac_5m6m_linear_id_cyclic_obs_kl80_5m_3seeds"
+GROUP = "smac_5m6m_linear_id_kl80_5m_3seeds"
 SCENE = "smac_5m6m"
 MAP = "5m_vs_6m"
 CONDITIONS = (
     ("linear_id_baseline", "linear_id"),
-    ("linear_cyclic_obs_baseline", "linear_cyclic_obs"),
     ("linear_bayesg_kl80_keep", "linear_kl80_direct_linearonly"),
 )
 SEEDS = (1, 2, 3)
@@ -42,16 +41,14 @@ def build_plans(repo):
         if label == "linear_id_baseline":
             if flags != {"branch": "linear", "hyper_condition": "agent_id_linear"}:
                 raise RuntimeError("Unexpected Linear ID profile: " + repr(flags))
-        elif label == "linear_cyclic_obs_baseline":
-            if flags != {"branch": "linear", "cyclic_self_first": True}:
-                raise RuntimeError("Unexpected cyclic-obs profile: " + repr(flags))
         elif label == "linear_bayesg_kl80_keep":
             if not flags.get("gate") or not flags.get("kl") or flags.get("aux"):
                 raise RuntimeError("Direct KL80 must have gate+KL only: " + repr(flags))
         plans_for_label = []
         for seed in SEEDS:
-            # These fresh names cannot collide with historical verify4maps jobs.
-            name = "{}_{}_5m_s{}_cyclicfix".format(SCENE, suffix, seed)
+            # Fresh names distinguish this corrected ID/direct-KL80 rerun from
+            # historical attempts whose branch/gate may have been wrong.
+            name = "{}_{}_5m_s{}_idkl80fix".format(SCENE, suffix, seed)
             plan = _plan(
                 repo, profiles, SCENE, MAP, "smac", label, seed,
                 name, "24G", GROUP,
@@ -107,7 +104,7 @@ def main():
     submitter.SUITE_FILE = Path(__file__)
     submitter.SMOKE_SCRIPTS = (
         "scripts/smoke_test_linear_id_baseline.py",
-        "scripts/smoke_test_linear_cyclic_obs_and_kl80.py",
+        "scripts/smoke_test_linear_direct_kl80.py",
     )
     submitter.build_plans = build_plans
     submitter.main()
