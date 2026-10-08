@@ -42,6 +42,7 @@ FIELDS = (
 TARGET_STEPS = 10000000
 DEFAULT_OUTPUT_SUBDIR = "linear_threeway_10m"
 RESULTS_TITLE = "current threeway results"
+REPORT_SEED_COVERAGE = False
 
 
 def inventory_table_data(inventory):
@@ -184,8 +185,13 @@ def render(scene, entries, output_dir, plotter, window):
     else:
         axis.text(0.5, 0.5, "No test-win data / shared seed interval yet",
                   ha="center", va="center", transform=axis.transAxes)
-    fig.suptitle("Mean ± sample std; centered window={} test points\n"
-                 "Latest attempt per seed; shared seed interval only".format(window), fontsize=9)
+    subtitle = ("Mean ± sample std; centered window={} test points\n"
+                "Latest attempt per seed; shared seed interval only".format(window))
+    if REPORT_SEED_COVERAGE:
+        missing = [label for model, (label, _) in LABELS.items() if not entries[model]]
+        if missing:
+            subtitle += "\nAwaiting test data (0/3 seeds): " + ", ".join(missing)
+    fig.suptitle(subtitle, fontsize=9)
     paths = []
     for suffix in ("png", "pdf"):
         path = output_dir / (scene + "_three_seed." + suffix)
@@ -199,7 +205,8 @@ def render(scene, entries, output_dir, plotter, window):
 
     # Show individual seeds separately so early truncation and seed variance
     # are visible instead of disappearing behind the shared-interval average.
-    panel_models = [(model, labels) for model, labels in LABELS.items() if entries[model]]
+    panel_models = [(model, labels) for model, labels in LABELS.items()
+                    if entries[model] or REPORT_SEED_COVERAGE]
     if not panel_models:
         panel_models = list(LABELS.items())
     fig, axes = plt.subplots(1, len(panel_models), figsize=(4.6 * len(panel_models), 4.2),
@@ -218,6 +225,9 @@ def render(scene, entries, output_dir, plotter, window):
         axis.grid(alpha=0.3, linestyle="--")
         if entries[model]:
             axis.legend(frameon=False, fontsize=8)
+        elif REPORT_SEED_COVERAGE:
+            axis.text(0.5, 0.5, "Awaiting test data (0/3 seeds)",
+                      ha="center", va="center", transform=axis.transAxes)
     axes[0].set_ylabel("Test Win Rate (%)")
     fig.suptitle(title + " — individual seeds (faint: raw; solid: smoothed)")
     path = output_dir / (scene + "_individual_seeds.png")
