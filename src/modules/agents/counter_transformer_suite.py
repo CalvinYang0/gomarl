@@ -35,6 +35,11 @@ ABLATION_PROFILES = {
     # Matched to linear_baseline: keep the GRU policy input, replace only
     # the linear observation condition with a linear one-hot-ID condition.
     "linear_id_baseline": {"branch": "linear", "hyper_condition": "agent_id_linear"},
+    # Matched to linear_baseline: keep the local-observation GRU policy input,
+    # but condition the generated Q head on the shared global state.
+    "linear_global_state_baseline": {
+        "branch": "linear", "hyper_condition": "global_state_linear",
+    },
     # Keep the policy trunk untouched; canonicalize only the SMAC observation
     # supplied to the linear hypernetwork condition (self block first, allies
     # in cyclic roster order).
@@ -621,6 +626,7 @@ SMAC_PROFILES = (
     "baseline",
     "linear_baseline",
     "linear_id_baseline",
+    "linear_global_state_baseline",
     "linear_cyclic_obs_baseline",
     "linear_bayesg_kl80_keep",
     "linear_obs_gate_kl80aux_multiply",

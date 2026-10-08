@@ -10134,8 +10134,11 @@ class CleanHyperAgent(nn.Module):
         self.counter_id_condition_encoder = None
         self.counter_cash_condition_encoder = None
         self.counter_rpg_condition_encoder = None
+        self.counter_state_condition_encoder = None
         self.counter_transformer_policy_projection = None
-        if source is not None and source != "agent_id_linear":
+        if source is not None and source not in {
+            "agent_id_linear", "global_state_linear",
+        }:
             # The Transformer representation is always the generated head's
             # data input. Only the parameter-generating condition differs.
             self.counter_transformer_policy_projection = nn.Linear(
@@ -10181,6 +10184,21 @@ class CleanHyperAgent(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Linear(self.cond_dim, self.cond_dim),
             )
+        elif source == "global_state_linear":
+            state_shape = getattr(self.args, "state_shape", 0)
+            if isinstance(state_shape, (tuple, list)):
+                state_dim = int(math.prod(state_shape))
+            else:
+                state_dim = int(state_shape)
+            if state_dim <= 0:
+                raise ValueError(
+                    "global_state_linear requires a positive state_shape; got {}".format(
+                        state_shape
+                    )
+                )
+            self.counter_state_condition_encoder = nn.Linear(
+                state_dim, self.cond_dim
+            )
 
     def _counter_hyper_condition(self, hidden, context):
         source = self.counter_hyper_condition_source
@@ -10199,6 +10217,24 @@ class CleanHyperAgent(nn.Module):
         if source == "rpg_relation":
             return self.counter_rpg_condition_encoder(
                 context["obs"][:, :, : self.obs_dim]
+            )
+        if source == "global_state_linear":
+            state = context.get("state")
+            if state is None:
+                raise ValueError(
+                    "global_state_linear requires context['state'] during train and test"
+                )
+            state = state.reshape(batch_size, -1)
+            expected_dim = self.counter_state_condition_encoder.in_features
+            if state.size(-1) != expected_dim:
+                raise ValueError(
+                    "Global state has dimension {}, expected {}".format(
+                        state.size(-1), expected_dim
+                    )
+                )
+            shared_condition = self.counter_state_condition_encoder(state)
+            return shared_condition.unsqueeze(1).expand(
+                -1, self.n_agents, -1
             )
         raise RuntimeError("Unknown Counter hypernetwork condition source: {}".format(source))
 
