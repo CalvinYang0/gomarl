@@ -4,25 +4,27 @@ tmux 只周期同步本仓库当前 `RUNNING` 作业的原始 W&B 数据。
 不周期绘图，不扫描已结束作业，不执行最终上传/删除本地记录。
 原 `recent-wandb-sync` 启动器也使用同一当前作业同步逻辑，保留会话名方便重启。
 
-## 五张地图一次性出图
+## 六张地图一次性出图
 
-`scripts/plot_smac_five_maps_3seeds.py` 一次读取 `3m`、`8m`、`5m_vs_6m`、
+`scripts/plot_smac_six_maps_3seeds.py` 一次读取 `3m`、`8m`、`8m_vs_9m`、`5m_vs_6m`、
 `3s_vs_5z`、`6h_vs_8z` 的三种子历史数据并上传同一个 analysis run。
 每张地图分别生成 mean ± sample std 的 PNG/PDF 和个别 seed 曲线 PNG，
 不把不同地图混成一条胜率曲线。包含运行中和已结束的数据，不受 Slurm 状态过滤。
-五图都有原线性 obs baseline；仅 5m6m 额外包括新的线性 ID、KL80、global-state。
+六图都有原线性 obs baseline；仅 5m6m 额外包括新的线性 ID、KL80、global-state。
+`8m` 是 8 vs 8，`8m_vs_9m` 是 8 vs 9，按精确 run 名称分别读取，标题和输出文件独立。
+旧入口 `plot_smac_five_maps_3seeds.py` 保持兼容，也会生成全部六张地图。
 其他地图没有提交这些条件，因此不为它们生成多余的空模型面板。
 旧 attention ID 不混入新线性 ID。
 
 ```bash
 cd /home/kyang/code/gomarl-dual-branch
 /home/kyang/.conda/envs/marl_cpu/bin/python \
-  scripts/plot_smac_five_maps_3seeds.py --local-only
+  scripts/plot_smac_six_maps_3seeds.py --local-only
 ```
 
 每次手动调用生成一个新快照，只上传一次，然后退出；不会启动循环。
-W&B run：`smac_five_maps_obs_head_comparison_3seeds_figures`。
-目录：`/home/kyang/gomarl-runtime/gomarl-dual-branch/figures/smac_five_maps_latest_3seeds`。
+W&B run：`smac_six_maps_obs_head_comparison_3seeds_figures`。
+目录：`/home/kyang/gomarl-runtime/gomarl-dual-branch/figures/smac_six_maps_latest_3seeds`。
 缺少种子时明确显示 n/3，排队的 global-state 无测试数据时标为 0/3。
 
 ## 单独查看 5m6m 四组条件
@@ -84,5 +86,5 @@ python scripts/smoke_test_counter_sync_tmux.py
 ```
 
 绘图检查使用合成 Sacred 数据，包括 NumPy scalar 的字典序列化形式。
-验证五地图的来源、各地图模型选择、缺少种子、一次性上传、PNG/PDF，
+验证六地图的来源、8 vs 8 / 8 vs 9 不混用、各地图模型选择、缺少种子、一次性上传、PNG/PDF，
 以及 5m6m 独立脚本的重复上传跳过和失败重试；不调用真实 W&B。
