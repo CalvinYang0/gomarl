@@ -774,8 +774,10 @@ class StarCraft2Env(MultiAgentEnv):
             "n_agents": int(self.n_agents),
             "n_enemies": int(self.n_enemies),
             "n_actions_no_attack": int(self.n_actions_no_attack),
+            "map_type": self.map_type,
             "allies": [
-                self._unit_snapshot(unit_id, unit)
+                dict(self._unit_snapshot(unit_id, unit), can_heal=bool(
+                    self.map_type == "MMM" and unit.unit_type == self.medivac_id))
                 for unit_id, unit in sorted(self.agents.items())
             ],
             "enemies": [

@@ -1,5 +1,8 @@
 # 一次性三种子图与独立 tmux 作业同步
 
+以后启动的 SMAC 实验默认每 1M 步记录前 10 局正常测试视频。
+更新和编码依赖检查见 [测试战斗视频](test_battle_videos.md)；不重启现有作业。
+
 ## 8m9m / 6h8z 的正确线性 ID 对照
 
 入口 `scripts/ozstar_submit_linear_id_8m9m_6h8z_10m_3seeds.py` 只包含这两张地图，

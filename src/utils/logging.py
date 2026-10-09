@@ -62,6 +62,7 @@ class Logger:
             return True
         return (
             key.startswith("loss")
+            or key.startswith("test_battle_video/")
             or key.startswith("test_value/")
             or key.startswith("train_gate/")
             or key.startswith("kl80_random_auxiliary_")
@@ -461,6 +462,17 @@ class Logger:
             self.console_logger.warning(
                 "Failed to create test parameter PCA trajectory: %s", exc
             )
+
+    def log_test_battle_video(self, path, t, episode, trace, fps=6):
+        """Separate stable keys prevent ten clips at one step overwriting each other."""
+        if not self.use_wandb:
+            return
+        caption = "{} seed {} | episode {} | {} | t_env={}".format(
+            trace.get("map_name"), trace.get("seed"), episode,
+            "win" if trace.get("battle_won") else "loss/time limit", t)
+        self._update_wandb_buffer(
+            "test_battle_video/episode_{:02d}".format(episode),
+            self.wandb_module.Video(path, fps=fps, format="mp4", caption=caption), t)
 
     def log_battle_trace_media(self, paths, t, fps=6):
         if not self.use_wandb:

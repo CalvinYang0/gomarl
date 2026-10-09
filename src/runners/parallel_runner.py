@@ -74,6 +74,8 @@ class ParallelRunner:
         self.log_train_stats_t = -100000
         self.battle_trace_request = None
         self.last_battle_trace = None
+        self.battle_video_request = None
+        self.last_battle_videos = []
         self.latest_snapshots = [None for _ in range(self.batch_size)]
         self.latest_render_frames = [None for _ in range(self.batch_size)]
 
@@ -166,6 +168,16 @@ class ParallelRunner:
         self.last_battle_trace = None
         return trace
 
+    def request_battle_videos(self, count, t_env, episode_offset=0):
+        if not 0 < count <= self.batch_size:
+            raise ValueError("Invalid battle video count")
+        self.battle_video_request = dict(count=int(count), t_env=int(t_env), episode_offset=int(episode_offset))
+
+    def pop_battle_videos(self):
+        videos = self.last_battle_videos
+        self.last_battle_videos = []
+        return videos
+
     def _send_worker(self, env_idx, command, data):
         process = self.ps[env_idx]
         if not process.is_alive():
@@ -257,9 +269,12 @@ class ParallelRunner:
 
     def run(self, test_mode=False):
         trace_request = self.battle_trace_request
+        video_request = self.battle_video_request
         for attempt in range(self.worker_run_retries + 1):
             if attempt > 0 and trace_request is not None:
                 self.battle_trace_request = dict(trace_request)
+            if attempt > 0 and video_request is not None:
+                self.battle_video_request = dict(video_request)
             try:
                 return self._run_once(test_mode=test_mode)
             except EnvironmentWorkerError as err:
@@ -305,6 +320,10 @@ class ParallelRunner:
         self.battle_trace_request = None
         trace_env_idx = 0
         trace_frames = []
+        video_request = self.battle_video_request if test_mode else None
+        self.battle_video_request = None
+        self.last_battle_videos = []
+        video_frames = {idx: [] for idx in range(video_request["count"])} if video_request else {}
 
         if trace_request is not None:
             self._send_worker(trace_env_idx, "render_trace", None)
@@ -331,6 +350,11 @@ class ParallelRunner:
                 env_idx: cpu_actions[action_idx]
                 for action_idx, env_idx in enumerate(envs_not_terminated)
             }
+
+            for idx, frames in video_frames.items():
+                if idx in action_by_env and not terminated[idx]:
+                    frames.append(dict(t=int(self.t), snapshot=self.latest_snapshots[idx],
+                                       actions=action_by_env[idx].astype(int).tolist()))
 
             if trace_request is not None and trace_env_idx in action_by_env:
                 trace_frames.append(
@@ -363,7 +387,8 @@ class ParallelRunner:
             for idx, parent_conn in enumerate(self.parent_conns):
                 if idx in envs_not_terminated:
                     if not terminated[idx]:
-                        cmd = "step_trace" if trace_request is not None and idx == trace_env_idx else "step"
+                        cmd = ("step_trace" if trace_request is not None and idx == trace_env_idx
+                               else "step_snapshot" if idx in video_frames else "step")
                         self._send_worker(idx, cmd, cpu_actions[action_idx])
                     action_idx += 1
 
@@ -389,6 +414,9 @@ class ParallelRunner:
                     post_transition_data["reward"].append((data["reward"],))
                     if "snapshot" in data:
                         self.latest_snapshots[idx] = data["snapshot"]
+                    elif idx in video_frames:
+                        # Never disguise a snapshot failure as a repeated old state.
+                        self.latest_snapshots[idx] = None
                     if "render_frame" in data:
                         self.latest_render_frames[idx] = data["render_frame"]
 
@@ -400,6 +428,18 @@ class ParallelRunner:
                     env_terminated = False
                     if data["terminated"]:
                         final_env_infos.append(data["info"])
+                        if idx in video_frames:
+                            video_frames[idx].append(dict(t=int(self.t)+1,
+                                                          snapshot=self.latest_snapshots[idx], actions=None))
+                            self.last_battle_videos.append(dict(
+                                map_name=self.args.env_args.get("map_name"),
+                                t_env=video_request["t_env"],
+                                episode_index=video_request["episode_offset"]+idx,
+                                battle_won=bool(data["info"].get("battle_won", False)),
+                                episode_return=float(episode_returns[idx]),
+                                episode_length=int(episode_lengths[idx]),
+                                frames=video_frames[idx],
+                            ))
                     if data["terminated"] and not data["info"].get("episode_limit", False):
                         env_terminated = True
                     terminated[idx] = data["terminated"]
@@ -442,6 +482,9 @@ class ParallelRunner:
 
         for env_idx in range(self.batch_size):
             self._send_worker(env_idx, "get_stats", None)
+
+        # Completion order can differ; selection/indexing always follows worker order.
+        self.last_battle_videos.sort(key=lambda item: item["episode_index"])
 
         env_stats = []
         for env_idx in range(self.batch_size):
@@ -571,7 +614,7 @@ def env_worker(remote, env_fn, reset_retries=0, reset_retry_delay=1.0):
                 break
 
             try:
-                if cmd in {"step", "step_trace"}:
+                if cmd in {"step", "step_trace", "step_snapshot"}:
                     actions = data
                     reward, terminated, env_info = env.step(actions)
                     state = env.get_state()
@@ -585,10 +628,11 @@ def env_worker(remote, env_fn, reset_retries=0, reset_retry_delay=1.0):
                         "terminated": terminated,
                         "info": env_info
                     }
-                    if cmd == "step_trace":
+                    if cmd in {"step_trace", "step_snapshot"}:
                         snapshot = safe_battle_snapshot()
                         if snapshot is not None:
                             response["snapshot"] = snapshot
+                    if cmd == "step_trace":
                         render_frame = safe_render_frame()
                         if render_frame is not None:
                             response["render_frame"] = render_frame

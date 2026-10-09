@@ -28,6 +28,8 @@ class EpisodeRunner:
         self.log_train_stats_t = -1000000
         self.battle_trace_request = None
         self.last_battle_trace = None
+        self.battle_video_request = None
+        self.last_battle_videos = []
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -52,6 +54,16 @@ class EpisodeRunner:
         trace = self.last_battle_trace
         self.last_battle_trace = None
         return trace
+
+    def request_battle_videos(self, count, t_env, episode_offset=0):
+        if count != 1:
+            raise ValueError("EpisodeRunner can capture one video per run")
+        self.battle_video_request = dict(t_env=int(t_env), episode_offset=int(episode_offset))
+
+    def pop_battle_videos(self):
+        videos = self.last_battle_videos
+        self.last_battle_videos = []
+        return videos
 
     def close_env(self):
         self.env.close()
@@ -89,7 +101,11 @@ class EpisodeRunner:
         )
         self.battle_trace_request = None
         trace_frames = []
-        snapshot = safe_battle_snapshot() if trace_request is not None else None
+        video_request = self.battle_video_request if test_mode else None
+        self.battle_video_request = None
+        self.last_battle_videos = []
+        video_frames = []
+        snapshot = safe_battle_snapshot() if trace_request is not None or video_request is not None else None
 
         def safe_render_frame():
             if render_frame_fn is None:
@@ -113,6 +129,10 @@ class EpisodeRunner:
 
             actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
             cpu_actions = actions.to("cpu").numpy()
+
+            if video_request is not None:
+                video_frames.append(dict(t=int(self.t), snapshot=snapshot,
+                                         actions=cpu_actions[0].astype(int).tolist()))
 
             trajectory_projection = getattr(
                 self.mac, "latest_trajectory_parameter_projection", None
@@ -142,8 +162,9 @@ class EpisodeRunner:
 
             reward, terminated, env_info = self.env.step(actions[0])
             episode_return += reward
-            if trace_request is not None:
+            if trace_request is not None or video_request is not None:
                 snapshot = safe_battle_snapshot()
+            if trace_request is not None:
                 render_frame = safe_render_frame()
 
             post_transition_data = {
@@ -171,6 +192,13 @@ class EpisodeRunner:
         actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
         cpu_actions = actions.to("cpu").numpy()
         self.batch.update({"actions": cpu_actions}, ts=self.t)
+        if video_request is not None:
+            video_frames.append(dict(t=int(self.t), snapshot=snapshot, actions=None))
+            self.last_battle_videos = [dict(
+                map_name=getattr(self.env, "map_name", None), t_env=video_request["t_env"],
+                episode_index=video_request["episode_offset"],
+                battle_won=bool(env_info.get("battle_won", False)),
+                episode_return=float(episode_return), episode_length=int(self.t), frames=video_frames)]
         if trace_request is not None:
             trace_frames.append(
                 {
