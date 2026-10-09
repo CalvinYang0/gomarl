@@ -30,13 +30,9 @@ if __name__ == "__main__":
 flock() { return 0; }
 timeout() {
   shift
-  if [[ "$2" == */plot_5m6m_head_condition_3seeds.py ]]; then
-    echo "MOCK_5M6M_FIGURE_UPDATE"
-    return "${MOCK_FIGURE_STATUS:-0}"
-  fi
   "$@"
 }
-squeue() { return 0; }
+squeue() { printf 'QUEUE_QUERY=<%s>\n' "$*" >&2; return 0; }
 scontrol() { return 0; }
 tmux() {
   printf 'TMUX_ARG=<%s>\n' "$@"
@@ -49,7 +45,7 @@ export -f flock timeout squeue scontrol tmux
         assert result.returncode == 0, result.stderr
         assert 'TMUX_ARG=<new-session>' in result.stdout
         assert 'INTERVAL_SECONDS=600' in result.stdout
-        assert 'UPDATE_5M6M_FIGURES=YES' in result.stdout
+        assert 'UPDATE_5M6M_FIGURES' not in result.stdout
         assert '--loop' in result.stdout
         repeated = run(launch, repo, MOCK_EXISTS="0")
         assert repeated.returncode == 0 and 'duplicate' in repeated.stdout
@@ -67,24 +63,25 @@ bash "$REPO_DIR/scripts/ozstar_wandb_sync_tmux.sh" --loop
         result = run(loop, repo)
         assert result.returncode == 0, result.stderr
         assert 'matched=0 uploaded=0 failed=0' in result.stdout
-        assert 'MOCK_5M6M_FIGURE_UPDATE' in result.stdout
+        assert '-h -t R -o' in result.stderr
+        assert 'figure' not in result.stdout.lower()
+        assert 'Final upload' not in result.stdout
         assert 'next round in' in result.stdout and 'loop stopping' in result.stdout
-        disabled = run(loop, repo, UPDATE_5M6M_FIGURES="NO")
-        assert disabled.returncode == 0
-        assert 'MOCK_5M6M_FIGURE_UPDATE' not in disabled.stdout
-        figure_failure = run(loop, repo, MOCK_FIGURE_STATUS="1")
-        assert figure_failure.returncode == 0
-        assert 'Three-seed figure update incomplete; retrying next round' in figure_failure.stdout
+        # Even stale tmux environment variables cannot re-enable plotting.
+        stale = run(loop, repo, UPDATE_5M6M_FIGURES="YES")
+        assert stale.returncode == 0 and 'figure' not in stale.stdout.lower()
         recent_launch = run(mocks + 'bash "$REPO_DIR/scripts/ozstar_recent_wandb_sync_tmux.sh" restart', repo)
         assert recent_launch.returncode == 0
-        assert 'UPDATE_5M6M_FIGURES=YES' in recent_launch.stdout
+        assert 'UPDATE_5M6M_FIGURES' not in recent_launch.stdout
         recent_loop = run(mocks + '''
 sleep() { exit 0; }
 export -f sleep
 bash "$REPO_DIR/scripts/ozstar_recent_wandb_sync_tmux.sh" --loop
 ''', repo)
         assert recent_loop.returncode == 0, recent_loop.stderr
-        assert 'MOCK_5M6M_FIGURE_UPDATE' in recent_loop.stdout
+        assert 'matched=0 uploaded=0 failed=0' in recent_loop.stdout
+        assert '-h -t R -o' in recent_loop.stderr
+        assert 'figure' not in recent_loop.stdout.lower()
         failure = run(mocks + '''
 squeue() { return 1; }
 export -f squeue
@@ -100,4 +97,37 @@ export -f flock
 bash "$REPO_DIR/scripts/ozstar_sync_running_counter_once.sh"
 ''', repo)
         assert locked.returncode == 0 and 'skipping overlapping' in locked.stdout
-    print("PASS: launch/reuse/stop/restart, both figure hooks, disable/retry, empty queue and overlap protection (mocked tools)")
+        # An unrelated completed run remains on disk but must not be synced.
+        live = repo / "runtime/wandb/offline-run-20261009_010000-live1"
+        old = repo / "runtime/wandb/offline-run-20261008_010000-done1"
+        for directory, run_id in ((live, "live1"), (old, "done1")):
+            (directory / "files").mkdir(parents=True)
+            (directory / ("run-" + run_id + ".wandb")).write_bytes(b"mock record")
+            (directory / "files/config.yaml").write_text(
+                "wandb_run_name: smac_3m_linear_obs_baseline_10m_s1_valuediag\n")
+        active = run(mocks + '''
+squeue() {
+  [[ "$*" == *"-t R"* ]] || return 1
+  echo '123|smac_3m_linear_obs_baseline_10m_s1_valuediag|2026-10-09T01:00:00'
+}
+scontrol() { echo "JobId=123 WorkDir=$REPO_DIR StdOut=/missing StdErr=/missing"; }
+stat() { echo 11; }
+timeout() {
+  shift
+  [[ "$2" == '-m' && "$3" == 'wandb' ]] || return 1
+  echo "MOCK_WANDB_SYNC $*"
+}
+export -f squeue scontrol stat timeout
+bash "$REPO_DIR/scripts/ozstar_sync_running_counter_once.sh"
+''', repo)
+        assert active.returncode == 0, active.stderr
+        assert 'matched=1 uploaded=1 failed=0' in active.stdout
+        assert 'live1' in active.stdout and 'done1' not in active.stdout
+        assert old.is_dir()  # Nothing is deleted, including completed data.
+        for filename in ("ozstar_wandb_sync_tmux.sh", "ozstar_recent_wandb_sync_tmux.sh"):
+            content = (ROOT / "scripts" / filename).read_text()
+            assert 'plot_5m6m' not in content
+            assert 'ozstar_finalize_wandb' not in content
+            assert 'ozstar_sync_recent_wandb.py' not in content
+    print("PASS: both launchers sync running jobs only, no figures/cleanup, "
+          "restart/retry, empty queue and overlap protection (mocked tools)")

@@ -43,6 +43,8 @@ TARGET_STEPS = 10000000
 DEFAULT_OUTPUT_SUBDIR = "linear_threeway_10m"
 RESULTS_TITLE = "current threeway results"
 REPORT_SEED_COVERAGE = False
+# Optional per-map model selection; other plotting wrappers retain all LABELS.
+SCENE_MODELS = {}
 
 
 def inventory_table_data(inventory):
@@ -155,9 +157,10 @@ def render(scene, entries, output_dir, plotter, window):
     import numpy as np
 
     title, _ = SCENES[scene]
+    scene_labels = {model: LABELS[model] for model in entries}
     fig, axis = plt.subplots(figsize=(8.0, 4.8), constrained_layout=True)
     rows = []
-    for model, (label, color) in LABELS.items():
+    for model, (label, color) in scene_labels.items():
         seeds = entries[model]
         if not seeds:
             continue
@@ -197,7 +200,7 @@ def render(scene, entries, output_dir, plotter, window):
     subtitle = ("Mean ± sample std; centered window={} test points\n"
                 "Latest attempt per seed; shared seed interval only".format(window))
     if REPORT_SEED_COVERAGE:
-        missing = [label for model, (label, _) in LABELS.items() if not entries[model]]
+        missing = [label for model, (label, _) in scene_labels.items() if not entries[model]]
         if missing:
             subtitle += "\nAwaiting test data (0/3 seeds): " + ", ".join(missing)
     fig.suptitle(subtitle, fontsize=9)
@@ -214,10 +217,10 @@ def render(scene, entries, output_dir, plotter, window):
 
     # Show individual seeds separately so early truncation and seed variance
     # are visible instead of disappearing behind the shared-interval average.
-    panel_models = [(model, labels) for model, labels in LABELS.items()
+    panel_models = [(model, labels) for model, labels in scene_labels.items()
                     if entries[model] or REPORT_SEED_COVERAGE]
     if not panel_models:
-        panel_models = list(LABELS.items())
+        panel_models = list(scene_labels.items())
     fig, axes = plt.subplots(1, len(panel_models), figsize=(4.6 * len(panel_models), 4.2),
                              constrained_layout=True, sharey=True, squeeze=False)
     axes = axes[0]
@@ -238,7 +241,7 @@ def render(scene, entries, output_dir, plotter, window):
             axis.text(0.5, 0.5, "Awaiting test data (0/3 seeds)",
                       ha="center", va="center", transform=axis.transAxes)
     axes[0].set_ylabel("Test Win Rate (%)")
-    fig.suptitle(title + " — individual seeds (faint: raw; solid: smoothed)")
+    fig.suptitle(title + "\nIndividual seeds (faint: raw; solid: smoothed)", fontsize=10)
     path = output_dir / (scene + "_individual_seeds.png")
     fig.savefig(path, dpi=180)
     plt.close(fig)
@@ -295,7 +298,8 @@ def main():
     local = local_run_index(wandb_root, wanted) if wandb_root.is_dir() else {}
     cloud = {} if args.local_only else cloud_run_index(args.project, wanted)
     sacred = discover_sacred(args.runtime_root / "results/sacred", wanted)
-    entries = {scene: {model: [] for model in LABELS} for scene in SCENES}
+    entries = {scene: {model: [] for model in SCENE_MODELS.get(scene, LABELS)}
+               for scene in SCENES}
     inventory, raw_rows = [], []
     for plan in plans:
         scene, model, seed = plan["scene"], plan["label"], plan["seed"]
