@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Verify exact seeds, Sacred decoding, figures and retryable upload dedup."""
+import csv
+import json
+from pathlib import Path
+import sys
+import tempfile
+from unittest.mock import patch
+
+import plot_5m6m_head_condition_3seeds as study
+
+
+def main():
+    plans = study.build_plans(study.charts.ROOT)
+    assert len(plans) == 12
+    assert not any(p["label"] == "hyper_hypermarl_id" for p in plans)
+    assert sum("statecond" in p["job_name"] for p in plans) == 3
+    assert sum("idkl80fix" in p["job_name"] for p in plans) == 6
+    for plan in plans:
+        assert plan["target_steps"] in (5000000, 10000000)
+    with tempfile.TemporaryDirectory(prefix="gomarl-head-figures-") as tmp:
+        runtime = Path(tmp)
+        empty_runtime = runtime / "empty"
+        with patch.object(sys, "argv", ["plot", "--local-only", "--no-upload",
+                                         "--runtime-root", str(empty_runtime)]):
+            study.main()
+        assert not list(empty_runtime.rglob("*.png"))
+        for plan in plans:
+            path = runtime / "results/sacred/5m_vs_6m" / plan["label"] / str(plan["seed"])
+            path.mkdir(parents=True)
+            (path / "config.json").write_text(json.dumps({"wandb_run_name": plan["job_name"]}))
+            (path / "run.json").write_text(json.dumps({"start_time": "2026-10-09T00:00:00Z"}))
+            (path / "info.json").write_text(json.dumps({
+                "test_battle_won_mean_T": [10000, 500000, 1000000, 2000000],
+                "test_battle_won_mean": [
+                    {"dtype": "float64", "py/object": "numpy.float64", "value": v}
+                    for v in (0.1, 0.5, 0.8, 0.6 + plan["seed"] * 0.01)
+                ],
+            }))
+        with patch.object(sys, "argv", ["plot", "--local-only", "--no-upload",
+                                         "--runtime-root", str(runtime)]):
+            study.main()
+        output = runtime / "figures" / study.OUTPUT_SUBDIR
+        with (output / "seed_inventory.csv").open() as handle:
+            inventory = list(csv.DictReader(handle))
+        assert len(inventory) == 12
+        assert all(row["source"] == "sacred" and row["points"] == "4" for row in inventory)
+        with (output / "smac_5m6m_aggregate.csv").open() as handle:
+            aggregate = list(csv.DictReader(handle))
+        assert {row["model"] for row in aggregate} == set(study.LABELS)
+        assert all(row["seed_count"] == "3" for row in aggregate)
+        for name in ("smac_5m6m_three_seed.png", "smac_5m6m_three_seed.pdf",
+                     "smac_5m6m_individual_seeds.png"):
+            assert (output / name).stat().st_size > 1000
+        with patch.object(study, "_BASE_UPLOAD") as upload:
+            args = ("hjh331-sjtu/gomarl", output, {}, inventory, 100)
+            study.upload_if_changed(*args)
+            study.upload_if_changed(*args)
+            assert upload.call_count == 1
+            checkpoint = output / "last_uploaded_sha256.txt"
+            before = checkpoint.read_text()
+            with (output / "seed_curves.csv").open("a") as handle:
+                handle.write("new data\n")
+            upload.side_effect = RuntimeError("mock upload failure")
+            try:
+                study.upload_if_changed(*args)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Upload failure must propagate for retry")
+            assert checkpoint.read_text() == before
+            upload.side_effect = None
+            study.upload_if_changed(*args)
+            assert checkpoint.read_text() != before
+    print("PASS: four matched conditions, exact seeds, Sacred NumPy scalars, "
+          "PNG/PDF, upload dedup and failure retry")
+
+
+if __name__ == "__main__":
+    main()

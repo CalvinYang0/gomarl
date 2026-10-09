@@ -7,6 +7,8 @@ PYTHON_BIN="${PYTHON_BIN:-/home/kyang/.conda/envs/marl_cpu/bin/python}"
 SESSION_NAME="${SESSION_NAME:-gomarl-wandb-sync}"
 INTERVAL_SECONDS="${INTERVAL_SECONDS:-600}"
 SYNC_TIMEOUT="${SYNC_TIMEOUT:-600}"
+UPDATE_5M6M_FIGURES="${UPDATE_5M6M_FIGURES:-YES}"
+FIGURE_TIMEOUT="${FIGURE_TIMEOUT:-600}"
 ACTION="${1:-start}"
 RUNTIME_ROOT="${RUNTIME_ROOT:-/home/kyang/gomarl-runtime/gomarl-dual-branch}"
 WANDB_ROOT="${WANDB_ROOT:-$RUNTIME_ROOT/wandb}"
@@ -43,6 +45,13 @@ if [[ "$ACTION" == "--loop" ]]; then
       sync_status=$?
       echo "WARNING: sync exited $sync_status; will retry next round (no jobs changed)"
     fi
+    if [[ "$UPDATE_5M6M_FIGURES" == "YES" ]]; then
+      timeout "$FIGURE_TIMEOUT" "$PYTHON_BIN" \
+        "$REPO_DIR/scripts/plot_5m6m_head_condition_3seeds.py" \
+        --local-only --runtime-root "$RUNTIME_ROOT" \
+        --project "${WANDB_ENTITY:-hjh331-sjtu}/${WANDB_PROJECT:-gomarl}" || \
+        echo "Three-seed figure update incomplete; retrying next round"
+    fi
     # Start-to-start cadence, with no overlap if a round exceeds ten minutes.
     elapsed=$((SECONDS - round_started))
     delay=$((INTERVAL_SECONDS - elapsed))
@@ -78,6 +87,7 @@ case "$ACTION" in
     # Explicit env propagation also works with a tmux server started long ago.
     printf -v loop_command '%q ' env "REPO_DIR=$REPO_DIR" "PYTHON_BIN=$PYTHON_BIN" \
       "SESSION_NAME=$SESSION_NAME" "INTERVAL_SECONDS=$INTERVAL_SECONDS" "SYNC_TIMEOUT=$SYNC_TIMEOUT" \
+      "UPDATE_5M6M_FIGURES=$UPDATE_5M6M_FIGURES" "FIGURE_TIMEOUT=$FIGURE_TIMEOUT" \
       "RUNTIME_ROOT=$RUNTIME_ROOT" \
       "WANDB_ROOT=${WANDB_ROOT:-wandb}" "WANDB_ENTITY=${WANDB_ENTITY:-hjh331-sjtu}" \
       "WANDB_PROJECT=${WANDB_PROJECT:-gomarl}" \
@@ -110,9 +120,15 @@ case "$ACTION" in
     ;;
   attach) exec tmux attach-session -t "=$SESSION_NAME" ;;
   status) tmux list-panes -t "=$SESSION_NAME" -F '#{session_name}:#{window_name} #{pane_current_command} dead=#{pane_dead}' ;;
+  restart)
+    if tmux has-session -t "=$SESSION_NAME" 2>/dev/null; then
+      tmux kill-session -t "=$SESSION_NAME"
+    fi
+    exec bash "$REPO_DIR/scripts/ozstar_wandb_sync_tmux.sh" start
+    ;;
   stop)
     tmux kill-session -t "=$SESSION_NAME"
     echo "Stopped only $SESSION_NAME; training jobs and saved experiment logs are untouched."
     ;;
-  *) echo "Usage: bash scripts/ozstar_wandb_sync_tmux.sh [start|attach|status|stop]" >&2; exit 2 ;;
+  *) echo "Usage: bash scripts/ozstar_wandb_sync_tmux.sh [start|restart|attach|status|stop]" >&2; exit 2 ;;
 esac

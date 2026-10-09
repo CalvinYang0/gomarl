@@ -64,6 +64,15 @@ def timestamp(value):
     return date.timestamp()
 
 
+def sacred_scalar(value):
+    """Decode NumPy scalars serialized by Sacred as {'value': number, ...}."""
+    while isinstance(value, dict) and "value" in value:
+        value = value["value"]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("Invalid Sacred scalar: " + repr(value)[:200])
+    return float(value)
+
+
 def discover_sacred(root, wanted):
     result = {}
     if not root.is_dir():
@@ -121,8 +130,8 @@ def select_latest(plan, metric, local, cloud, sacred, wandb_root, plotter):
                 import numpy as np
                 info = json.loads((payload / "info.json").read_text())
                 x, y = plotter.collapse_duplicate_steps(
-                    np.asarray(info.get(metric + "_T", []), dtype=float),
-                    np.asarray(info.get(metric, []), dtype=float),
+                    np.asarray([sacred_scalar(v) for v in info.get(metric + "_T", [])]),
+                    np.asarray([sacred_scalar(v) for v in info.get(metric, [])]),
                 )
             import numpy as np
             valid = np.isfinite(x) & np.isfinite(y) & (x >= 0) & (x <= 10050000)
