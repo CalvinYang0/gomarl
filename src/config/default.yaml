@@ -73,6 +73,10 @@ wandb_test_gate_trajectory: True # Suites can disable the test gate line figure
 wandb_test_parameter_pca: True
 test_value_diagnostics: False # Scalar Q/mixer/Monte Carlo diagnostics; no training loss changes
 test_value_diagnostics_interval: 100000
+test_hyper_obs_importance: True # Future ungated SMAC Linear-Obs runs only; no training/rollout changes
+test_hyper_obs_importance_interval: 1000000
+test_hyper_obs_importance_episodes: 10 # First ordinary test episodes, not extra rollouts
+test_hyper_obs_importance_samples: 256 # Deterministic agent-stratified probes
 
 # --- RL hyperparameters ---
 gamma: 0.99

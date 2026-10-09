@@ -10,6 +10,7 @@ from utils.logging import Logger
 from utils.battle_trace import save_battle_trace, render_battle_trace
 from utils.timehelper import time_left, time_str
 from utils.value_diagnostics import ValueDiagnosticSummary, collect_value_diagnostics
+from utils.hyper_obs_importance import HyperObsImportanceSession
 from utils.battle_video import BattleVideoSession
 from os.path import dirname, abspath
 
@@ -330,6 +331,7 @@ def run_sequential(args, logger):
         if getattr(learner, "mixer", None) is None or getattr(learner, "relation_mixer_gate", None) is not None:
             raise ValueError("Value diagnostics currently support ungated QMIX/VDN baselines")
     last_log_T = 0
+    hyper_obs_importance = HyperObsImportanceSession(args, mac, logger)
     model_save_time = 0
     last_battle_trace_T = 0
     battle_videos = BattleVideoSession(args, logger)
@@ -431,6 +433,7 @@ def run_sequential(args, logger):
                 logger.console_logger.info("Collecting battle trace at t_env={}".format(runner.t_env))
 
             battle_videos.begin(runner.t_env)
+            hyper_obs_importance.begin(runner.t_env)
             value_summary = None
             if (getattr(args, "test_value_diagnostics", False)
                     and runner.t_env - last_value_diagnostics_T >= args.test_value_diagnostics_interval):
@@ -440,6 +443,7 @@ def run_sequential(args, logger):
                 if should_trace and test_run_idx == 0:
                     runner.request_battle_trace(prefix=trace_prefix, t_env=runner.t_env)
                 test_batch = runner.run(test_mode=True)
+                hyper_obs_importance.consume(test_batch)
                 if value_summary is not None:
                     collect_value_diagnostics(mac, learner.mixer, test_batch, args.gamma, value_summary)
                 battle_videos.consume(runner)
@@ -450,6 +454,7 @@ def run_sequential(args, logger):
                         test_video_written = True
 
             battle_videos.finish()
+            hyper_obs_importance.finish()
             if value_summary is not None:
                 value_summary.log(logger, runner.t_env)
                 last_value_diagnostics_T = runner.t_env

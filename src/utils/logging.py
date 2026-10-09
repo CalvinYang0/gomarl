@@ -64,6 +64,7 @@ class Logger:
             key.startswith("loss")
             or key.startswith("test_battle_video/")
             or key.startswith("test_value/")
+            or key.startswith("test_hyper_obs_importance/")
             or key.startswith("train_gate/")
             or key.startswith("kl80_random_auxiliary_")
             or key.startswith("kl50_random_auxiliary_")
