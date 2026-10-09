@@ -32,6 +32,12 @@ ABLATION_PROFILES = {
     # One condition branch and one generated Q head.  ``linear_only`` is used
     # on both GRF and SMAC; no attention branch or RPG dual-head path exists.
     "linear_baseline": {"branch": "linear"},
+    # Same encoder/head/GRU/mixer as Obs. Replace only the hypernetwork's
+    # raw condition observation; no extra adapter or trainable parameters.
+    "linear_ones_baseline": {"branch": "linear", "hyper_obs_fill": "ones"},
+    "linear_timestep_baseline": {
+        "branch": "linear", "hyper_obs_fill": "episode_timestep",
+    },
     # Matched to linear_baseline: keep the GRU policy input, replace only
     # the linear observation condition with a linear one-hot-ID condition.
     "linear_id_baseline": {"branch": "linear", "hyper_condition": "agent_id_linear"},
@@ -625,6 +631,8 @@ ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 SMAC_PROFILES = (
     "baseline",
     "linear_baseline",
+    "linear_ones_baseline",
+    "linear_timestep_baseline",
     "linear_id_baseline",
     "linear_global_state_baseline",
     "linear_cyclic_obs_baseline",
@@ -670,6 +678,8 @@ def model_type_for(label, domain="grf"):
         raise ValueError("Unknown suite domain: " + domain)
     if ALL_PROFILES.get(label, {}).get("cyclic_self_first") and domain != "smac":
         raise ValueError("Cyclic self-first observation profiles are SMAC-only")
+    if ALL_PROFILES.get(label, {}).get("hyper_obs_fill") and domain != "smac":
+        raise ValueError("Constant/timestep observation controls are SMAC-only")
     if domain == "smac":
         if label not in SMAC_PROFILES:
             raise ValueError("SMAC suite currently supports " + ", ".join(SMAC_PROFILES))
@@ -686,7 +696,7 @@ def model_type_for(label, domain="grf"):
 MODEL_PROFILES = {
     model_type_for(label): dict(flags, label=label)
     for label, flags in ALL_PROFILES.items()
-    if not flags.get("cyclic_self_first")
+    if not flags.get("cyclic_self_first") and not flags.get("hyper_obs_fill")
 }
 MODEL_PROFILES.update({
     model_type_for(label, "smac"): dict(ALL_PROFILES[label], label=label, domain="smac")

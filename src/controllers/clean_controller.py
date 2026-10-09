@@ -610,6 +610,16 @@ class CleanMAC(BasicMAC):
             action_target_mask = batch["filled"][:, t].reshape(batch_size, 1).expand(-1, self.n_agents)
         observation = self._random_drop_auxiliary_observation(batch["obs"][:, t])
         capturer = getattr(self.agent, "rpg_relation_capturer", None)
+        fill = getattr(capturer, "counter_transformer_profile", {}).get("hyper_obs_fill")
+        if fill == "ones":
+            observation = th.ones_like(observation)
+        elif fill == "episode_timestep":
+            # EpisodeBatch is stored from reset. Use the same decision index
+            # in behaviour, evaluation, online TD and target TD (t+1).
+            # Raw 0,1,2,..., not t_env or a normalized/sampled signal.
+            observation = th.full_like(observation, float(t))
+        elif fill is not None:
+            raise ValueError("Unknown hypernetwork observation fill: " + str(fill))
         if getattr(capturer, "counter_transformer_profile", {}).get(
             "cyclic_self_first"
         ):
