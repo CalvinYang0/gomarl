@@ -55,23 +55,25 @@ W&B run：`smac_six_maps_obs_head_comparison_3seeds_figures`。
 目录：`/home/kyang/gomarl-runtime/gomarl-dual-branch/figures/smac_six_maps_latest_3seeds`。
 缺少种子时明确显示 n/3，排队的 global-state 无测试数据时标为 0/3。
 
-## 单独查看 5m6m 六组条件
+## 单独查看 5m6m 七组条件
 
-`scripts/plot_5m6m_head_condition_3seeds.py` 比较六组精确 run 名称：
+`scripts/plot_5m6m_head_condition_3seeds.py` 比较七组精确 run 名称：
 
 | 组别 | 名称模板 | 预算 |
 | --- | --- | --- |
-| 原线性 obs baseline | `smac_5m6m_linear_obs_baseline_10m_s{seed}_valuediag` | 10M |
-| 新线性 ID baseline | `smac_5m6m_linear_id_5m_s{seed}_idkl80fix` | 5M |
+| 原线性 obs 可视化新跑 | `smac_5m6m_linear_singlehead_baseline_10m_s{seed}_recheck` | 10M |
+| 线性 ID baseline | `smac_5m6m_linear_id_baseline_10m_s{seed}_valuediag` | 10M |
 | 新线性 direct KL80 | `smac_5m6m_linear_kl80_direct_linearonly_5m_s{seed}_idkl80fix` | 5M |
 | global-state baseline | `smac_5m6m_linear_global_state_10m_s{seed}_statecond` | 10M |
 | 全 1 超网络输入 | `smac_5m6m_linear_ones_10m_s{seed}_signalcond` | 10M |
 | 单局 timestep 超网络输入 | `smac_5m6m_linear_timestep_10m_s{seed}_signalcond` | 10M |
+| Obs + 实体 ID | `smac_5m6m_linear_obs_entity_id_10m_s{seed}_entityidcond` | 10M |
 
 每组 seed 为 1/2/3。使用 `test_battle_won_mean`，同一 seed 只取最新 attempt；
 平均曲线只画当前可用 seed 的共同区间，图例明确写 `n/3 seeds`。
-缺少的数据保留为空，不以历史 attention ID 补位。
-输出包含 mean ± sample std 的 PNG/PDF、六组分别展开的种子图，以及原始曲线和 seed inventory CSV。
+缺少的数据保留为空，不以历史 attention ID 或旧 5M ID 补位。
+Obs 使用专门的可视化重跑记录；旧的已完成 Obs 不代替新的缺失数据。
+输出包含 mean ± sample std 的 PNG/PDF、七组分别展开的种子图，以及原始曲线和 seed inventory CSV。
 平滑沿用 centered window=100 test points；需要看未平滑曲线可以加 `--mean-window 1`。
 
 默认目录：`/home/kyang/gomarl-runtime/gomarl-dual-branch/figures/5m6m_head_condition_comparison_3seeds`。

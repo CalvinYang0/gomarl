@@ -16,10 +16,16 @@ def main():
     assert sum("entityidcond" in p["job_name"] for p in plans) == 3
     assert not any(p["label"] == "hyper_hypermarl_id" for p in plans)
     assert sum("statecond" in p["job_name"] for p in plans) == 3
-    assert sum("idkl80fix" in p["job_name"] for p in plans) == 6
+    assert sum("idkl80fix" in p["job_name"] for p in plans) == 3
+    assert sum("_recheck" in p["job_name"] for p in plans) == 3
+    assert {p["job_name"] for p in plans if p["label"] == "linear_id_baseline"} == {
+        "smac_5m6m_linear_id_baseline_10m_s{}_valuediag".format(seed) for seed in (1, 2, 3)
+    }
     assert sum("signalcond" in p["job_name"] for p in plans) == 6
     for plan in plans:
         assert plan["target_steps"] in (5000000, 10000000)
+        if plan["label"] == "linear_id_baseline":
+            assert plan["target_steps"] == 10000000
     with tempfile.TemporaryDirectory(prefix="gomarl-head-figures-") as tmp:
         runtime = Path(tmp)
         empty_runtime = runtime / "empty"

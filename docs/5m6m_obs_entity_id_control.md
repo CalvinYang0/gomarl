@@ -51,7 +51,8 @@ ID 在所有 timestep、在线/target 网络、训练/测试、reset 后都保�
 这是保留原架构的输入消融，不是新的 entity-aware/attention 模型。
 若它弱于 ID-only，只能支持“在该实现/训练设置下，加入 Obs 未带来收益或造成负面影响”，
 不能单独排除优化、初始化、参数量等因素并证明“拟合噪声”。
-现有 ID/KL80 组的训练目标为 5M；10M Obs+ID 应先在相同训练预算内比较，
+ID 比较使用 `smac_5m6m_linear_id_baseline_10m_s{seed}_valuediag` 的 10M 版本，
+不再选旧 5M idkl80fix。KL80 仍是 5M；与 KL80 比较时只比较共同训练区间，
 不能把不同训练长度的最终值作为唯一结论。
 
 ## 组数、命令与绘图
@@ -74,7 +75,8 @@ SUBMIT=YES /home/kyang/.conda/envs/marl_cpu/bin/python \
 不带 `SUBMIT=YES` 只打印计划，不提交。
 当前会话自动 SSH 认证失败：本地验证/推送不代表已在 OzSTAR 启动作业。
 
-现有绘图入口都已加入新组，不混用历史 attention-ID：
+现有绘图入口都已加入新组，Obs 使用新的 recheck 可视化记录，ID 使用 10M 版本，
+不混用历史 attention-ID 或旧 5M 线性 ID：
 
 ```bash
 /home/kyang/.conda/envs/marl_cpu/bin/python scripts/plot_5m6m_head_condition_3seeds.py
