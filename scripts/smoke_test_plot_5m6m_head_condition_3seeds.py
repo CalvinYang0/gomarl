@@ -12,7 +12,8 @@ import plot_5m6m_head_condition_3seeds as study
 
 def main():
     plans = study.build_plans(study.charts.ROOT)
-    assert len(plans) == 18
+    assert len(plans) == 21
+    assert sum("entityidcond" in p["job_name"] for p in plans) == 3
     assert not any(p["label"] == "hyper_hypermarl_id" for p in plans)
     assert sum("statecond" in p["job_name"] for p in plans) == 3
     assert sum("idkl80fix" in p["job_name"] for p in plans) == 6
@@ -44,7 +45,7 @@ def main():
         output = runtime / "figures" / study.OUTPUT_SUBDIR
         with (output / "seed_inventory.csv").open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 18
+        assert len(inventory) == 21
         assert all(row["source"] == "sacred" and row["points"] == "4" for row in inventory)
         with (output / "smac_5m6m_aggregate.csv").open() as handle:
             aggregate = list(csv.DictReader(handle))
@@ -73,7 +74,7 @@ def main():
             upload.side_effect = None
             study.upload_if_changed(*args)
             assert checkpoint.read_text() != before
-    print("PASS: six matched conditions, exact seeds, Sacred NumPy scalars, "
+    print("PASS: seven conditions, exact seeds, Sacred NumPy scalars, "
           "PNG/PDF, upload dedup and failure retry")
 
 

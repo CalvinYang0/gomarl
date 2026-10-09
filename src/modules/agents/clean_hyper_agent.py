@@ -8212,6 +8212,7 @@ class SMACSingleTransformerCapturer(GRFPublicPrivateBiasTransformerCapturer):
     def __init__(self, observation_layout, **kwargs):
         self.observation_layout = dict(observation_layout)
         self.cyclic_self_first = bool(kwargs.pop("cyclic_self_first", False))
+        self.hyper_entity_ids = bool(kwargs.pop("hyper_entity_ids", False))
         layout = self.observation_layout
         obs_dim = (layout["move_dim"] + layout["own_dim"]
                    + layout["n_enemies"] * layout["enemy_feat_dim"]
@@ -8227,6 +8228,82 @@ class SMACSingleTransformerCapturer(GRFPublicPrivateBiasTransformerCapturer):
         self.self_encoder = self._make_encoder(layout["move_dim"] + layout["own_dim"])
         self.ally_encoder = self._make_encoder(layout["ally_feat_dim"])
         self.opponent_encoder = self._make_encoder(layout["enemy_feat_dim"])
+        if self.hyper_entity_ids:
+            self._init_entity_id_hyper_input()
+
+    def _init_entity_id_hyper_input(self):
+        """Interleave roster one-hots with raw entity blocks, hyper path only.
+
+        Friendly IDs are 0..N-1; enemy IDs are N..N+E-1. SMAC ally slots
+        follow increasing friendly ID with self omitted, never cyclic order.
+        IDs remain constant for invisible/dead entities and contain no state.
+        """
+        if (self.relation_encoder_style != "linear_only"
+                or self.dynamic_branch_gate is not None or self.cyclic_self_first
+                or self.observation_layout["n_allies"] != self.n_agents - 1):
+            raise ValueError("Entity IDs require the ungated raw-order SMAC Linear Obs path")
+        layout = self.observation_layout
+        count = self.n_agents + layout["n_enemies"]
+        names, raw_indices, identity_blocks = [], [], []
+        raw_offset = 0
+
+        def add_raw(width):
+            nonlocal raw_offset
+            raw_indices.extend(range(len(names), len(names) + width))
+            names.extend(self.semantic_names[raw_offset:raw_offset + width])
+            raw_offset += width
+
+        def add_id(label, identities):
+            start = len(names)
+            names.extend(label + "_id_{}".format(i) for i in range(count))
+            identity_blocks.append((start, identities))
+
+        add_raw(layout["move_dim"])
+        for enemy in range(layout["n_enemies"]):
+            add_raw(layout["enemy_feat_dim"])
+            add_id("enemy_{}".format(enemy), [self.n_agents + enemy] * self.n_agents)
+        rosters = [[j for j in range(self.n_agents) if j != i] for i in range(self.n_agents)]
+        for ally in range(layout["n_allies"]):
+            add_raw(layout["ally_feat_dim"])
+            add_id("ally_{}".format(ally), [roster[ally] for roster in rosters])
+        add_raw(layout["own_dim"])
+        add_id("self", list(range(self.n_agents)))
+        if raw_offset != self.expected_obs_dim:
+            raise ValueError("Entity-ID raw feature layout mismatch")
+        template = th.zeros(self.n_agents, len(names))
+        for start, identities in identity_blocks:
+            template[th.arange(self.n_agents), start + th.tensor(identities)] = 1.0
+        self.hyper_entity_input_names = tuple(names)
+        self.register_buffer("hyper_entity_id_template", template, persistent=False)
+        self.register_buffer("hyper_entity_raw_indices", th.tensor(raw_indices), persistent=False)
+        original = self.dual_linear_encoder
+        # Preserve every existing module's seeded initialization. Only new ID
+        # columns get new initial weights; no second encoder or nonlinear layer.
+        with th.random.fork_rng(devices=[]):
+            enlarged = nn.Linear(len(names), self.relation_dim).to(
+                device=original.weight.device, dtype=original.weight.dtype)
+        with th.no_grad():
+            enlarged.weight[:, raw_indices] = original.weight
+            enlarged.bias.copy_(original.bias)
+        self.dual_linear_encoder = enlarged
+
+    def entity_id_hyper_input(self, obs):
+        if not self.hyper_entity_ids:
+            return obs
+        if obs.shape[-2:] != (self.n_agents, self.expected_obs_dim):
+            raise ValueError("Entity-ID SMAC observation has incompatible shape: " + str(obs.shape))
+        expanded = self.hyper_entity_id_template.to(device=obs.device, dtype=obs.dtype)
+        expanded = expanded.expand(*obs.shape[:-2], *expanded.shape).clone()
+        expanded[..., self.hyper_entity_raw_indices] = obs
+        return expanded
+
+    def _forward_linear_only_relation(self, obs):
+        if not self.hyper_entity_ids:
+            return super()._forward_linear_only_relation(obs)
+        hidden = self.dual_linear_encoder(self.entity_id_hyper_input(obs))
+        condition = hidden if self.output_dim == self.relation_dim else self.output_encoder(hidden)
+        self.latest_context_token = hidden
+        return condition, hidden
 
     def _build_semantic_slot_layout(self):
         layout = self.observation_layout
@@ -9940,6 +10017,7 @@ class CleanHyperAgent(nn.Module):
             {
                 "observation_layout": self.rpg_obs_layout,
                 "cyclic_self_first": bool(suite_profile.get("cyclic_self_first")),
+                "hyper_entity_ids": bool(suite_profile.get("hyper_entity_ids")),
             }
             if smac_suite else {}
         )

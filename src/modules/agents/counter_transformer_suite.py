@@ -32,6 +32,11 @@ ABLATION_PROFILES = {
     # One condition branch and one generated Q head.  ``linear_only`` is used
     # on both GRF and SMAC; no attention branch or RPG dual-head path exists.
     "linear_baseline": {"branch": "linear"},
+    # Raw local Obs plus fixed absolute roster identities for every entity.
+    # Only the single linear condition encoder's input is enlarged.
+    "linear_obs_entity_id_baseline": {
+        "branch": "linear", "hyper_entity_ids": True,
+    },
     # Same encoder/head/GRU/mixer as Obs. Replace only the hypernetwork's
     # raw condition observation; no extra adapter or trainable parameters.
     "linear_ones_baseline": {"branch": "linear", "hyper_obs_fill": "ones"},
@@ -631,6 +636,7 @@ ALL_PROFILES = dict(PROFILES, **ABLATION_PROFILES)
 SMAC_PROFILES = (
     "baseline",
     "linear_baseline",
+    "linear_obs_entity_id_baseline",
     "linear_ones_baseline",
     "linear_timestep_baseline",
     "linear_id_baseline",
@@ -680,6 +686,8 @@ def model_type_for(label, domain="grf"):
         raise ValueError("Cyclic self-first observation profiles are SMAC-only")
     if ALL_PROFILES.get(label, {}).get("hyper_obs_fill") and domain != "smac":
         raise ValueError("Constant/timestep observation controls are SMAC-only")
+    if ALL_PROFILES.get(label, {}).get("hyper_entity_ids") and domain != "smac":
+        raise ValueError("Absolute entity-ID observation control is SMAC-only")
     if domain == "smac":
         if label not in SMAC_PROFILES:
             raise ValueError("SMAC suite currently supports " + ", ".join(SMAC_PROFILES))
@@ -697,6 +705,7 @@ MODEL_PROFILES = {
     model_type_for(label): dict(flags, label=label)
     for label, flags in ALL_PROFILES.items()
     if not flags.get("cyclic_self_first") and not flags.get("hyper_obs_fill")
+    and not flags.get("hyper_entity_ids")
 }
 MODEL_PROFILES.update({
     model_type_for(label, "smac"): dict(ALL_PROFILES[label], label=label, domain="smac")
