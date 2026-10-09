@@ -12,15 +12,26 @@ import torch as th
 from smoke_test_counter_transformer_nine import make_case
 
 
-def check(scene):
+def check(scene, production_shapes=False):
     th.manual_seed(23)
-    mac, learner, batch, logger = make_case("linear_id_baseline", scene)
+    mac, learner, batch, logger = make_case(
+        "linear_id_baseline", scene, production_shapes=production_shapes
+    )
     agent = mac.agent
     assert agent.rpg_relation_capturer.relation_encoder_style == "linear_only"
     assert agent.counter_hyper_condition_source == "agent_id_linear"
     assert agent.counter_transformer_policy_projection is None
     assert isinstance(agent.counter_id_condition_encoder, th.nn.Linear)
     assert agent.rpg_relation_capturer.dynamic_branch_gate is None
+    assert not agent.apply_hypermarl_init
+    if production_shapes:
+        assert agent.hidden_dim == agent.cond_dim == 64
+        assert mac.args.obs_last_action and mac.args.obs_agent_id
+        assert agent.fc1.in_features == mac.args.obs_shape + mac.args.n_actions + mac.args.n_agents
+    for flag in ("mask_parameter_relation_active", "temporal_param_auxiliary_active",
+                 "random_drop_auxiliary_active", "gate_regularization_active",
+                 "mixer_kl80_auxiliary_active"):
+        assert not getattr(learner, flag)
     captured = {}
 
     def capture_gru(module, inputs, output):

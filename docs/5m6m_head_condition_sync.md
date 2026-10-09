@@ -1,5 +1,30 @@
 # 一次性三种子图与独立 tmux 作业同步
 
+## 8m9m / 6h8z 的正确线性 ID 对照
+
+入口 `scripts/ozstar_submit_linear_id_8m9m_6h8z_10m_3seeds.py` 只包含这两张地图，
+每张 seed 1/2/3、10M、48 小时、24G。沿用 Obs 的主网络和训练设置；
+GRU 输入保留局部 obs、上一步动作、agent ID，生成头条件只来自线性编码的 ID。
+仅主 TD 损失，无 gate、KL、attention 策略替代或特殊 HyperMARL 初始化。
+
+名称为 `smac_8m9m_linear_id_baseline_10m_s{seed}_valuediag` 和
+`smac_6h8z_linear_id_baseline_10m_s{seed}_valuediag`。
+前者沿用之前正确线性 ID 的名称；同名运行中/成功完成作业会保留，不重复提交。
+历史 `*_id_baseline_*` attention 组不复用、不取消。
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch &&
+git fetch origin refs/heads/codex/linear-id-baselines &&
+git merge --ff-only FETCH_HEAD &&
+SUBMIT=YES /home/kyang/.conda/envs/marl_cpu/bin/python \
+  scripts/ozstar_submit_linear_id_8m9m_6h8z_10m_3seeds.py
+```
+
+不设置 `SUBMIT=YES` 只预览计划。提交前自动校验地图、磁盘配额、配置、
+真实地图尺寸及生产模型尺寸的 GRU/ID 前向与梯度路径，再做 Slurm 预检。
+tmux 已按本仓库运行中任务动态筛选，不需要另加固定作业 ID。
+现有六地图图入口暂不自动纳入这两组新 ID；不能以空面板或旧 ID 充当新结果。
+
 tmux 只周期同步本仓库当前 `RUNNING` 作业的原始 W&B 数据。
 不周期绘图，不扫描已结束作业，不执行最终上传/删除本地记录。
 原 `recent-wandb-sync` 启动器也使用同一当前作业同步逻辑，保留会话名方便重启。

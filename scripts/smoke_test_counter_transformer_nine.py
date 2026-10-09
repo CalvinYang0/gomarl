@@ -24,6 +24,7 @@ def make_case(
     scene="academy_counterattack_easy",
     env_overrides=None,
     config_overrides=None,
+    production_shapes=False,
 ):
     config = {}
     smac = not scene.startswith("academy_")
@@ -47,9 +48,11 @@ def make_case(
     config.update(experiment_overrides(label, "smac" if smac else "grf"))
     config.update(config_overrides or {})
     config.update(n_agents=n_agents, n_actions=n_actions, state_shape=state_dim, obs_shape=obs_dim,
-                  rnn_hidden_dim=16, hypernet_embed=16, clean_condition_dim=16,
                   use_cuda=False, device="cpu", batch_size=2, batch_size_run=2,
-                  obs_last_action=False, obs_agent_id=False, learner_log_interval=1)
+                  learner_log_interval=1)
+    if not production_shapes:
+        config.update(rnn_hidden_dim=16, hypernet_embed=16, clean_condition_dim=16,
+                      obs_last_action=False, obs_agent_id=False)
     args = SimpleNamespace(**config)
     scheme = {
         "obs": {"vshape": obs_dim, "group": "agents"},
