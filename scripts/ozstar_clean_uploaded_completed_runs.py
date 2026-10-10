@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -51,9 +52,11 @@ def job_finished(job_id, repo):
     return bool(found) and all(found)
 
 
-def job_index(log_root, wandb_root, repo):
+def job_index(log_root, wandb_root, repo, progress=False):
     result = {}
-    for path in sorted(log_root.iterdir()):
+    for number, path in enumerate(sorted(log_root.iterdir()), 1):
+        if progress and number % 25 == 0:
+            print("INDEX scanned {} log entries".format(number), flush=True)
         match = LOG_RE.fullmatch(path.name)
         if not match or path.is_symlink() or not path.is_file():
             continue
@@ -69,17 +72,26 @@ def job_index(log_root, wandb_root, repo):
 
 
 def snapshot(directory):
-    """No symlinks/special files. Capture the COMPLETE tree, including additions."""
+    """Never follow links; allow only the SDK's debug-core.log link itself."""
     result = {}
-    for path in directory.rglob("*"):
-        if path.is_symlink():
-            raise RuntimeError("Symlink in run directory; retain: " + str(path))
-        stat = path.stat()
-        if path.is_file():
-            result[str(path.relative_to(directory))] = (
-                stat.st_size, stat.st_mtime_ns, stat.st_ino)
-        elif not path.is_dir():
-            raise RuntimeError("Special file in run directory; retain: " + str(path))
+    def scan_error(error):
+        raise error
+    for parent, directories, files in os.walk(directory, followlinks=False, onerror=scan_error):
+        for name in directories + files:
+            path = Path(parent) / name
+            key = str(path.relative_to(directory))
+            entry = path.lstat()
+            if stat.S_ISLNK(entry.st_mode):
+                if key != "logs/debug-core.log":
+                    raise RuntimeError("Symlink in run directory; retain: " + str(path))
+                # Core points this at a shared service log. Snapshot the link,
+                # not its target (which may change for other running jobs).
+                result[key] = (entry.st_size, entry.st_mtime_ns, entry.st_ino,
+                               os.readlink(path))
+            elif stat.S_ISREG(entry.st_mode):
+                result[key] = (entry.st_size, entry.st_mtime_ns, entry.st_ino)
+            elif not stat.S_ISDIR(entry.st_mode):
+                raise RuntimeError("Special file in run directory; retain: " + str(path))
     return result
 
 
@@ -224,6 +236,7 @@ def process(directory, jobs, args, api_factory):
         ",".join(sorted(jobs)), size / 1024**3, destination), flush=True)
     if not args.apply:
         return 0
+    print("SYNC final upload: " + directory.name, flush=True)
     subprocess.run([sys.executable, "-m", "wandb", "sync", "--append",
                     "--include-offline", "--include-synced", "--no-mark-synced",
                     "--skip-console", "-e", args.entity, "-p", args.project, str(directory)],
@@ -231,6 +244,7 @@ def process(directory, jobs, args, api_factory):
     after_sync = snapshot(directory)
     if not unchanged(before, after_sync, allow_sync_metadata=True):
         raise RuntimeError("Run payload changed during final sync; retain")
+    print("VERIFY full cloud history and saved files: " + destination, flush=True)
     remote = api_factory().run(destination)
     points, files = verify_cloud(remote, data, directory, name)
     if (jobs & live_jobs() or not all(job_finished(j, args.repo) for j in jobs) or
@@ -273,11 +287,19 @@ def main():
         raise SystemExit("W&B/log roots must be existing ordinary directories")
     if args.min_age < 0 or args.sync_timeout <= 0:
         raise SystemExit("Invalid age/timeout")
+    print("START {}: indexing job logs under {}".format(
+        "APPLY" if args.apply else "PREVIEW", logs), flush=True)
     import wandb
-    index = job_index(logs, args.wandb_root, args.repo)
+    index = job_index(logs, args.wandb_root, args.repo, progress=True)
+    print("INDEX done: {} run directories mapped".format(len(index)), flush=True)
     removed = failed = 0
     with (args.wandb_root / ".gomarl-sync-once.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("WAIT: another sync holds .gomarl-sync-once.lock", flush=True)
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        print("CHECK: sync lock acquired; checking scheduler and run directories", flush=True)
         # A scheduler failure aborts before selecting any destructive target.
         live_jobs()
         for directory in sorted(args.wandb_root.iterdir()):

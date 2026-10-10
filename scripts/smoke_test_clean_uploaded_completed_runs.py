@@ -67,6 +67,48 @@ def expect_retained(directory, args, api, error=None, sync=None, jobs={"123"}):
         return upload.call_count
 
 
+def real_sdk_check(runtime):
+    """Reproduce the production core layout, with no network upload."""
+    import wandb
+    sdk_root = runtime / "sdk"
+    sdk_root.mkdir()
+    run = wandb.init(mode="offline", dir=str(sdk_root), entity="hjh331-sjtu",
+                     project="gomarl", name="cleanup_sdk_fixture",
+                     settings=wandb.Settings(console="off", _disable_stats=True))
+    directory = Path(run.dir).parent.resolve()
+    run_id = run.id
+    run.log({"t_env": 10000, "test_battle_won_mean": 0.4})
+    run.log({"t_env": 10000000, "test_battle_won_mean": 0.8})
+    run.finish()
+    link = directory / "logs/debug-core.log"
+    assert link.is_symlink(), "Expected real wandb-core 0.18.7 debug log link"
+    target = link.resolve()
+    assert target.is_file()
+    before = cleaner.snapshot(directory)
+    assert before["logs/debug-core.log"][3] == str(link.readlink())
+    data = directory / ("run-" + run_id + ".wandb")
+    rows = list(cleaner.histories(data))
+    saved = []
+    for path in (directory / "files").rglob("*"):
+        if path.is_file():
+            name = str(path.relative_to(directory / "files"))
+            if name not in cleaner.SDK_FILES:
+                saved.append(SimpleNamespace(name=name, size=path.stat().st_size,
+                    md5=hashlib.md5(path.read_bytes()).hexdigest()))
+    remote = SimpleNamespace(name="cleanup_sdk_fixture", state="finished",
+                             scan_history=lambda **kwargs: iter(rows),
+                             files=lambda: iter(saved))
+    args = SimpleNamespace(repo=runtime / "repo", wandb_root=directory.parent,
+                           apply=True, min_age=0, sync_timeout=10,
+                           entity="hjh331-sjtu", project="gomarl")
+    with patch.object(cleaner, "live_jobs", return_value=set()), \
+         patch.object(cleaner, "job_finished", return_value=True), \
+         patch.object(cleaner.subprocess, "run"):
+        assert cleaner.process(directory, {"123"}, args,
+                               lambda: SimpleNamespace(run=lambda path: remote)) > 0
+    assert not directory.exists() and target.is_file()
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="gomarl-safe-cleanup-") as tmp:
         runtime = Path(tmp).resolve()
@@ -146,6 +188,38 @@ def main():
         expect_retained(directory, args, api, RuntimeError)
         (directory / "unsafe_link").unlink()
         assert (outside / "keep").read_text() == "protected"
+        # Only the exact SDK log link is accepted. Never follow its shared target.
+        run_logs = directory / "logs"
+        run_logs.mkdir()
+        debug_link = run_logs / "debug-core.log"
+        shared_log = outside / "shared-debug.log"
+        shared_log.write_text("shared service log")
+        debug_link.symlink_to(shared_log)
+        before_link = cleaner.snapshot(directory)
+        shared_log.write_text("shared service log changed by another job")
+        assert cleaner.unchanged(before_link, cleaner.snapshot(directory))
+        debug_link.unlink()
+        debug_link.symlink_to(outside / "missing-debug.log")
+        dangling = cleaner.snapshot(directory)
+        assert "logs/debug-core.log" in dangling
+        assert not cleaner.unchanged(before_link, dangling)
+        debug_link.unlink()
+        debug_link.symlink_to(shared_log)
+        def changed_link(*unused, **kwargs):
+            debug_link.unlink()
+            debug_link.symlink_to(outside / "missing-debug.log")
+        expect_retained(directory, args, api, RuntimeError, changed_link)
+        debug_link.unlink()
+        run_logs.rmdir()
+        run_logs.symlink_to(outside, target_is_directory=True)
+        expect_retained(directory, args, api, RuntimeError)
+        run_logs.unlink()
+        run_logs.mkdir()
+        debug_link.symlink_to(shared_log)
+        unsafe_media = directory / "files/media/videos/unsafe.mp4"
+        unsafe_media.symlink_to(shared_log)
+        expect_retained(directory, args, api, RuntimeError)
+        unsafe_media.unlink()
         # Sync rewrites known SDK metadata, but payload changes remain forbidden.
         def sdk_metadata(*unused, **kwargs):
             (directory / "files/config.yaml").write_text("wandb_version: 1")
@@ -164,6 +238,7 @@ def main():
             assert freed > 0 and not directory.exists()
             assert upload.call_args.kwargs["check"] is True
         assert sacred.is_file() and log.is_file() and open_dir.is_dir()
+        assert shared_log.read_text() == "shared service log changed by another job"
         audit = json.loads((root / "completed_cleanup_audit.jsonl").read_text())
         assert audit["cloud"] == "hjh331-sjtu/gomarl/abcdefgh"
         assert audit["history_points"] == 2 and audit["verified_files"] == 1
@@ -172,7 +247,8 @@ def main():
         for record in ("123|RUNNING|" + str(args.repo), "123|COMPLETED|/another/repo", ""):
             with patch.object(cleaner, "command", return_value=record):
                 assert not cleaner.job_finished("123", args.repo)
-    print("PASS: closed core-style SDK records, exact terminal job proof, active/unknown/requeued protection, preview, failed sync/API history/media verification retains, changing files/symlinks blocked, audit failure retains, only verified W&B copy removed; Sacred/logs kept")
+        real_sdk_check(runtime)
+    print("PASS: synthetic and real core SDK runs; exact terminal job proof, active/unknown/requeued protection, preview, failed sync/API/history/media verification retains; SDK debug link/dangling link accepted without following target, shared log preserved, replaced/non-SDK links blocked; audit failure retains, only verified W&B copy removed; Sacred/job logs kept")
 
 
 if __name__ == "__main__":
