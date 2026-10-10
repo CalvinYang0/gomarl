@@ -17,15 +17,20 @@ MAP = "8m_vs_9m"
 
 
 def build_plans(repo):
+    return build_fixed_head_plans(repo, "smac_8m9m", MAP, GROUP)
+
+
+def build_fixed_head_plans(repo, scene, map_name, group):
+    """Shared matched settings; each caller supplies exact map and run namespace."""
     profiles = _load_profiles(repo)
     if profiles.ALL_PROFILES["baseline"] != {}:
         raise RuntimeError("Expected ungated baseline without auxiliary objectives")
     plans = []
     for method in ("vdn", "qmix"):
         for seed in (1, 2, 3):
-            name = "smac_8m9m_{}_baseline_10m_s{}_valuediag".format(method, seed)
-            plan = _plan(repo, profiles, "smac_8m9m", MAP, "smac",
-                         "linear_baseline", seed, name, "24G", GROUP)
+            name = "{}_{}_baseline_10m_s{}_valuediag".format(scene, method, seed)
+            plan = _plan(repo, profiles, scene, map_name, "smac",
+                         "linear_baseline", seed, name, "24G", group)
             plan["label"] = method
             exports = plan["exports"]
             # Same fixed two-layer ELU action head as the repository's paper
@@ -44,7 +49,7 @@ def build_plans(repo):
             ]
             plans.append(plan)
     if len(plans) != 6 or len({p["job_name"] for p in plans}) != 6:
-        raise RuntimeError("Expected six distinct 8m_vs_9m fixed-head jobs")
+        raise RuntimeError("Expected six distinct {} fixed-head jobs".format(map_name))
     return plans
 
 

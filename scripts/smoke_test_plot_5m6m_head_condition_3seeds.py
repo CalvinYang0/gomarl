@@ -12,7 +12,7 @@ import plot_5m6m_head_condition_3seeds as study
 
 def main():
     plans = study.build_plans(study.charts.ROOT)
-    assert len(plans) == 27
+    assert len(plans) == 33
     corrected_ids = [p for p in plans if p["label"] == "linear_id_baseline_5m"]
     assert {p["job_name"] for p in corrected_ids} == {
         "smac_5m6m_linear_id_5m_s{}_idkl80fix".format(seed) for seed in (1, 2, 3)
@@ -23,6 +23,12 @@ def main():
     } for p in corrected_ids)
     assert "5M" in study.LABELS["linear_id_baseline_5m"][0]
     for method in ("vdn", "qmix"):
+        new_controls = [p for p in plans if p["label"] == method]
+        assert {p["job_name"] for p in new_controls} == {
+            "smac_5m6m_{}_baseline_10m_s{}_valuediag".format(method, seed)
+            for seed in (1, 2, 3)
+        }
+        assert all(p["target_steps"] == 10000000 for p in new_controls)
         controls = [p for p in plans if p["label"] == "historical_" + method]
         assert {p["job_name"] for p in controls} == {
             "smac_5m6m_paper_{}_5m_s{}".format(method, seed) for seed in (1, 2, 3)
@@ -66,7 +72,7 @@ def main():
         output = runtime / "figures" / study.OUTPUT_SUBDIR
         with (output / "seed_inventory.csv").open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 27
+        assert len(inventory) == 33
         assert all("Historical 5M" in row["note"] for row in inventory
                    if row["model"] in {"historical_vdn", "historical_qmix"})
         assert all(row["source"] == "sacred" and row["points"] == "4"
@@ -99,7 +105,7 @@ def main():
             upload.side_effect = None
             study.upload_if_changed(*args)
             assert checkpoint.read_text() != before
-    print("PASS: nine groups, only corrected 5M ID plotted (no empty 10M ID group), historical VDN/QMIX, exact seeds, Sacred NumPy scalars, "
+    print("PASS: eleven groups, only corrected 5M ID plotted, separate new 10M/historical 5M VDN/QMIX, exact seeds, Sacred NumPy scalars, "
           "PNG/PDF, upload dedup and failure retry")
 
 

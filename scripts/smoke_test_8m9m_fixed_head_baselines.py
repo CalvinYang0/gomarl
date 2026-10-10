@@ -9,17 +9,22 @@ from utils.value_diagnostics import ValueDiagnosticSummary, collect_value_diagno
 
 
 def main():
+    check_map("8m_vs_9m", 8, 15, 85, 179)
+
+
+def check_map(map_name, n_agents, n_actions, obs_dim, state_dim):
     th.set_num_threads(1)
     initial_agent = None
     for method, mixer_type in (("vdn", VDNMixer), ("qmix", QMixer)):
         th.manual_seed(29)
         mac, learner, batch, logger = make_case(
-            "baseline", "8m_vs_9m", production_shapes=True,
+            "baseline", map_name, production_shapes=True,
             config_overrides={"clean_model_type": "qmix_minimal", "mixer": method},
         )
-        assert mac.args.n_agents == 8 and mac.args.n_actions == 15
-        assert mac.args.obs_shape == 85 and mac.args.state_shape == 179
-        assert mac.agent.hidden_dim == 64 and mac.agent.fc1.in_features == 108
+        assert mac.args.n_agents == n_agents and mac.args.n_actions == n_actions
+        assert mac.args.obs_shape == obs_dim and mac.args.state_shape == state_dim
+        assert mac.agent.hidden_dim == 64
+        assert mac.agent.fc1.in_features == obs_dim + n_actions + n_agents
         assert isinstance(mac.agent.rnn, th.nn.GRUCell)
         assert mac.agent.model_type == "qmix_minimal"
         assert mac.agent.fixed_head is not None and mac.agent.hyper_out_w is None
@@ -52,7 +57,7 @@ def main():
             assert total / n == 1 and "mixer_w1" not in summary.moments
         else:
             assert summary.moments["mixer_w1"][0] > 0
-        print("PASS: 8m_vs_9m {} production fixed GRU/head, TD-only update and value diagnostics".format(method))
+        print("PASS: {} {} production fixed GRU/head, TD-only update and value diagnostics".format(map_name, method))
 
 
 if __name__ == "__main__":

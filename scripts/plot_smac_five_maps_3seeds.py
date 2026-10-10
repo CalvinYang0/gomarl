@@ -5,7 +5,7 @@ Includes 3m, 8m (8 vs 8), 8m_vs_9m, 5m6m, 3s5z and 6h8z.
 
 All maps include the exact obs-based baseline runs. Only 5m6m also includes
 the corrected 5M linear-ID, linear-only KL80, state, all-ones, timestep, Obs+entity-ID experiments
-and separately labelled historical 5M VDN/QMIX controls. Completed
+and separately labelled new matched 10M and historical 5M VDN/QMIX controls. Completed
 and currently running histories are both eligible; Slurm state is not a
 filter. No historical attention-ID substitution. Upload once per invocation.
 """
@@ -35,8 +35,8 @@ def build_plans(repo):
                      if p["label"] == "linear_baseline")
     for plan in plans:
         plan.setdefault("target_steps", 10000000)
-    if len(plans) != 42 or len({p["job_name"] for p in plans}) != 42:
-        raise RuntimeError("Expected 42 distinct runs across six maps")
+    if len(plans) != 48 or len({p["job_name"] for p in plans}) != 48:
+        raise RuntimeError("Expected 48 distinct runs across six maps")
     for scene in SCENES:
         models = set(LABELS) if scene == "smac_5m6m" else {"linear_baseline"}
         selected = [p for p in plans if p["scene"] == scene]

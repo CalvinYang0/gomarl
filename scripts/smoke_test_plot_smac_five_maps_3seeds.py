@@ -12,7 +12,7 @@ import plot_smac_five_maps_3seeds as study
 
 def main():
     plans = study.build_plans(study.charts.ROOT)
-    assert len(plans) == 42
+    assert len(plans) == 48
     assert {p["scene"] for p in plans} == set(study.SCENES)
     assert not any(p["label"] == "hyper_hypermarl_id" for p in plans)
     # No queue filter: completed-map data is just as eligible as running data.
@@ -64,7 +64,7 @@ def main():
         output = runtime / "figures" / study.OUTPUT_SUBDIR
         with (output / "seed_inventory.csv").open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 42
+        assert len(inventory) == 48
         missing = [row for row in inventory if row["coverage"] == "missing"]
         assert len(missing) == 4
         assert all(row["source"] == "sacred" for row in inventory if row["points"] != "0")
@@ -80,7 +80,7 @@ def main():
                 assert (output / (scene + suffix)).stat().st_size > 1000
         assert study.charts.SCENE_MODELS["smac_3m"] == ("linear_baseline",)
         assert study.charts.SCENE_MODELS["smac_8m9m"] == ("linear_baseline",)
-        assert len(study.charts.SCENE_MODELS["smac_5m6m"]) == 9
+        assert len(study.charts.SCENE_MODELS["smac_5m6m"]) == 11
         assert "linear_id_baseline" not in study.charts.SCENE_MODELS["smac_5m6m"]
         with (output / "seed_curves.csv").open() as handle:
             raw_rows = list(csv.DictReader(handle))
@@ -97,7 +97,7 @@ def main():
                                            "--runtime-root", str(runtime)]):
                 study.main()
             upload.assert_not_called()
-    print("PASS: six maps, 42 exact runs including only corrected 5M ID and historical VDN/QMIX, separate 8v8/8v9 histories, missing seeds/pending state retained, "
+    print("PASS: six maps, 48 exact runs including corrected 5M ID and separate 10M/5M VDN/QMIX, separate 8v8/8v9 histories, missing seeds/pending state retained, "
           "completed histories eligible, per-map models, PNG/PDF and one upload")
 
 

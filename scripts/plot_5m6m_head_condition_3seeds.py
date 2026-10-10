@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload nine three-seed 5m6m groups, using the corrected 5M Linear ID control.
+"""Upload eleven 5m6m groups, separating new 10M and historical 5M mixer controls.
 
 Uses exact run names and the latest attempt per seed. Periodic invocations
 upload only when curve data, seed inventory or plotting settings change.
@@ -18,6 +18,7 @@ from ozstar_submit_5m6m_id_kl80_3seeds import build_plans as id_kl_plans
 from ozstar_submit_5m6m_global_state_3seeds import build_plans as state_plans
 from ozstar_submit_5m6m_ones_timestep_10m_3seeds import build_plans as signal_plans
 from ozstar_submit_5m6m_obs_entity_id_10m_3seeds import build_plans as entity_id_plans
+from ozstar_submit_5m6m_vdn_qmix_10m_3seeds import build_plans as mixer_plans
 
 GROUP = "smac_5m6m_head_condition_comparison_3seeds"
 OUTPUT_SUBDIR = "5m6m_head_condition_comparison_3seeds"
@@ -29,6 +30,8 @@ LABELS = {
     "linear_ones_baseline": ("Linear all-ones hyper-obs (10M)", "#8c564b"),
     "linear_timestep_baseline": ("Linear episode-timestep hyper-obs (10M)", "#e377c2"),
     "linear_obs_entity_id_baseline": ("Linear obs + absolute entity IDs (10M)", "#17becf"),
+    "vdn": ("VDN (new matched 10M)", "#ff7f0e"),
+    "qmix": ("QMIX (new matched 10M)", "#393b79"),
     "historical_vdn": ("VDN (historical 5M paper run)", "#d62728"),
     "historical_qmix": ("QMIX (historical 5M paper run)", "#7f7f7f"),
 }
@@ -51,6 +54,7 @@ def build_plans(repo):
     plans.extend(state_plans(repo))
     plans.extend(signal_plans(repo))
     plans.extend(entity_id_plans(repo))
+    plans.extend(mixer_plans(repo))
     for method in ("vdn", "qmix"):
         for seed in (1, 2, 3):
             plans.append({
@@ -70,8 +74,8 @@ def build_plans(repo):
                 "historical_vdn", "historical_qmix",
             } else 10000000
         )
-    if len(plans) != 27 or len({p["job_name"] for p in plans}) != 27:
-        raise RuntimeError("Expected twenty-seven distinct runs: nine groups, three seeds each")
+    if len(plans) != 33 or len({p["job_name"] for p in plans}) != 33:
+        raise RuntimeError("Expected thirty-three distinct runs: eleven groups, three seeds each")
     for label in LABELS:
         if {p["seed"] for p in plans if p["label"] == label} != {1, 2, 3}:
             raise RuntimeError("Incorrect seed inventory: " + label)
@@ -101,7 +105,7 @@ def upload_if_changed(project, output_dir, outputs, inventory, window):
 def configure():
     charts.GROUP = GROUP
     charts.DEFAULT_OUTPUT_SUBDIR = OUTPUT_SUBDIR
-    charts.RESULTS_TITLE = "head conditions / historical 5M VDN and QMIX controls"
+    charts.RESULTS_TITLE = "head conditions / new 10M and historical 5M VDN/QMIX controls"
     charts.REPORT_SEED_COVERAGE = True
     charts.TARGET_STEPS = 10000000
     charts.SCENES = {"smac_5m6m": ("5 Marines vs. 6 Marines", "test_battle_won_mean")}
