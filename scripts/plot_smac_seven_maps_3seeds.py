@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Legacy entry point, now including MMM2 and the fresh visualization cohorts."""
+"""Seven-map snapshot including all fresh visualization-covered head inputs."""
 from plot_smac_five_maps_3seeds import main
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload all fourteen configured 5m6m control cohorts, with explicit provenance.
+"""Upload all fifteen configured 5m6m control cohorts, with explicit provenance.
 
 Uses exact run names and the latest attempt per seed. Periodic invocations
 upload only when curve data, seed inventory or plotting settings change.
@@ -21,12 +21,13 @@ from ozstar_submit_5m6m_obs_entity_id_10m_3seeds import build_plans as entity_id
 from ozstar_submit_5m6m_vdn_qmix_10m_3seeds import build_plans as mixer_plans
 from ozstar_submit_5m6m_linear_id_10m_3seeds import build_plans as id_plans
 from ozstar_submit_5m6m_value_diagnostics_10m_3seeds import build_plans as original_plans
+from ozstar_submit_head_input_24jobs import build_plans as covered_plans, PLOT_LABELS
 
 GROUP = "smac_5m6m_head_condition_comparison_3seeds"
 OUTPUT_SUBDIR = "5m6m_head_condition_comparison_3seeds"
 LABELS = {
     "linear_baseline": ("Linear obs-based (10M)", "#1f77b4"),
-    "linear_id_baseline": ("Linear ID-based (10M)", "#e6550d"),
+    "linear_id_baseline": ("Linear ID-based (earlier 10M cohort; reference)", "#e6550d"),
     "linear_id_baseline_5m": ("Linear ID-based (corrected 5M run)", "#bcbd22"),
     "linear_bayesg_kl80_keep": ("Linear obs + direct KL80 (5M)", "#9467bd"),
     "linear_global_state_baseline": ("Linear global-state (10M)", "#2ca02c"),
@@ -39,6 +40,7 @@ LABELS = {
     "historical_qmix": ("QMIX (historical 5M paper run)", "#7f7f7f"),
     "original_linear_baseline": ("Linear obs (original 10M cohort; reference)", "#9edae5"),
     "hyper_hypermarl_id": ("Legacy attention-ID (10M budget; reference)", "#969696"),
+    "linear_id_baseline_vizcoverage": PLOT_LABELS["linear_id_baseline_vizcoverage"],
 }
 _BASE_UPLOAD = charts.upload
 
@@ -46,6 +48,9 @@ _BASE_UPLOAD = charts.upload
 def build_plans(repo):
     plans = [plan for plan in visualization_plans(repo) if plan["label"] == "linear_baseline"]
     plans.extend(id_plans(repo))
+    plans.extend(dict(p, label=p["label"] + "_vizcoverage",
+                      inventory_note="New 10M ID cohort with required battle/policy diagnostics; not old ID data")
+                 for p in covered_plans(repo) if p["scene"] == "smac_5m6m")
     for plan in original_plans(repo):
         plan = dict(plan)
         if plan["label"] == "linear_baseline":
@@ -88,8 +93,8 @@ def build_plans(repo):
                 "historical_vdn", "historical_qmix",
             } else 10000000
         )
-    if len(plans) != 42 or len({p["job_name"] for p in plans}) != 42:
-        raise RuntimeError("Expected forty-two distinct runs: fourteen groups, three seeds each")
+    if len(plans) != 45 or len({p["job_name"] for p in plans}) != 45:
+        raise RuntimeError("Expected forty-five distinct runs: fifteen groups, three seeds each")
     for label in LABELS:
         if {p["seed"] for p in plans if p["label"] == label} != {1, 2, 3}:
             raise RuntimeError("Incorrect seed inventory: " + label)

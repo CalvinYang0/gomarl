@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test one-shot six-map plotting with synthetic Sacred data; no W&B calls."""
+"""Test one-shot seven-map plotting with synthetic Sacred data; no W&B calls."""
 import csv
 import json
 from pathlib import Path
@@ -12,14 +12,14 @@ import plot_smac_five_maps_3seeds as study
 
 def main():
     plans = study.build_plans(study.charts.ROOT)
-    assert len(plans) == 78
+    assert len(plans) == 102
     assert {p["scene"] for p in plans} == set(study.SCENES)
     assert len([p for p in plans if p["label"] == "hyper_hypermarl_id"]) == 12
     # No queue filter: completed-map data is just as eligible as running data.
     marine_names = {}
     for scene, map_name in (("smac_8m", "8m"), ("smac_8m9m", "8m_vs_9m")):
         selected = [p for p in plans if p["scene"] == scene]
-        assert len(selected) == (3 if scene == "smac_8m" else 15)
+        assert len(selected) == (3 if scene == "smac_8m" else 18)
         assert {p["map_name"] for p in selected} == {map_name}
         marine_names[scene] = {p["job_name"] for p in selected if p["label"] == "linear_baseline"}
         assert marine_names[scene] == {
@@ -54,7 +54,7 @@ def main():
                     for v in wins
                 ],
             }))
-        # Default upload called exactly once for all six maps in one analysis run.
+        # Default upload called exactly once for all seven maps in one analysis run.
         with patch.object(study.charts, "upload") as upload:
             with patch.object(sys, "argv", ["plot", "--local-only",
                                            "--runtime-root", str(runtime)]):
@@ -64,7 +64,7 @@ def main():
         output = runtime / "figures" / study.OUTPUT_SUBDIR
         with (output / "seed_inventory.csv").open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 78
+        assert len(inventory) == 102
         missing = [row for row in inventory if row["coverage"] == "missing"]
         assert len(missing) == 4
         assert all(row["source"] == "sacred" for row in inventory if row["points"] != "0")
@@ -78,10 +78,14 @@ def main():
                 assert (output / (scene + suffix)).stat().st_size > 1000
         assert study.charts.SCENE_MODELS["smac_3m"] == ("linear_baseline",)
         assert set(study.charts.SCENE_MODELS["smac_8m9m"]) == {
-            "linear_baseline", "linear_id_baseline", "vdn", "qmix", "hyper_hypermarl_id"}
+            "linear_baseline", "linear_id_baseline", "vdn", "qmix", "hyper_hypermarl_id",
+            "linear_ones_baseline_vizcoverage"}
         assert set(study.charts.SCENE_MODELS["smac_6h8z"]) == {
             "linear_baseline", "linear_id_baseline", "hyper_hypermarl_id"}
-        assert len(study.charts.SCENE_MODELS["smac_5m6m"]) == 14
+        assert len(study.charts.SCENE_MODELS["smac_5m6m"]) == 15
+        assert set(study.charts.SCENE_MODELS["smac_mmm2"]) == set(study.PLOT_LABELS)
+        fresh = [row for row in inventory if row["model"].endswith("_vizcoverage")]
+        assert len(fresh) == 24 and all("vizcoverage" in row["run_name"] for row in fresh)
         assert "linear_id_baseline" in study.charts.SCENE_MODELS["smac_5m6m"]
         with (output / "seed_curves.csv").open() as handle:
             raw_rows = list(csv.DictReader(handle))
@@ -92,13 +96,15 @@ def main():
             assert all(float(row["win_fraction"]) == expected for row in terminal)
         import plot_smac_six_maps_3seeds as explicit_entry
         assert explicit_entry.main is study.main
+        import plot_smac_seven_maps_3seeds as new_entry
+        assert new_entry.main is study.main
         # Without upload flag no external write happens.
         with patch.object(study.charts, "upload") as upload:
             with patch.object(sys, "argv", ["plot", "--local-only", "--no-upload",
                                            "--runtime-root", str(runtime)]):
                 study.main()
             upload.assert_not_called()
-    print("PASS: six maps, 78 exact runs covering every current cohort, per-map VDN/QMIX/Linear-ID and legacy references, separate 8v8/8v9 histories, missing seeds retained, "
+    print("PASS: seven maps, 102 exact runs including 24 fresh replicas kept separate, per-map VDN/QMIX/Linear-ID and legacy references, separate 8v8/8v9 histories, missing seeds retained, "
           "completed histories eligible, per-map models, PNG/PDF and one upload")
 
 
