@@ -29,4 +29,7 @@ SUBMIT=YES /home/kyang/.conda/envs/marl_cpu/bin/python \
 5m6m 汇总图改为新 Obs，并选择真正的 10M Linear-ID 组
 smac_5m6m_linear_id_baseline_10m_s{1,2,3}_valuediag，而非旧 5M idkl80fix。
 六地图图的 5m6m 面板同步使用这些选择；没有新组历史时显示缺失，不用旧数据代替。
-ID-only、global state、KL80 不在这次补提交范围，保留已有任务；KL80 仍按实际 5M 标注。
+ID-only、global state、KL80 不在这次 18-job 入口的补提交范围；KL80 仍按实际 5M 标注。
+注意：存在 ID 10M 配置并不证明它已经提交。此前“保留已有任务”的表述不能充当 job ID 证据。
+现在可用 `scripts/ozstar_submit_5m6m_linear_id_10m_3seeds.py` 单独补齐 5m6m 线性 ID 三种子 10M；
+只有同名 active/completed 作业才保留，其余通过预检后提交，实际成功仍须以返回的 job ID 为准。

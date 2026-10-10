@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload eleven 5m6m groups, separating new 10M and historical 5M mixer controls.
+"""Upload all fourteen configured 5m6m control cohorts, with explicit provenance.
 
 Uses exact run names and the latest attempt per seed. Periodic invocations
 upload only when curve data, seed inventory or plotting settings change.
@@ -19,11 +19,14 @@ from ozstar_submit_5m6m_global_state_3seeds import build_plans as state_plans
 from ozstar_submit_5m6m_ones_timestep_10m_3seeds import build_plans as signal_plans
 from ozstar_submit_5m6m_obs_entity_id_10m_3seeds import build_plans as entity_id_plans
 from ozstar_submit_5m6m_vdn_qmix_10m_3seeds import build_plans as mixer_plans
+from ozstar_submit_5m6m_linear_id_10m_3seeds import build_plans as id_plans
+from ozstar_submit_5m6m_value_diagnostics_10m_3seeds import build_plans as original_plans
 
 GROUP = "smac_5m6m_head_condition_comparison_3seeds"
 OUTPUT_SUBDIR = "5m6m_head_condition_comparison_3seeds"
 LABELS = {
     "linear_baseline": ("Linear obs-based (10M)", "#1f77b4"),
+    "linear_id_baseline": ("Linear ID-based (10M)", "#e6550d"),
     "linear_id_baseline_5m": ("Linear ID-based (corrected 5M run)", "#bcbd22"),
     "linear_bayesg_kl80_keep": ("Linear obs + direct KL80 (5M)", "#9467bd"),
     "linear_global_state_baseline": ("Linear global-state (10M)", "#2ca02c"),
@@ -34,12 +37,23 @@ LABELS = {
     "qmix": ("QMIX (new matched 10M)", "#393b79"),
     "historical_vdn": ("VDN (historical 5M paper run)", "#d62728"),
     "historical_qmix": ("QMIX (historical 5M paper run)", "#7f7f7f"),
+    "original_linear_baseline": ("Linear obs (original 10M cohort; reference)", "#9edae5"),
+    "hyper_hypermarl_id": ("Legacy attention-ID (10M budget; reference)", "#969696"),
 }
 _BASE_UPLOAD = charts.upload
 
 
 def build_plans(repo):
     plans = [plan for plan in visualization_plans(repo) if plan["label"] == "linear_baseline"]
+    plans.extend(id_plans(repo))
+    for plan in original_plans(repo):
+        plan = dict(plan)
+        if plan["label"] == "linear_baseline":
+            plan["label"] = "original_linear_baseline"
+            plan["inventory_note"] = "Original scalar-only Obs cohort; not the visualization rerun"
+        else:
+            plan["inventory_note"] = "Legacy attention-ID reference; not the corrected Linear ID architecture"
+        plans.append(plan)
     for plan in id_kl_plans(repo):
         if plan["label"] == "linear_id_baseline":
             plans.append(dict(
@@ -74,8 +88,8 @@ def build_plans(repo):
                 "historical_vdn", "historical_qmix",
             } else 10000000
         )
-    if len(plans) != 33 or len({p["job_name"] for p in plans}) != 33:
-        raise RuntimeError("Expected thirty-three distinct runs: eleven groups, three seeds each")
+    if len(plans) != 42 or len({p["job_name"] for p in plans}) != 42:
+        raise RuntimeError("Expected forty-two distinct runs: fourteen groups, three seeds each")
     for label in LABELS:
         if {p["seed"] for p in plans if p["label"] == label} != {1, 2, 3}:
             raise RuntimeError("Incorrect seed inventory: " + label)
@@ -110,6 +124,7 @@ def configure():
     charts.TARGET_STEPS = 10000000
     charts.SCENES = {"smac_5m6m": ("5 Marines vs. 6 Marines", "test_battle_won_mean")}
     charts.LABELS = LABELS
+    charts.SCENE_MODELS = {"smac_5m6m": tuple(LABELS)}
     charts.build_plans = build_plans
     charts.upload = upload_if_changed
 

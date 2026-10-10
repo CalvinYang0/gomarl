@@ -12,16 +12,16 @@ import plot_smac_five_maps_3seeds as study
 
 def main():
     plans = study.build_plans(study.charts.ROOT)
-    assert len(plans) == 48
+    assert len(plans) == 78
     assert {p["scene"] for p in plans} == set(study.SCENES)
-    assert not any(p["label"] == "hyper_hypermarl_id" for p in plans)
+    assert len([p for p in plans if p["label"] == "hyper_hypermarl_id"]) == 12
     # No queue filter: completed-map data is just as eligible as running data.
     marine_names = {}
     for scene, map_name in (("smac_8m", "8m"), ("smac_8m9m", "8m_vs_9m")):
         selected = [p for p in plans if p["scene"] == scene]
-        assert len(selected) == 3
+        assert len(selected) == (3 if scene == "smac_8m" else 15)
         assert {p["map_name"] for p in selected} == {map_name}
-        marine_names[scene] = {p["job_name"] for p in selected}
+        marine_names[scene] = {p["job_name"] for p in selected if p["label"] == "linear_baseline"}
         assert marine_names[scene] == {
             f"{scene}_linear_obs_baseline_10m_s{seed}_valuediag"
             for seed in (1, 2, 3)
@@ -64,30 +64,31 @@ def main():
         output = runtime / "figures" / study.OUTPUT_SUBDIR
         with (output / "seed_inventory.csv").open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 48
+        assert len(inventory) == 78
         missing = [row for row in inventory if row["coverage"] == "missing"]
         assert len(missing) == 4
         assert all(row["source"] == "sacred" for row in inventory if row["points"] != "0")
         for scene in study.SCENES:
             with (output / (scene + "_aggregate.csv")).open() as handle:
                 aggregate = list(csv.DictReader(handle))
-            expected = set(study.LABELS) - {"linear_global_state_baseline"}
-            if scene != "smac_5m6m":
-                expected = {"linear_baseline"}
+            expected = set(study.SCENE_MODELS[scene]) - {"linear_global_state_baseline"}
             assert {row["model"] for row in aggregate} == expected
             assert {row["seed_count"] for row in aggregate} == ({"2"} if scene == "smac_3m" else {"3"})
             for suffix in ("_three_seed.png", "_three_seed.pdf", "_individual_seeds.png"):
                 assert (output / (scene + suffix)).stat().st_size > 1000
         assert study.charts.SCENE_MODELS["smac_3m"] == ("linear_baseline",)
-        assert study.charts.SCENE_MODELS["smac_8m9m"] == ("linear_baseline",)
-        assert len(study.charts.SCENE_MODELS["smac_5m6m"]) == 11
-        assert "linear_id_baseline" not in study.charts.SCENE_MODELS["smac_5m6m"]
+        assert set(study.charts.SCENE_MODELS["smac_8m9m"]) == {
+            "linear_baseline", "linear_id_baseline", "vdn", "qmix", "hyper_hypermarl_id"}
+        assert set(study.charts.SCENE_MODELS["smac_6h8z"]) == {
+            "linear_baseline", "linear_id_baseline", "hyper_hypermarl_id"}
+        assert len(study.charts.SCENE_MODELS["smac_5m6m"]) == 14
+        assert "linear_id_baseline" in study.charts.SCENE_MODELS["smac_5m6m"]
         with (output / "seed_curves.csv").open() as handle:
             raw_rows = list(csv.DictReader(handle))
         for scene, expected in (("smac_8m", 0.98), ("smac_8m9m", 0.8)):
             terminal = [row for row in raw_rows
                         if row["scene"] == scene and float(row["step"]) == 2000000]
-            assert len(terminal) == 3
+            assert len(terminal) == len(study.SCENE_MODELS[scene]) * 3
             assert all(float(row["win_fraction"]) == expected for row in terminal)
         import plot_smac_six_maps_3seeds as explicit_entry
         assert explicit_entry.main is study.main
@@ -97,7 +98,7 @@ def main():
                                            "--runtime-root", str(runtime)]):
                 study.main()
             upload.assert_not_called()
-    print("PASS: six maps, 48 exact runs including corrected 5M ID and separate 10M/5M VDN/QMIX, separate 8v8/8v9 histories, missing seeds/pending state retained, "
+    print("PASS: six maps, 78 exact runs covering every current cohort, per-map VDN/QMIX/Linear-ID and legacy references, separate 8v8/8v9 histories, missing seeds retained, "
           "completed histories eligible, per-map models, PNG/PDF and one upload")
 
 

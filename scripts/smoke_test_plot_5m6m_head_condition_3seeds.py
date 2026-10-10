@@ -12,7 +12,7 @@ import plot_5m6m_head_condition_3seeds as study
 
 def main():
     plans = study.build_plans(study.charts.ROOT)
-    assert len(plans) == 33
+    assert len(plans) == 42
     corrected_ids = [p for p in plans if p["label"] == "linear_id_baseline_5m"]
     assert {p["job_name"] for p in corrected_ids} == {
         "smac_5m6m_linear_id_5m_s{}_idkl80fix".format(seed) for seed in (1, 2, 3)
@@ -37,13 +37,15 @@ def main():
         assert all("Historical 5M" in p["inventory_note"] for p in controls)
         assert "historical 5M" in study.LABELS["historical_" + method][0]
     assert sum("entityidcond" in p["job_name"] for p in plans) == 3
-    assert not any(p["label"] == "hyper_hypermarl_id" for p in plans)
+    legacy = [p for p in plans if p["label"] == "hyper_hypermarl_id"]
+    assert len(legacy) == 3 and all("Legacy attention-ID" in p["inventory_note"] for p in legacy)
     assert sum("statecond" in p["job_name"] for p in plans) == 3
     assert sum("idkl80fix" in p["job_name"] for p in plans) == 6
     assert sum("_recheck" in p["job_name"] for p in plans) == 3
-    # The current comparison contains exactly one ID group, at its actual budget.
-    assert "linear_id_baseline" not in study.LABELS
-    assert not any("linear_id_baseline_10m" in p["job_name"] for p in plans)
+    assert {p["job_name"] for p in plans if p["label"] == "linear_id_baseline"} == {
+        "smac_5m6m_linear_id_baseline_10m_s{}_valuediag".format(seed) for seed in (1, 2, 3)
+    }
+    assert len([p for p in plans if p["label"] == "original_linear_baseline"]) == 3
     assert sum("signalcond" in p["job_name"] for p in plans) == 6
     for plan in plans:
         assert plan["target_steps"] in (5000000, 10000000)
@@ -55,6 +57,9 @@ def main():
             study.main()
         assert not list(empty_runtime.rglob("*.png"))
         for plan in plans:
+            # Old 5M/attention ID must not silently replace missing 10M ID.
+            if plan["label"] == "linear_id_baseline":
+                continue
             path = runtime / "results/sacred/5m_vs_6m" / plan["label"] / str(plan["seed"])
             path.mkdir(parents=True)
             (path / "config.json").write_text(json.dumps({"wandb_run_name": plan["job_name"]}))
@@ -72,15 +77,16 @@ def main():
         output = runtime / "figures" / study.OUTPUT_SUBDIR
         with (output / "seed_inventory.csv").open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 33
+        assert len(inventory) == 42
         assert all("Historical 5M" in row["note"] for row in inventory
                    if row["model"] in {"historical_vdn", "historical_qmix"})
         assert all(row["source"] == "sacred" and row["points"] == "4"
-                   for row in inventory)
-        assert not any(row["model"] == "linear_id_baseline" for row in inventory)
+                   for row in inventory if row["model"] != "linear_id_baseline")
+        missing_ids = [row for row in inventory if row["model"] == "linear_id_baseline"]
+        assert len(missing_ids) == 3 and all(row["coverage"] == "missing" for row in missing_ids)
         with (output / "smac_5m6m_aggregate.csv").open() as handle:
             aggregate = list(csv.DictReader(handle))
-        assert {row["model"] for row in aggregate} == set(study.LABELS)
+        assert {row["model"] for row in aggregate} == set(study.LABELS) - {"linear_id_baseline"}
         assert all(row["seed_count"] == "3" for row in aggregate)
         for name in ("smac_5m6m_three_seed.png", "smac_5m6m_three_seed.pdf",
                      "smac_5m6m_individual_seeds.png"):
@@ -105,7 +111,7 @@ def main():
             upload.side_effect = None
             study.upload_if_changed(*args)
             assert checkpoint.read_text() != before
-    print("PASS: eleven groups, only corrected 5M ID plotted, separate new 10M/historical 5M VDN/QMIX, exact seeds, Sacred NumPy scalars, "
+    print("PASS: fourteen cohorts, explicit missing 10M ID with no old-ID fallback, separate new/legacy architectures and budgets, exact seeds, Sacred NumPy scalars, "
           "PNG/PDF, upload dedup and failure retry")
 
 
