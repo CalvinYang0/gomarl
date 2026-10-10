@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload nine three-seed 5m6m groups, including historical VDN/QMIX controls.
+"""Upload ten three-seed 5m6m groups, with separate 5M/10M Linear ID controls.
 
 Uses exact run names and the latest attempt per seed. Periodic invocations
 upload only when curve data, seed inventory or plotting settings change.
@@ -25,6 +25,7 @@ OUTPUT_SUBDIR = "5m6m_head_condition_comparison_3seeds"
 LABELS = {
     "linear_baseline": ("Linear obs-based (10M)", "#1f77b4"),
     "linear_id_baseline": ("Linear ID-based (10M)", "#ff7f0e"),
+    "linear_id_baseline_5m": ("Linear ID-based (corrected 5M run)", "#bcbd22"),
     "linear_bayesg_kl80_keep": ("Linear obs + direct KL80 (5M)", "#9467bd"),
     "linear_global_state_baseline": ("Linear global-state (10M)", "#2ca02c"),
     "linear_ones_baseline": ("Linear all-ones hyper-obs (10M)", "#8c564b"),
@@ -39,7 +40,17 @@ _BASE_UPLOAD = charts.upload
 def build_plans(repo):
     plans = [plan for plan in visualization_plans(repo) if plan["label"] == "linear_baseline"]
     plans.extend(plan for plan in id_plans(repo) if plan["scene"] == "smac_5m6m")
-    plans.extend(plan for plan in id_kl_plans(repo) if plan["label"] == "linear_bayesg_kl80_keep")
+    for plan in id_kl_plans(repo):
+        if plan["label"] == "linear_id_baseline":
+            plans.append(dict(
+                plan, label="linear_id_baseline_5m",
+                inventory_note=(
+                    "Corrected single-linear ID 5M control (idkl80fix); "
+                    "not historical attention-ID, not a replacement for the 10M group"
+                ),
+            ))
+        elif plan["label"] == "linear_bayesg_kl80_keep":
+            plans.append(plan)
     plans.extend(state_plans(repo))
     plans.extend(signal_plans(repo))
     plans.extend(entity_id_plans(repo))
@@ -58,11 +69,12 @@ def build_plans(repo):
         plan["target_steps"] = (
             5000000 if plan["label"] in {
                 "linear_bayesg_kl80_keep",
+                "linear_id_baseline_5m",
                 "historical_vdn", "historical_qmix",
             } else 10000000
         )
-    if len(plans) != 27 or len({p["job_name"] for p in plans}) != 27:
-        raise RuntimeError("Expected twenty-seven distinct runs: nine models, three seeds each")
+    if len(plans) != 30 or len({p["job_name"] for p in plans}) != 30:
+        raise RuntimeError("Expected thirty distinct runs: ten groups, three seeds each")
     for label in LABELS:
         if {p["seed"] for p in plans if p["label"] == label} != {1, 2, 3}:
             raise RuntimeError("Incorrect seed inventory: " + label)
