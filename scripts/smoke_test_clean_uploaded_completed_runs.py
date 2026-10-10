@@ -109,6 +109,61 @@ def real_sdk_check(runtime):
     assert not directory.exists() and target.is_file()
 
 
+def direct_cleanup_check(runtime):
+    root = runtime / "direct-wandb"
+    root.mkdir()
+    # A killed job may have no SDK exit. Explicit ended-local mode permits it.
+    directory, _, _, _, _ = fixture(root, "direct123", closed=False)
+    args = SimpleNamespace(repo=runtime / "repo", wandb_root=root, apply=False,
+                           delete_ended_local=True, min_age=0, sync_timeout=10,
+                           entity="hjh331-sjtu", project="gomarl")
+    shared = runtime / "direct-shared.log"
+    shared.write_text("shared log stays")
+    (directory / "logs").mkdir()
+    (directory / "logs/debug-core.log").symlink_to(shared)
+    with patch.object(cleaner, "identity", side_effect=AssertionError("No SDK/cloud checks")), \
+         patch.object(cleaner, "verify_cloud", side_effect=AssertionError("No cloud checks")):
+        assert expect_retained(directory, args, None) == 0
+        args.apply = True
+        assert expect_retained(directory, args, None, jobs=set()) == 0
+        for live in ({"123"}, {"123", "other-running-job"}):
+            with patch.object(cleaner, "live_jobs", return_value=live):
+                assert cleaner.process(directory, {"123"}, args, None) == 0
+        with patch.object(cleaner, "live_jobs", return_value=set()), \
+             patch.object(cleaner, "job_finished", return_value=False):
+            assert cleaner.process(directory, {"123"}, args, None) == 0
+        args.min_age = 300
+        assert expect_retained(directory, args, None) == 0
+        args.min_age = 0
+        for active_again in (True, False):
+            with patch.object(cleaner, "live_jobs", side_effect=[set(), {"123"} if active_again else set()]), \
+                 patch.object(cleaner, "job_finished", side_effect=[True, False]):
+                try:
+                    cleaner.process(directory, {"123"}, args, None)
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("Requeued/nonterminal job must stay")
+        before = cleaner.snapshot(directory)
+        changed = dict(before, new_payload=(1, 1, 1))
+        with patch.object(cleaner, "snapshot", side_effect=[before, changed]):
+            assert expect_retained(directory, args, None, RuntimeError) == 0
+        with patch.object(cleaner, "write_audit", side_effect=OSError("full disk")):
+            assert expect_retained(directory, args, None, OSError) == 0
+        with patch.object(cleaner, "live_jobs", return_value={"other-running-job"}), \
+             patch.object(cleaner, "job_finished", return_value=True), \
+             patch.object(cleaner.subprocess, "run") as upload:
+            assert cleaner.process(directory, {"123"}, args, None) > 0
+            upload.assert_not_called()
+    assert not directory.exists() and shared.read_text() == "shared log stays"
+    audit = json.loads((root / "completed_cleanup_audit.jsonl").read_text())
+    assert audit["cloud_verified"] is False
+    assert audit["status"] == "ended_local_before_remove"
+    assert (runtime / "results/sacred/keep.json").is_file()
+    assert (runtime / "ozstar_logs/synthetic_run_123.out").is_file()
+    print("PASS: explicit ended-local mode skips SDK/cloud/upload; unfinished SDK record removable only with terminal job proof; live/unknown/requeued/recent/changing files protected, audit failure retains, shared/Sacred/job logs kept")
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="gomarl-safe-cleanup-") as tmp:
         runtime = Path(tmp).resolve()
@@ -248,6 +303,7 @@ def main():
             with patch.object(cleaner, "command", return_value=record):
                 assert not cleaner.job_finished("123", args.repo)
         real_sdk_check(runtime)
+        direct_cleanup_check(runtime)
     print("PASS: synthetic and real core SDK runs; exact terminal job proof, active/unknown/requeued protection, preview, failed sync/API/history/media verification retains; SDK debug link/dangling link accepted without following target, shared log preserved, replaced/non-SDK links blocked; audit failure retains, only verified W&B copy removed; Sacred/job logs kept")
 
 

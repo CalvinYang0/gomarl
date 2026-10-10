@@ -4,6 +4,24 @@
 不要求整个队列为空：可保留其他运行中任务，只逐项处理已结束的 job。
 不会修改训练或 tmux，不取消作业。
 
+## 直接删除已结束任务的本地目录（明确跳过云端核验）
+
+`--delete-ended-local` 是独立的显式选项；默认模式的完整上传核验不变。
+加 `--apply` 后，不同步、不调用 W&B API，也不要求 SDK exit 记录，
+直接删除有精确日志归属、Slurm 确认已结束的本地 `offline-run-*` 目录。
+包括已失败/取消/超时的任务。仍检查运行/排队/重排状态、目录边界、近期修改和删除前快照；
+无法确认归属或终态的目录保留。与同步器共用锁，Sacred、作业日志、共享缓存均不动。
+**本地二进制、媒体和 debug 日志永久删除；未完整上传的部分可能无法恢复。**
+
+```bash
+/home/kyang/.conda/envs/marl_cpu/bin/python -u \
+  scripts/ozstar_clean_uploaded_completed_runs.py --delete-ended-local --apply
+```
+
+去掉 `--apply` 仅预览，不上传、不删除。审计记录明确标注 `cloud_verified=false`。
+
+## 默认完整上传核验模式
+
 删除条件全部满足才清理：
 
 1. Slurm 输出日志明确提及这个精确 offline-run 目录，关联 job 的 WorkDir 为本仓库。

@@ -3,6 +3,7 @@
 
 Preview by default. --apply permits final upload and irreversible local removal.
 Never delete Sacred, Slurm logs, shared caches, or a live/unknown job's records.
+--delete-ended-local explicitly skips upload/cloud checks for terminal jobs.
 """
 import argparse
 import base64
@@ -227,9 +228,30 @@ def process(directory, jobs, args, api_factory):
         raise RuntimeError("Not an ordinary offline-run directory")
     data = directory / ("run-" + match.group(2) + ".wandb")
     before = snapshot(directory)
-    if not data.is_file() or time.time() - max(p[1] for p in before.values()) / 1e9 < args.min_age:
+    direct = getattr(args, "delete_ended_local", False)
+    if ((not direct and not data.is_file()) or
+            (before and time.time() - max(p[1] for p in before.values()) / 1e9 < args.min_age)):
         print("RETAIN missing/recently modified data: " + directory.name, flush=True)
         return 0
+    if direct:
+        # Explicit user opt-in: terminal Slurm proof, not cloud backup proof.
+        # This also handles ended/crashed runs without an SDK exit record.
+        size = sum(p[0] for p in before.values())
+        print("CANDIDATE ended-local jobs={} GiB={:.3f} directory={}; cloud NOT checked".format(
+            ",".join(sorted(jobs)), size / 1024**3, directory), flush=True)
+        if not args.apply:
+            return 0
+        if (jobs & live_jobs() or not all(job_finished(j, args.repo) for j in jobs) or
+                directory.is_symlink() or directory.resolve().parent != args.wandb_root or
+                not unchanged(before, snapshot(directory))):
+            raise RuntimeError("Job/files changed before local deletion; retain")
+        audit = dict(time=time.time(), directory=str(directory), jobs=sorted(jobs),
+                     bytes=size, cloud_verified=False, status="ended_local_before_remove")
+        write_audit(args, audit)
+        shutil.rmtree(directory)
+        print("REMOVED ended local W&B directory: {} ({:.3f} GiB); NO cloud verification; "
+              "Sacred/job logs/shared caches untouched".format(directory, size / 1024**3), flush=True)
+        return size
     destination, name = identity(data, match.group(2), args.entity, args.project)
     size = sum(p[0] for p in before.values())
     print("CANDIDATE jobs={} GiB={:.3f} run={}".format(
@@ -255,19 +277,25 @@ def process(directory, jobs, args, api_factory):
     audit = dict(time=time.time(), directory=str(directory), jobs=sorted(jobs),
                  cloud=destination, bytes=size, history_points=points, verified_files=files,
                  status="verified_before_remove")
-    with (args.wandb_root / "completed_cleanup_audit.jsonl").open("a") as handle:
-        handle.write(json.dumps(audit) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
+    write_audit(args, audit)
     shutil.rmtree(directory)
     print("REMOVED local W&B copy: {} ({:.3f} GiB); cloud={}, Sacred/logs untouched".format(
         directory, size / 1024**3, destination), flush=True)
     return size
 
 
+def write_audit(args, audit):
+    with (args.wandb_root / "completed_cleanup_audit.jsonl").open("a") as handle:
+        handle.write(json.dumps(audit) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--delete-ended-local", action="store_true",
+                        help="Delete terminal jobs' local W&B directories WITHOUT upload/cloud verification; irreversible")
     parser.add_argument("--repo", type=Path, default=Path(os.environ.get("REPO_DIR", "/home/kyang/code/gomarl-dual-branch")))
     parser.add_argument("--runtime-root", type=Path, default=Path(os.environ.get("RUNTIME_ROOT", "/home/kyang/gomarl-runtime/gomarl-dual-branch")))
     parser.add_argument("--min-age", type=int, default=300)
@@ -289,7 +317,13 @@ def main():
         raise SystemExit("Invalid age/timeout")
     print("START {}: indexing job logs under {}".format(
         "APPLY" if args.apply else "PREVIEW", logs), flush=True)
-    import wandb
+    api_factory = None
+    if args.delete_ended_local:
+        print("MODE ended-local: NO upload or cloud verification; local records/media "
+              "may have NO recoverable cloud copy", flush=True)
+    else:
+        import wandb
+        api_factory = lambda: wandb.Api(timeout=90)
     index = job_index(logs, args.wandb_root, args.repo, progress=True)
     print("INDEX done: {} run directories mapped".format(len(index)), flush=True)
     removed = failed = 0
@@ -307,7 +341,7 @@ def main():
                 continue
             try:
                 removed += process(directory, index.get(directory.name, set()), args,
-                                   lambda: wandb.Api(timeout=90))
+                                   api_factory)
             except Exception as exc:
                 failed += 1
                 print("RETAIN {}: {}".format(directory.name, exc), file=sys.stderr, flush=True)
