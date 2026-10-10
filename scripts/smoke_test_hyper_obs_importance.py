@@ -16,9 +16,9 @@ from utils.logging import Logger
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def check_real_path(scene):
+def check_real_path(scene, label="linear_baseline"):
     th.manual_seed(43)
-    mac, learner, batch, logger = make_case("linear_baseline", scene, production_shapes=True)
+    mac, learner, batch, logger = make_case(label, scene, production_shapes=True)
     assert supported(mac.agent)
     batch["filled"][1, 3] = 1  # Real post-terminal observation snapshot.
     batch["avail_actions"][0, 1, 0] = 0
@@ -32,14 +32,17 @@ def check_real_path(scene):
                              policy_hidden.reshape(-1, mac.agent.hidden_dim)).reshape_as(real_q)
             assert th.allclose(real_q, pure_q, atol=1e-6)
     # Check exact parameter derivatives using a finite perturbation.
-    encoder = mac.agent.rpg_relation_capturer.dual_linear_encoder
+    capturer = mac.agent.rpg_relation_capturer
+    encoder = capturer.dual_linear_encoder
+    def condition_obs(obs):
+        return capturer.health_only_hyper_input(obs) if label == "linear_health_baseline" else obs
     obs = batch["obs"][0, 0]
     changed = obs.clone()
     changed[:, 8] += .2  # Affine generator: larger step avoids float32 cancellation.
     with th.no_grad():
         for name, jacobian in zip(("hyper_bottleneck_w", "hyper_bottleneck_b", "hyper_out_w", "hyper_out_b"), head_jacobian(mac.agent)):
             layer = getattr(mac.agent, name)
-            finite = (layer(encoder(changed)) - layer(encoder(obs))) / .2
+            finite = (layer(encoder(condition_obs(changed))) - layer(encoder(condition_obs(obs)))) / .2
             assert th.allclose(finite, jacobian[:, 8].expand_as(finite), atol=2e-5)
     saved_hidden, saved_condition = mac.hidden_states, mac.agent.latest_condition
     parameter = next(mac.agent.parameters())
@@ -60,11 +63,11 @@ def check_real_path(scene):
     assert all(module.training == mode for module, mode in modes)
     assert all(th.equal(value, saved_params[name]) for name, value in mac.agent.state_dict().items())
     assert all(th.equal(batch[key], value) for key, value in saved_batch.items())
-    print("PASS:", scene, "pure Q == production Q; exact Jacobian; masks; state/RNG/grad/parameter isolation")
+    print("PASS:", scene, label, "pure Q == production Q; exact Jacobian; masks; state/RNG/grad/parameter isolation")
 
 
-def known_feature_and_output():
-    mac, _, batch, logger = make_case("linear_baseline", "5m_vs_6m", production_shapes=True)
+def known_feature_and_output(label="linear_baseline"):
+    mac, _, batch, logger = make_case(label, "5m_vs_6m", production_shapes=True)
     assert supported(mac.agent)
     names = list(mac.agent.rpg_relation_capturer.semantic_names)
     important = names.index("enemy_0_health")
@@ -97,7 +100,7 @@ def known_feature_and_output():
     args.test_hyper_obs_importance_interval = 1000000
     args.test_hyper_obs_importance_episodes = 2
     args.test_hyper_obs_importance_samples = 50
-    args.seed, args.unique_token = 43, "SYNTHETIC_QA_NOT_EXPERIMENT"
+    args.seed, args.unique_token = 43, "SYNTHETIC_QA_NOT_EXPERIMENT_" + label
     args.local_results_path = str(ROOT / "output/hyper-obs-importance-smoke")
     args.wandb_run_name = "SYNTHETIC_ONLY_KNOWN_FEATURE"
     logger.use_wandb, logger.wandb_current_t, logger.wandb_current_data = True, 1000000, {}
@@ -137,7 +140,9 @@ if __name__ == "__main__":
     th.set_num_threads(1)
     for scene in ("5m_vs_6m", "8m_vs_9m"):
         check_real_path(scene)
+    check_real_path("5m_vs_6m", "linear_health_baseline")
     for label in ("linear_id_baseline", "linear_ones_baseline", "linear_timestep_baseline", "linear_bayesg_kl80_keep"):
         mac, _, _, _ = make_case(label, "5m_vs_6m")
         assert not supported(mac.agent), label
     known_feature_and_output()
+    known_feature_and_output("linear_health_baseline")

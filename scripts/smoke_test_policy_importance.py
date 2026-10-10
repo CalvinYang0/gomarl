@@ -162,7 +162,7 @@ def session_and_requirements(mac, batch, logger):
 
 def main():
     th.set_num_threads(1)
-    for label in ("linear_baseline", "linear_id_baseline", "linear_ones_baseline",
+    for label in ("linear_baseline", "linear_id_baseline", "linear_ones_baseline", "linear_health_baseline",
                   "linear_timestep_baseline", "linear_global_state_baseline",
                   "linear_obs_entity_id_baseline", "linear_bayesg_kl80_keep", "baseline"):
         mac, batch, logger = check_model(label)

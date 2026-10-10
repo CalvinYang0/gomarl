@@ -59,8 +59,8 @@ def build_plans(repo):
                  for p in covered_plans(repo) if p["scene"] != "smac_5m6m")
     for plan in plans:
         plan.setdefault("target_steps", 10000000)
-    if len(plans) != 102 or len({p["job_name"] for p in plans}) != 102:
-        raise RuntimeError("Expected 102 distinct runs across seven maps")
+    if len(plans) != 105 or len({p["job_name"] for p in plans}) != 105:
+        raise RuntimeError("Expected 105 distinct runs across seven maps")
     for scene in SCENES:
         models = set(SCENE_MODELS[scene])
         selected = [p for p in plans if p["scene"] == scene]

@@ -40,6 +40,7 @@ ABLATION_PROFILES = {
     # Same encoder/head/GRU/mixer as Obs. Replace only the hypernetwork's
     # raw condition observation; no extra adapter or trainable parameters.
     "linear_ones_baseline": {"branch": "linear", "hyper_obs_fill": "ones"},
+    "linear_health_baseline": {"branch": "linear", "hyper_obs_fill": "health_only"},
     "linear_timestep_baseline": {
         "branch": "linear", "hyper_obs_fill": "episode_timestep",
     },
@@ -638,6 +639,7 @@ SMAC_PROFILES = (
     "linear_baseline",
     "linear_obs_entity_id_baseline",
     "linear_ones_baseline",
+    "linear_health_baseline",
     "linear_timestep_baseline",
     "linear_id_baseline",
     "linear_global_state_baseline",

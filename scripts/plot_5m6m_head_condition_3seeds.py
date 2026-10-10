@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload all fifteen configured 5m6m control cohorts, with explicit provenance.
+"""Upload all sixteen configured 5m6m control cohorts, with explicit provenance.
 
 Uses exact run names and the latest attempt per seed. Periodic invocations
 upload only when curve data, seed inventory or plotting settings change.
@@ -22,6 +22,7 @@ from ozstar_submit_5m6m_vdn_qmix_10m_3seeds import build_plans as mixer_plans
 from ozstar_submit_5m6m_linear_id_10m_3seeds import build_plans as id_plans
 from ozstar_submit_5m6m_value_diagnostics_10m_3seeds import build_plans as original_plans
 from ozstar_submit_head_input_24jobs import build_plans as covered_plans, PLOT_LABELS
+from ozstar_submit_5m6m_health_only_10m_3seeds import build_plans as health_plans
 
 GROUP = "smac_5m6m_head_condition_comparison_3seeds"
 OUTPUT_SUBDIR = "5m6m_head_condition_comparison_3seeds"
@@ -41,6 +42,7 @@ LABELS = {
     "original_linear_baseline": ("Linear obs (original 10M cohort; reference)", "#9edae5"),
     "hyper_hypermarl_id": ("Legacy attention-ID (10M budget; reference)", "#969696"),
     "linear_id_baseline_vizcoverage": PLOT_LABELS["linear_id_baseline_vizcoverage"],
+    "linear_health_baseline": ("Linear health-only hyper-Obs (10M)", "#e7969c"),
 }
 _BASE_UPLOAD = charts.upload
 
@@ -48,6 +50,7 @@ _BASE_UPLOAD = charts.upload
 def build_plans(repo):
     plans = [plan for plan in visualization_plans(repo) if plan["label"] == "linear_baseline"]
     plans.extend(id_plans(repo))
+    plans.extend(health_plans(repo))
     plans.extend(dict(p, label=p["label"] + "_vizcoverage",
                       inventory_note="New 10M ID cohort with required battle/policy diagnostics; not old ID data")
                  for p in covered_plans(repo) if p["scene"] == "smac_5m6m")
@@ -93,8 +96,8 @@ def build_plans(repo):
                 "historical_vdn", "historical_qmix",
             } else 10000000
         )
-    if len(plans) != 45 or len({p["job_name"] for p in plans}) != 45:
-        raise RuntimeError("Expected forty-five distinct runs: fifteen groups, three seeds each")
+    if len(plans) != 48 or len({p["job_name"] for p in plans}) != 48:
+        raise RuntimeError("Expected forty-eight distinct runs: sixteen groups, three seeds each")
     for label in LABELS:
         if {p["seed"] for p in plans if p["label"] == label} != {1, 2, 3}:
             raise RuntimeError("Incorrect seed inventory: " + label)

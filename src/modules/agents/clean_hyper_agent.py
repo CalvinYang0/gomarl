@@ -8353,6 +8353,20 @@ class SMACSingleTransformerCapturer(GRFPublicPrivateBiasTransformerCapturer):
             raise ValueError("SMAC observation size mismatch")
         return tuple(names), tuple(fields), th.ones(len(names))
 
+    def health_only_hyper_input(self, obs):
+        """Keep local observed HP only, preserving raw layout and encoder size.
+
+        Do not obtain hidden/out-of-sight health from state or simulator data.
+        The shared GRU is deliberately NOT passed this filtered observation.
+        """
+        if obs.shape[-1] != self.expected_obs_dim:
+            raise ValueError("Health-only SMAC observation size mismatch")
+        keep = [field == "health" for field in self.semantic_fields]
+        expected = 1 + self.observation_layout["n_allies"] + self.observation_layout["n_enemies"]
+        if sum(keep) != expected:
+            raise ValueError("Health-only condition requires observed HP for every entity slot")
+        return obs * obs.new_tensor(keep)
+
     def canonicalize_cyclic_self_first(self, obs):
         """Move self features before ally slots and order allies cyclically.
 

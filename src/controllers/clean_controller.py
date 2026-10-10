@@ -613,6 +613,10 @@ class CleanMAC(BasicMAC):
         fill = getattr(capturer, "counter_transformer_profile", {}).get("hyper_obs_fill")
         if fill == "ones":
             observation = th.ones_like(observation)
+        elif fill == "health_only":
+            observation = capturer.health_only_hyper_input(observation)
+            prev_obs = capturer.health_only_hyper_input(prev_obs)
+            next_obs = capturer.health_only_hyper_input(next_obs)
         elif fill == "episode_timestep":
             # EpisodeBatch is stored from reset. Use the same decision index
             # in behaviour, evaluation, online TD and target TD (t+1).

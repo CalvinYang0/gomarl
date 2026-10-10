@@ -42,7 +42,7 @@ def record_visualization_inventory(args, logger, videos, policy, hyper):
                policy_importance_files={k: str(v) for k, v in policy.files.items()},
                hyper_obs_enabled=hyper.enabled,
                hyper_obs_due=hyper.due, hyper_obs_error=hyper.error,
-               hyper_obs_note="Hyper-only figures apply to ungated raw Linear Obs only; "
+               hyper_obs_note="Hyper-only figures apply to ungated raw/health-only Linear Obs; "
                               "other models use whole-policy sensitivity instead",
                cloud_upload_verified=False)
     identity = sha256(row["run_name"].encode()).hexdigest()[:8]

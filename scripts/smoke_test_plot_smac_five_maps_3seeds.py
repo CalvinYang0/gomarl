@@ -12,7 +12,7 @@ import plot_smac_five_maps_3seeds as study
 
 def main():
     plans = study.build_plans(study.charts.ROOT)
-    assert len(plans) == 102
+    assert len(plans) == 105
     assert {p["scene"] for p in plans} == set(study.SCENES)
     assert len([p for p in plans if p["label"] == "hyper_hypermarl_id"]) == 12
     # No queue filter: completed-map data is just as eligible as running data.
@@ -64,7 +64,7 @@ def main():
         output = runtime / "figures" / study.OUTPUT_SUBDIR
         with (output / "seed_inventory.csv").open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 102
+        assert len(inventory) == 105
         missing = [row for row in inventory if row["coverage"] == "missing"]
         assert len(missing) == 4
         assert all(row["source"] == "sacred" for row in inventory if row["points"] != "0")
@@ -82,7 +82,7 @@ def main():
             "linear_ones_baseline_vizcoverage"}
         assert set(study.charts.SCENE_MODELS["smac_6h8z"]) == {
             "linear_baseline", "linear_id_baseline", "hyper_hypermarl_id"}
-        assert len(study.charts.SCENE_MODELS["smac_5m6m"]) == 15
+        assert len(study.charts.SCENE_MODELS["smac_5m6m"]) == 16
         assert set(study.charts.SCENE_MODELS["smac_mmm2"]) == set(study.PLOT_LABELS)
         fresh = [row for row in inventory if row["model"].endswith("_vizcoverage")]
         assert len(fresh) == 24 and all("vizcoverage" in row["run_name"] for row in fresh)
@@ -104,7 +104,7 @@ def main():
                                            "--runtime-root", str(runtime)]):
                 study.main()
             upload.assert_not_called()
-    print("PASS: seven maps, 102 exact runs including 24 fresh replicas kept separate, per-map VDN/QMIX/Linear-ID and legacy references, separate 8v8/8v9 histories, missing seeds retained, "
+    print("PASS: seven maps, 105 exact runs including health-only and 24 fresh replicas kept separate, per-map VDN/QMIX/Linear-ID and legacy references, separate 8v8/8v9 histories, missing seeds retained, "
           "completed histories eligible, per-map models, PNG/PDF and one upload")
 
 

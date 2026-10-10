@@ -1,4 +1,4 @@
-"""Hyper-path-only diagnostics for the ungated SMAC Linear-Obs baseline.
+"""Hyper-path-only diagnostics for ungated SMAC raw/health-only Linear Obs.
 
 Not causal credit attribution: main GRU history and real action availability
 are held fixed. No optimizer step, rollout or random sampling is performed.
@@ -17,6 +17,7 @@ import torch.nn.functional as F
 
 BLOCKS = ("hyper_bottleneck_w", "hyper_bottleneck_b", "hyper_out_w", "hyper_out_b")
 MODEL = "smac_single_linear_suite_baseline_hypercond"
+HEALTH_MODEL = "smac_single_linear_suite_health_baseline_hypercond"
 PREFIX = "test_hyper_obs_importance/"
 
 
@@ -24,8 +25,11 @@ def supported(agent):
     capturer = getattr(agent, "rpg_relation_capturer", None)
     flags = getattr(capturer, "counter_transformer_profile", {})
     return (
-        getattr(agent, "model_type", None) == MODEL
-        and {k: v for k, v in flags.items() if k not in {"label", "domain"}} == {"branch": "linear"}
+        (getattr(agent, "model_type", None),
+         {k: v for k, v in flags.items() if k not in {"label", "domain"}}) in (
+             (MODEL, {"branch": "linear"}),
+             (HEALTH_MODEL, {"branch": "linear", "hyper_obs_fill": "health_only"}),
+         )
         and capturer.relation_encoder_style == "linear_only"
         and capturer.dynamic_branch_gate is None
         and capturer.output_dim == capturer.relation_dim
@@ -38,7 +42,10 @@ def supported(agent):
 
 def hyper_q(agent, obs, hidden):
     """Pure execution of the production two-layer generated head, no caches."""
-    condition = agent.rpg_relation_capturer.dual_linear_encoder(obs)
+    capturer = agent.rpg_relation_capturer
+    if capturer.counter_transformer_profile.get("hyper_obs_fill") == "health_only":
+        obs = capturer.health_only_hyper_input(obs)
+    condition = capturer.dual_linear_encoder(obs)
     n, h = obs.shape[0], agent.hidden_dim
     w1 = agent.hyper_bottleneck_w(condition).reshape(n, h, h)
     b1 = agent.hyper_bottleneck_b(condition).reshape(n, 1, h)
@@ -51,8 +58,10 @@ def hyper_q(agent, obs, hidden):
 def head_jacobian(agent):
     """Exact d[W1,b1,W2,b2]/d(obs), including the Obs encoder."""
     if not supported(agent):
-        raise ValueError("Head importance requires the ungated SMAC Linear Obs baseline")
+        raise ValueError("Head importance requires ungated SMAC raw/health-only Linear Obs")
     encoder = agent.rpg_relation_capturer.dual_linear_encoder.weight.detach()
+    if agent.rpg_relation_capturer.counter_transformer_profile.get("hyper_obs_fill") == "health_only":
+        encoder = agent.rpg_relation_capturer.health_only_hyper_input(encoder)
     return [getattr(agent, name).weight.detach() @ encoder for name in BLOCKS]
 
 
@@ -261,7 +270,7 @@ class HyperObsImportanceSession:
             logger.log_stat(PREFIX + "enabled", int(self.enabled), 0)
         if getattr(args, "test_hyper_obs_importance", False):
             logger.console_logger.info(
-                "Hyper Obs importance: %s (supported path: ungated SMAC Linear Obs only)",
+                "Hyper Obs importance: %s (supported path: ungated SMAC raw/health-only Linear Obs)",
                 "enabled" if self.enabled else "skipped for this model",
             )
 
