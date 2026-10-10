@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload three-seed obs/ID/KL80/state/constant/clock/entity-ID comparisons on 5m6m.
+"""Upload nine three-seed 5m6m groups, including historical VDN/QMIX controls.
 
 Uses exact run names and the latest attempt per seed. Periodic invocations
 upload only when curve data, seed inventory or plotting settings change.
@@ -30,6 +30,8 @@ LABELS = {
     "linear_ones_baseline": ("Linear all-ones hyper-obs (10M)", "#8c564b"),
     "linear_timestep_baseline": ("Linear episode-timestep hyper-obs (10M)", "#e377c2"),
     "linear_obs_entity_id_baseline": ("Linear obs + absolute entity IDs (10M)", "#17becf"),
+    "historical_vdn": ("VDN (historical 5M paper run)", "#d62728"),
+    "historical_qmix": ("QMIX (historical 5M paper run)", "#7f7f7f"),
 }
 _BASE_UPLOAD = charts.upload
 
@@ -41,14 +43,26 @@ def build_plans(repo):
     plans.extend(state_plans(repo))
     plans.extend(signal_plans(repo))
     plans.extend(entity_id_plans(repo))
+    for method in ("vdn", "qmix"):
+        for seed in (1, 2, 3):
+            plans.append({
+                "scene": "smac_5m6m", "map_name": "5m_vs_6m",
+                "label": "historical_" + method, "seed": seed,
+                "job_name": "smac_5m6m_paper_{}_5m_s{}".format(method, seed),
+                "inventory_note": (
+                    "Historical 5M paper control; separate training vintage, "
+                    "not a new 10M replica"
+                ),
+            })
     for plan in plans:
         plan["target_steps"] = (
             5000000 if plan["label"] in {
                 "linear_bayesg_kl80_keep",
+                "historical_vdn", "historical_qmix",
             } else 10000000
         )
-    if len(plans) != 21 or len({p["job_name"] for p in plans}) != 21:
-        raise RuntimeError("Expected twenty-one distinct runs: seven models, three seeds each")
+    if len(plans) != 27 or len({p["job_name"] for p in plans}) != 27:
+        raise RuntimeError("Expected twenty-seven distinct runs: nine models, three seeds each")
     for label in LABELS:
         if {p["seed"] for p in plans if p["label"] == label} != {1, 2, 3}:
             raise RuntimeError("Incorrect seed inventory: " + label)
@@ -78,7 +92,7 @@ def upload_if_changed(project, output_dir, outputs, inventory, window):
 def configure():
     charts.GROUP = GROUP
     charts.DEFAULT_OUTPUT_SUBDIR = OUTPUT_SUBDIR
-    charts.RESULTS_TITLE = "head-conditioning and KL80 comparisons"
+    charts.RESULTS_TITLE = "head conditions / historical 5M VDN and QMIX controls"
     charts.REPORT_SEED_COVERAGE = True
     charts.TARGET_STEPS = 10000000
     charts.SCENES = {"smac_5m6m": ("5 Marines vs. 6 Marines", "test_battle_won_mean")}

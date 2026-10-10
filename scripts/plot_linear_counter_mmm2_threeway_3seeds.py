@@ -158,7 +158,9 @@ def render(scene, entries, output_dir, plotter, window):
 
     title, _ = SCENES[scene]
     scene_labels = {model: LABELS[model] for model in entries}
-    fig, axis = plt.subplots(figsize=(8.0, 4.8), constrained_layout=True)
+    many_models = len(scene_labels) > 7
+    fig, axis = plt.subplots(figsize=(9.0, 6.0) if many_models else (8.0, 4.8),
+                             constrained_layout=True)
     rows = []
     for model, (label, color) in scene_labels.items():
         seeds = entries[model]
@@ -193,7 +195,11 @@ def render(scene, entries, output_dir, plotter, window):
     axis.xaxis.set_major_formatter(FuncFormatter(lambda v, _: "{:g}M".format(v / 1e6)))
     axis.grid(alpha=0.35, linestyle="--")
     if rows:
-        axis.legend(frameon=False, fontsize=8)
+        if many_models:
+            axis.legend(frameon=False, fontsize=8, ncol=2,
+                        loc="upper center", bbox_to_anchor=(0.5, -0.17))
+        else:
+            axis.legend(frameon=False, fontsize=8)
     else:
         axis.text(0.5, 0.5, "No test-win data / shared seed interval yet",
                   ha="center", va="center", transform=axis.transAxes)
@@ -221,9 +227,12 @@ def render(scene, entries, output_dir, plotter, window):
                     if entries[model] or REPORT_SEED_COVERAGE]
     if not panel_models:
         panel_models = list(scene_labels.items())
-    fig, axes = plt.subplots(1, len(panel_models), figsize=(4.6 * len(panel_models), 4.2),
+    panel_cols = 3 if len(panel_models) > 7 else len(panel_models)
+    panel_rows = int(np.ceil(len(panel_models) / panel_cols))
+    fig, axes = plt.subplots(panel_rows, panel_cols,
+                             figsize=(4.6 * panel_cols, 4.2 * panel_rows),
                              constrained_layout=True, sharey=True, squeeze=False)
-    axes = axes[0]
+    axes = axes.ravel()
     seed_ends = [x[-1] for seeds in entries.values() for _, (x, _) in seeds]
     seed_horizon = min(TARGET_STEPS, max(100000, np.ceil(max(seed_ends, default=TARGET_STEPS) / 100000) * 100000))
     for axis, (model, (label, _)) in zip(axes, panel_models):
@@ -240,7 +249,11 @@ def render(scene, entries, output_dir, plotter, window):
         elif REPORT_SEED_COVERAGE:
             axis.text(0.5, 0.5, "Awaiting test data (0/3 seeds)",
                       ha="center", va="center", transform=axis.transAxes)
-    axes[0].set_ylabel("Test Win Rate (%)")
+    for index, axis in enumerate(axes):
+        if index >= len(panel_models):
+            axis.set_visible(False)
+        elif index % panel_cols == 0:
+            axis.set_ylabel("Test Win Rate (%)")
     fig.suptitle(title + "\nIndividual seeds (faint: raw; solid: smoothed)", fontsize=10)
     path = output_dir / (scene + "_individual_seeds.png")
     fig.savefig(path, dpi=180)
