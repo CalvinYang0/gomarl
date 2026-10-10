@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload ten three-seed 5m6m groups, with separate 5M/10M Linear ID controls.
+"""Upload nine three-seed 5m6m groups, using the corrected 5M Linear ID control.
 
 Uses exact run names and the latest attempt per seed. Periodic invocations
 upload only when curve data, seed inventory or plotting settings change.
@@ -14,7 +14,6 @@ import sys
 
 import plot_linear_counter_mmm2_threeway_3seeds as charts
 from ozstar_submit_six_model_visualization_18jobs import build_plans as visualization_plans
-from ozstar_submit_linear_id_5m6m_8m9m_10m_3seeds import build_plans as id_plans
 from ozstar_submit_5m6m_id_kl80_3seeds import build_plans as id_kl_plans
 from ozstar_submit_5m6m_global_state_3seeds import build_plans as state_plans
 from ozstar_submit_5m6m_ones_timestep_10m_3seeds import build_plans as signal_plans
@@ -24,7 +23,6 @@ GROUP = "smac_5m6m_head_condition_comparison_3seeds"
 OUTPUT_SUBDIR = "5m6m_head_condition_comparison_3seeds"
 LABELS = {
     "linear_baseline": ("Linear obs-based (10M)", "#1f77b4"),
-    "linear_id_baseline": ("Linear ID-based (10M)", "#ff7f0e"),
     "linear_id_baseline_5m": ("Linear ID-based (corrected 5M run)", "#bcbd22"),
     "linear_bayesg_kl80_keep": ("Linear obs + direct KL80 (5M)", "#9467bd"),
     "linear_global_state_baseline": ("Linear global-state (10M)", "#2ca02c"),
@@ -39,14 +37,13 @@ _BASE_UPLOAD = charts.upload
 
 def build_plans(repo):
     plans = [plan for plan in visualization_plans(repo) if plan["label"] == "linear_baseline"]
-    plans.extend(plan for plan in id_plans(repo) if plan["scene"] == "smac_5m6m")
     for plan in id_kl_plans(repo):
         if plan["label"] == "linear_id_baseline":
             plans.append(dict(
                 plan, label="linear_id_baseline_5m",
                 inventory_note=(
                     "Corrected single-linear ID 5M control (idkl80fix); "
-                    "not historical attention-ID, not a replacement for the 10M group"
+                    "not historical attention-ID; plotted at its actual 5M budget"
                 ),
             ))
         elif plan["label"] == "linear_bayesg_kl80_keep":
@@ -73,8 +70,8 @@ def build_plans(repo):
                 "historical_vdn", "historical_qmix",
             } else 10000000
         )
-    if len(plans) != 30 or len({p["job_name"] for p in plans}) != 30:
-        raise RuntimeError("Expected thirty distinct runs: ten groups, three seeds each")
+    if len(plans) != 27 or len({p["job_name"] for p in plans}) != 27:
+        raise RuntimeError("Expected twenty-seven distinct runs: nine groups, three seeds each")
     for label in LABELS:
         if {p["seed"] for p in plans if p["label"] == label} != {1, 2, 3}:
             raise RuntimeError("Incorrect seed inventory: " + label)

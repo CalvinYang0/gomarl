@@ -38,7 +38,7 @@ tmux 只周期同步本仓库当前 `RUNNING` 作业的原始 W&B 数据。
 `3s_vs_5z`、`6h_vs_8z` 的三种子历史数据并上传同一个 analysis run。
 每张地图分别生成 mean ± sample std 的 PNG/PDF 和个别 seed 曲线 PNG，
 不把不同地图混成一条胜率曲线。包含运行中和已结束的数据，不受 Slurm 状态过滤。
-六图都有原线性 obs baseline；仅 5m6m 额外包括分开的 5M/10M 线性 ID、KL80、global-state、全 1、单局 timestep、Obs+实体 ID，以及明确标注为历史 5M 的 VDN/QMIX 对照。
+六图都有原线性 obs baseline；仅 5m6m 额外包括修正后的 5M 线性 ID、KL80、global-state、全 1、单局 timestep、Obs+实体 ID，以及明确标注为历史 5M 的 VDN/QMIX 对照。
 `8m` 是 8 vs 8，`8m_vs_9m` 是 8 vs 9，按精确 run 名称分别读取，标题和输出文件独立。
 旧入口 `plot_smac_five_maps_3seeds.py` 保持兼容，也会生成全部六张地图。
 其他地图没有提交这些条件，因此不为它们生成多余的空模型面板。
@@ -55,14 +55,13 @@ W&B run：`smac_six_maps_obs_head_comparison_3seeds_figures`。
 目录：`/home/kyang/gomarl-runtime/gomarl-dual-branch/figures/smac_six_maps_latest_3seeds`。
 缺少种子时明确显示 n/3，排队的 global-state 无测试数据时标为 0/3。
 
-## 单独查看 5m6m 十组对照
+## 单独查看 5m6m 九组对照
 
-`scripts/plot_5m6m_head_condition_3seeds.py` 比较十组精确 run 名称：
+`scripts/plot_5m6m_head_condition_3seeds.py` 比较九组精确 run 名称：
 
 | 组别 | 名称模板 | 预算 |
 | --- | --- | --- |
 | 原线性 obs 可视化新跑 | `smac_5m6m_linear_singlehead_baseline_10m_s{seed}_recheck` | 10M |
-| 线性 ID baseline | `smac_5m6m_linear_id_baseline_10m_s{seed}_valuediag` | 10M |
 | 正确线性 ID（5M 独立对照） | `smac_5m6m_linear_id_5m_s{seed}_idkl80fix` | 5M |
 | 新线性 direct KL80 | `smac_5m6m_linear_kl80_direct_linearonly_5m_s{seed}_idkl80fix` | 5M |
 | global-state baseline | `smac_5m6m_linear_global_state_10m_s{seed}_statecond` | 10M |
@@ -78,11 +77,12 @@ VDN/QMIX 只读取这六个 5m6m 的历史精确名称，不混入 8m9m 或 Corr
 
 每组 seed 为 1/2/3。使用 `test_battle_won_mean`，同一 seed 只取最新 attempt；
 平均曲线只画当前可用 seed 的共同区间，图例明确写 `n/3 seeds`。
-缺少的数据保留为空，不以历史 attention ID 或旧 5M ID 补位。
-正确的 5M 线性 ID 现在作为独立参考组展示，不与 10M 记录拼接或互相补位；10M 没数据时仍显示 0/3。
+缺少的数据保留为空，不以历史 attention ID 补位。
+ID 只展示已有完整三种子结果的修正后 5M 线性组，明确标注实际预算，不延伸到 10M。
+当前不选择没有测试数据的 10M ID 组，因此不生成该空面板；不删除其训练记录或修改提交配置。
 Obs 使用专门的可视化重跑记录；旧的已完成 Obs 不代替新的缺失数据。
-输出包含 mean ± sample std 的 PNG/PDF、十组分别展开的种子图，以及原始曲线和 seed inventory CSV。
-十组种子面板采用三列、四行排列，空白面板隐藏；汇总图将图例放在图外，避免遮住曲线。
+输出包含 mean ± sample std 的 PNG/PDF、九组分别展开的种子图，以及原始曲线和 seed inventory CSV。
+九组种子面板采用三列、三行排列；汇总图将图例放在图外，避免遮住曲线。
 平滑沿用 centered window=100 test points；需要看未平滑曲线可以加 `--mean-window 1`。
 
 默认目录：`/home/kyang/gomarl-runtime/gomarl-dual-branch/figures/5m6m_head_condition_comparison_3seeds`。

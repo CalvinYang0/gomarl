@@ -12,7 +12,7 @@ import plot_5m6m_head_condition_3seeds as study
 
 def main():
     plans = study.build_plans(study.charts.ROOT)
-    assert len(plans) == 30
+    assert len(plans) == 27
     corrected_ids = [p for p in plans if p["label"] == "linear_id_baseline_5m"]
     assert {p["job_name"] for p in corrected_ids} == {
         "smac_5m6m_linear_id_5m_s{}_idkl80fix".format(seed) for seed in (1, 2, 3)
@@ -35,14 +35,12 @@ def main():
     assert sum("statecond" in p["job_name"] for p in plans) == 3
     assert sum("idkl80fix" in p["job_name"] for p in plans) == 6
     assert sum("_recheck" in p["job_name"] for p in plans) == 3
-    assert {p["job_name"] for p in plans if p["label"] == "linear_id_baseline"} == {
-        "smac_5m6m_linear_id_baseline_10m_s{}_valuediag".format(seed) for seed in (1, 2, 3)
-    }
+    # The current comparison contains exactly one ID group, at its actual budget.
+    assert "linear_id_baseline" not in study.LABELS
+    assert not any("linear_id_baseline_10m" in p["job_name"] for p in plans)
     assert sum("signalcond" in p["job_name"] for p in plans) == 6
     for plan in plans:
         assert plan["target_steps"] in (5000000, 10000000)
-        if plan["label"] == "linear_id_baseline":
-            assert plan["target_steps"] == 10000000
     with tempfile.TemporaryDirectory(prefix="gomarl-head-figures-") as tmp:
         runtime = Path(tmp)
         empty_runtime = runtime / "empty"
@@ -51,9 +49,6 @@ def main():
             study.main()
         assert not list(empty_runtime.rglob("*.png"))
         for plan in plans:
-            # Existing 5M IDs must appear without silently filling missing 10M IDs.
-            if plan["label"] == "linear_id_baseline":
-                continue
             path = runtime / "results/sacred/5m_vs_6m" / plan["label"] / str(plan["seed"])
             path.mkdir(parents=True)
             (path / "config.json").write_text(json.dumps({"wandb_run_name": plan["job_name"]}))
@@ -71,17 +66,15 @@ def main():
         output = runtime / "figures" / study.OUTPUT_SUBDIR
         with (output / "seed_inventory.csv").open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 30
+        assert len(inventory) == 27
         assert all("Historical 5M" in row["note"] for row in inventory
                    if row["model"] in {"historical_vdn", "historical_qmix"})
         assert all(row["source"] == "sacred" and row["points"] == "4"
-                   for row in inventory if row["model"] != "linear_id_baseline")
-        missing_ids = [row for row in inventory if row["model"] == "linear_id_baseline"]
-        assert len(missing_ids) == 3
-        assert all(row["coverage"] == "missing" and row["points"] == "0" for row in missing_ids)
+                   for row in inventory)
+        assert not any(row["model"] == "linear_id_baseline" for row in inventory)
         with (output / "smac_5m6m_aggregate.csv").open() as handle:
             aggregate = list(csv.DictReader(handle))
-        assert {row["model"] for row in aggregate} == set(study.LABELS) - {"linear_id_baseline"}
+        assert {row["model"] for row in aggregate} == set(study.LABELS)
         assert all(row["seed_count"] == "3" for row in aggregate)
         for name in ("smac_5m6m_three_seed.png", "smac_5m6m_three_seed.pdf",
                      "smac_5m6m_individual_seeds.png"):
@@ -106,7 +99,7 @@ def main():
             upload.side_effect = None
             study.upload_if_changed(*args)
             assert checkpoint.read_text() != before
-    print("PASS: ten groups, corrected 5M ID retained with 10M ID missing (no fallback), historical VDN/QMIX, exact seeds, Sacred NumPy scalars, "
+    print("PASS: nine groups, only corrected 5M ID plotted (no empty 10M ID group), historical VDN/QMIX, exact seeds, Sacred NumPy scalars, "
           "PNG/PDF, upload dedup and failure retry")
 
 
