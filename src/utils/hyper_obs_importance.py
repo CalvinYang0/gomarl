@@ -257,6 +257,8 @@ class HyperObsImportanceSession:
             raise ValueError("Invalid hyper Obs importance diagnostic settings")
         self.last = 0
         self.parts = None
+        if args.env == "sc2":
+            logger.log_stat(PREFIX + "enabled", int(self.enabled), 0)
         if getattr(args, "test_hyper_obs_importance", False):
             logger.console_logger.info(
                 "Hyper Obs importance: %s (supported path: ungated SMAC Linear Obs only)",
@@ -264,7 +266,8 @@ class HyperObsImportanceSession:
             )
 
     def begin(self, t_env):
-        self.parts = [] if self.enabled and t_env - self.last >= self.interval else None
+        self.due = self.enabled and t_env - self.last >= self.interval
+        self.parts = [] if self.due else None
         self.t_env, self.collected, self.error = t_env, 0, None
 
     def consume(self, batch):
@@ -309,6 +312,7 @@ class HyperObsImportanceSession:
             self.logger.log_stat(PREFIX + "failed", 0, self.t_env)
             self.logger.console_logger.info("Hyper Obs importance saved: %s", directory)
         except Exception as exc:
+            self.error = str(exc)
             self.logger.log_stat(PREFIX + "failed", 1, self.t_env)
             self.logger.console_logger.warning("Hyper Obs importance diagnostic failed: %s", exc)
         finally:

@@ -43,7 +43,9 @@
 - 从有效且存活、至少有两个可用动作的 agent 状态中，按 agent 分层、确定性等距抽取最多 256 个探针。
 - 字段均值和标准差由所记录的十局全部有效 agent 状态计算，不只是探针。
 - 所有字段标签来自实际 SMAC capturer 的布局，不手工猜测 5m6m 的维度。
-- ID、全 1、timestep、global-state、固定头、attention 和有 gate 的方案明确跳过。
+- ID、全 1、timestep、global-state、固定头、attention 和有 gate 的方案明确跳过
+  **这一套 hyper-only 诊断**，但仍有公共的 policy 参数/输入敏感度图，见
+  [未来 SMAC 可视化默认规则](future_smac_visualizations.md)。
 
 W&B Media 键：
 
@@ -58,7 +60,8 @@ JSON 包含每个探针的 episode/timestep/agent 和逐字段决策分数，便
 本地文件并不自动变成 W&B artifact；上述 PNG 通过普通离线 W&B 媒体同步。
 图没有按列或行归一化，跨节点比较时还应读取原值并固定色条范围，不能仅凭颜色判断趋势。
 正常测试只有不足十局时记录实际局数，不新增测试局。
-绘图/计算失败只记录失败并警告，不中断长训练。
+默认 `test_visualizations_required=True` 时，公共入口写出失败清单后会报错，
+避免新任务静默遗漏可视化。显式关闭 mandatory 检查的调试运行才只警告继续。
 
 设置：`test_hyper_obs_importance=False` 可关闭；`test_hyper_obs_importance_interval=100000`
 可提高到每 100K 一次以检查峰值之前的变化。这个间隔只控制诊断，不是训练热身。

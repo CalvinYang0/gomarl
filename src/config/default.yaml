@@ -66,8 +66,12 @@ test_battle_video_interval: 1000000
 test_battle_video_episodes: 10 # Not an additional evaluation suite; requires test_nepisode >= 10
 test_battle_video_fps: 6 # One frame per environment decision; simulated top-down view
 test_battle_video_dir: "" # results/test_battle_videos/<unique_token>/seed_<seed>_<run-hash>; MP4 and JSON
-# Keep trajectory/video diagnostics opt-in: rendering failures must not stop a
-# long training run.
+test_visualizations_required: True # SMAC: fail before training if media dependencies/flags are missing
+test_policy_importance: True # Every SMAC model: learned policy parameter + current Obs sensitivity
+test_policy_importance_interval: 1000000
+test_policy_importance_episodes: 10 # Reuse first ordinary test episodes, no new rollouts
+test_policy_importance_samples: 64 # Bounded current-decision gradient probes across those episodes
+# Legacy trajectory video remains opt-in, separate from mandatory battle media.
 wandb_test_trajectory_video: False
 wandb_test_gate_trajectory: True # Suites can disable the test gate line figure
 wandb_test_parameter_pca: True

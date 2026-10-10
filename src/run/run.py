@@ -12,6 +12,8 @@ from utils.timehelper import time_left, time_str
 from utils.value_diagnostics import ValueDiagnosticSummary, collect_value_diagnostics
 from utils.hyper_obs_importance import HyperObsImportanceSession
 from utils.battle_video import BattleVideoSession
+from utils.policy_importance import PolicyImportanceSession
+from utils.visualization_requirements import preflight_visualizations, record_visualization_inventory
 from os.path import dirname, abspath
 
 from learners import REGISTRY as le_REGISTRY
@@ -221,6 +223,7 @@ def _run_force_open_test(args, runner, n_test_runs, learner=None):
 
 def run_sequential(args, logger):
 
+    preflight_visualizations(args)
     # Init runner so we can get env info
     runner = r_REGISTRY[args.runner](args=args, logger=logger)
 
@@ -332,9 +335,12 @@ def run_sequential(args, logger):
             raise ValueError("Value diagnostics currently support ungated QMIX/VDN baselines")
     last_log_T = 0
     hyper_obs_importance = HyperObsImportanceSession(args, mac, logger)
+    policy_importance = PolicyImportanceSession(args, mac, logger)
     model_save_time = 0
     last_battle_trace_T = 0
     battle_videos = BattleVideoSession(args, logger)
+    if args.env == "sc2" and getattr(args, "test_visualizations_required", False) and not battle_videos.enabled:
+        raise RuntimeError("Required SMAC battle videos unavailable; training has not started")
     test_video_written = False
     behavior_collection_index = 0
     behavior_full_collections = 0
@@ -433,7 +439,9 @@ def run_sequential(args, logger):
                 logger.console_logger.info("Collecting battle trace at t_env={}".format(runner.t_env))
 
             battle_videos.begin(runner.t_env)
+            battle_videos.due = battle_videos.active
             hyper_obs_importance.begin(runner.t_env)
+            policy_importance.begin(runner.t_env)
             value_summary = None
             if (getattr(args, "test_value_diagnostics", False)
                     and runner.t_env - last_value_diagnostics_T >= args.test_value_diagnostics_interval):
@@ -444,6 +452,7 @@ def run_sequential(args, logger):
                     runner.request_battle_trace(prefix=trace_prefix, t_env=runner.t_env)
                 test_batch = runner.run(test_mode=True)
                 hyper_obs_importance.consume(test_batch)
+                policy_importance.consume(test_batch)
                 if value_summary is not None:
                     collect_value_diagnostics(mac, learner.mixer, test_batch, args.gamma, value_summary)
                 battle_videos.consume(runner)
@@ -455,6 +464,8 @@ def run_sequential(args, logger):
 
             battle_videos.finish()
             hyper_obs_importance.finish()
+            policy_importance.finish()
+            record_visualization_inventory(args, logger, battle_videos, policy_importance, hyper_obs_importance)
             if value_summary is not None:
                 value_summary.log(logger, runner.t_env)
                 last_value_diagnostics_T = runner.t_env
