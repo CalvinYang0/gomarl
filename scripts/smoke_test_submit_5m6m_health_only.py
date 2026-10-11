@@ -14,10 +14,12 @@ from ozstar_submit_5m6m_value_diagnostics_10m_3seeds import build_plans as obs_p
 from ozstar_submit_linear_three_model_counter_mmm2_10m_3seeds import validate_config_keys
 
 
-def main():
+def check_study(study, scene, map_name):
+    map_check = "validate_installed_maps" if hasattr(study, "validate_installed_maps") else "validate_installed_map"
     repo = Path(__file__).resolve().parents[1]
     plans = study.build_plans(repo)
-    reference = {p["seed"]: p for p in obs_plans(repo) if p["label"] == "linear_baseline"}
+    reference = {p["seed"]: p for p in obs_plans(repo, scene_key=scene, map_name=map_name)
+                 if p["label"] == "linear_baseline"}
     assert len(plans) == len({p["job_name"] for p in plans}) == 3
     assert {p["seed"] for p in plans} == {1, 2, 3}
     for plan in plans:
@@ -25,8 +27,8 @@ def main():
         args = dict(a.split("=", 1) for a in shlex.split(exports["EXTRA_ARGS"]))
         baseline = reference[plan["seed"]]["exports"]
         assert exports["T_MAX"] == "10050000" and plan["target_steps"] == 10000000
-        assert plan["map_name"] == "5m_vs_6m" and plan["label"] == study.LABEL
-        assert plan["job_name"] == "smac_5m6m_linear_health_only_10m_s{}_healthcond".format(plan["seed"])
+        assert plan["map_name"] == map_name and plan["scene"] == scene and plan["label"] == study.LABEL
+        assert plan["job_name"] == "{}_linear_health_only_10m_s{}_healthcond".format(scene, plan["seed"])
         assert plan["memory"] == "24G" and "--time=2-00:00:00" in plan["sbatch_args"]
         for key in ("CONFIG", "ENV_CONFIG", "MAP_NAME", "BATCH_SIZE_RUN", "BATCH_SIZE",
                     "BUFFER_SIZE", "TEST_INTERVAL", "SEED", "USE_CUDA", "WANDB_MODE"):
@@ -62,7 +64,7 @@ def main():
         try:
             with redirect_stdout(io.StringIO()), \
                  patch.dict(os.environ, SUBMIT="YES", REPO_DIR=str(repo), RUNTIME_ROOT=temp), \
-                 patch.object(study, "validate_installed_maps"), \
+                 patch.object(study, map_check), \
                  patch.object(study.submitter, "home_quota_free_gib", return_value=10), \
                  patch.object(study.submitter, "guard_and_route", return_value={"logs": Path(temp)}), \
                  patch.object(study.submitter, "active_jobs", return_value={}) as active, \
@@ -88,7 +90,11 @@ def main():
         finally:
             os.chdir(cwd)
         assert study.submitter.build_plans is original
-    print("PASS: exact three health-only 10M plans; matched settings; required videos/importance; all-before-any preflight; retain active/completed; idempotence")
+    print("PASS: {} exact three health-only 10M plans; matched settings; required videos/importance; all-before-any preflight; retain active/completed; idempotence".format(map_name))
+
+
+def main():
+    check_study(study, "smac_5m6m", "5m_vs_6m")
 
 
 if __name__ == "__main__":

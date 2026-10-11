@@ -21,14 +21,19 @@ SMOKE_SCRIPTS = (
 
 
 def build_plans(repo):
+    return build_health_plans(repo, "smac_5m6m", "5m_vs_6m", GROUP)
+
+
+def build_health_plans(repo, scene, map_name, group):
+    """Share the matched health-only settings, not run names or map identity."""
     profiles = _load_profiles(repo)
     if profiles.ALL_PROFILES[LABEL] != {"branch": "linear", "hyper_obs_fill": "health_only"}:
         raise RuntimeError("Expected ungated single Linear health-only condition, main TD only")
     plans = []
     for seed in (1, 2, 3):
-        name = "smac_5m6m_linear_health_only_10m_s{}_healthcond".format(seed)
-        plan = _plan(repo, profiles, "smac_5m6m", "5m_vs_6m", "smac",
-                     LABEL, seed, name, "24G", GROUP)
+        name = "{}_linear_health_only_10m_s{}_healthcond".format(scene, seed)
+        plan = _plan(repo, profiles, scene, map_name, "smac",
+                     LABEL, seed, name, "24G", group)
         plan["exports"].update(T_MAX="10050000", TEST_INTERVAL="10000")
         plan["exports"]["EXTRA_ARGS"] += (
             " test_value_diagnostics=True test_value_diagnostics_interval=100000"
@@ -43,6 +48,8 @@ def build_plans(repo):
                                 for arg in plan["sbatch_args"]]
         plan["target_steps"] = 10000000
         plans.append(plan)
+    if len(plans) != 3 or len({p["job_name"] for p in plans}) != 3:
+        raise RuntimeError("Expected three distinct health-only jobs for " + map_name)
     return plans
 
 

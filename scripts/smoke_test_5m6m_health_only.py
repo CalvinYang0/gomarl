@@ -6,21 +6,22 @@ from smoke_test_counter_transformer_nine import make_case
 from utils.hyper_obs_importance import analyze, head_jacobian, hyper_q, replay_samples, supported
 
 
-def main():
+def check_map(map_name, n_agents, obs_dim, expected_health):
     th.set_num_threads(1)
     th.manual_seed(31)
-    base, base_learner, _, _ = make_case("linear_baseline", "5m_vs_6m", production_shapes=True)
+    base, base_learner, _, _ = make_case("linear_baseline", map_name, production_shapes=True)
     th.manual_seed(31)
-    mac, learner, batch, logger = make_case("linear_health_baseline", "5m_vs_6m", production_shapes=True)
+    mac, learner, batch, logger = make_case("linear_health_baseline", map_name, production_shapes=True)
     agent, capturer = mac.agent, mac.agent.rpg_relation_capturer
-    assert mac.args.obs_shape == 55 and mac.n_agents == 5
+    assert mac.args.obs_shape == obs_dim and mac.n_agents == n_agents
     names = list(capturer.semantic_names)
     health = [i for i, name in enumerate(names) if name == "self_health" or name.endswith("_health")]
-    other = [i for i in range(55) if i not in health]
-    assert health == [8, 13, 18, 23, 28, 33, 38, 43, 48, 53, 54]
+    other = [i for i in range(obs_dim) if i not in health]
+    assert health == expected_health
     assert {names[i] for i in health} == {"self_health"} | {
-        "enemy_{}_health".format(i) for i in range(6)} | {"ally_{}_health".format(i) for i in range(4)}
-    assert capturer.dual_linear_encoder.in_features == 55 and supported(agent)
+        "enemy_{}_health".format(i) for i in range(capturer.observation_layout["n_enemies"])} | {
+        "ally_{}_health".format(i) for i in range(n_agents - 1)}
+    assert capturer.dual_linear_encoder.in_features == obs_dim and supported(agent)
     assert agent.hidden_dim == agent.cond_dim == 64
     assert capturer.relation_encoder_style == "linear_only" and not len(capturer.transformer_layers)
     assert capturer.dynamic_branch_gate is None
@@ -35,7 +36,7 @@ def main():
     assert getattr(mac.args, "double_q", None) == getattr(base.args, "double_q", None)
     raw_obs, raw_state = batch["obs"].clone(), batch["state"].clone()
     # Per-field sentinels catch incorrect health offsets, including own HP at the tail.
-    sentinel = th.arange(1, 56).to(raw_obs).expand_as(raw_obs[:, 0])
+    sentinel = th.arange(1, obs_dim + 1).to(raw_obs).expand_as(raw_obs[:, 0])
     filtered = capturer.health_only_hyper_input(sentinel)
     assert th.equal(filtered[..., health], sentinel[..., health])
     assert filtered[..., other].count_nonzero() == 0
@@ -52,12 +53,12 @@ def main():
                 else:
                     assert context[key].count_nonzero() == 0
             assert th.equal(context["state"], raw_state[:, t])
-            assert th.equal(mac._build_inputs(batch, t)[..., :55], raw_obs[:, t])
+            assert th.equal(mac._build_inputs(batch, t)[..., :obs_dim], raw_obs[:, t])
             assert th.equal(learner.target_mac._build_model_context(batch, t)["obs"], context["obs"])
             with th.no_grad():
                 q = mac.forward(batch, t, test_mode=mode)
                 assert th.allclose(agent.latest_condition, capturer.dual_linear_encoder(context["obs"]))
-                pure = hyper_q(agent, raw_obs[:, t].reshape(-1, 55),
+                pure = hyper_q(agent, raw_obs[:, t].reshape(-1, obs_dim),
                                mac.hidden_states[..., :64].reshape(-1, 64)).reshape_as(q)
                 assert th.allclose(q, pure, atol=1e-6)
     with th.no_grad():
@@ -91,7 +92,12 @@ def main():
     assert logger.stats["loss_td"][-1][1] >= 0
     assert th.equal(batch["obs"], raw_obs) and th.equal(batch["state"], raw_state)
     assert all(th.isfinite(p).all() for p in agent.parameters())
-    print("PASS: health-only 11/55 exact slots; same initialization/GRU/mixer/Double-Q/main TD; behaviour/test/target; gradients and hyper-only diagnostics")
+    print("PASS: {} health-only {}/{} exact slots; same initialization/GRU/mixer/Double-Q/main TD; behaviour/test/target; gradients and hyper-only diagnostics".format(
+        map_name, len(health), obs_dim))
+
+
+def main():
+    check_map("5m_vs_6m", 5, 55, [8, 13, 18, 23, 28, 33, 38, 43, 48, 53, 54])
 
 
 if __name__ == "__main__":

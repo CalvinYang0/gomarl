@@ -41,14 +41,14 @@ tmux 只周期同步本仓库当前 `RUNNING` 作业的原始 W&B 数据。
 `3s_vs_5z`、`6h_vs_8z`、`MMM2` 的三种子数据并上传同一个 analysis run。
 每张地图分别生成 mean ± sample std 的 PNG/PDF 和个别 seed 曲线 PNG，
 不把不同地图混成一条胜率曲线。包含运行中和已结束的数据，不受 Slurm 状态过滤。
-读取清单包含 25 个当前实验组，加上 5m6m 两个历史 5M mixer 备用组，共 81 个精确 run 名称。
-绘图在 VDN/QMIX 的新旧批次之间独立选择，最多显示原有 25 个模型面板：
+读取清单包含 26 个当前实验组，加上 5m6m 两个历史 5M mixer 备用组，共 84 个精确 run 名称。
+绘图在 VDN/QMIX 的新旧批次之间独立选择，最多显示 26 个模型面板：
 
 | 地图 | 当前实验模型 | 每组种子 |
 | --- | --- | --- |
 | 3m | Linear Obs | 1/2/3 |
 | 8m（8 vs 8） | Linear Obs | 1/2/3 |
-| 8m_vs_9m | Linear Obs、Linear ID、All-one、VDN、QMIX | 1/2/3 |
+| 8m_vs_9m | Linear Obs、Linear ID、All-one、Health-only、VDN、QMIX | 1/2/3 |
 | 5m_vs_6m | 下文十组全部包含 | 1/2/3 |
 | 3s_vs_5z | 新可视化批次的 Linear Obs、Linear ID、All-one | 1/2/3 |
 | 6h_vs_8z | Linear Obs、Linear ID | 1/2/3 |
