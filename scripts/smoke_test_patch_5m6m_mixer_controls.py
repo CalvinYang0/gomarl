@@ -79,6 +79,43 @@ def main():
         assert all((output / (app.SCENE + suffix)).stat().st_size > 1000
                    for suffix in ("_three_seed.png", "_three_seed.pdf", "_individual_seeds.png"))
         assert source_bytes == [(snapshot / name).read_bytes() for name in ("seed_inventory.csv", "seed_curves.csv")]
+        # Fix one missing entity-ID seed, not all six controls or all maps.
+        one_name = "smac_5m6m_linear_obs_entity_id_10m_s1_entityidcond"
+        with (output / "seed_inventory.csv").open() as handle:
+            one_inventory = list(csv.DictReader(handle))
+        for r in one_inventory:
+            if r["run_name"] == one_name:
+                r.update(points="0", start_step="", end_step="", coverage="missing", run_id="", note="old miss")
+        with (output / "seed_inventory.csv").open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=charts.FIELDS)
+            writer.writeheader()
+            writer.writerows(one_inventory)
+        with (output / "seed_curves.csv").open() as handle:
+            one_raw = list(csv.DictReader(handle))
+        with (output / "seed_curves.csv").open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=one_raw[0].keys())
+            writer.writeheader()
+            writer.writerows(r for r in one_raw if not (
+                r["model"] == "linear_obs_entity_id_baseline" and r["seed"] == "1"))
+        one_run = SimpleNamespace(id="recovered_entity_seed1", created_at="2026-10-01T00:00:00Z",
+                                  scan_history=runs[next(iter(targets))][0].scan_history)
+        one_output = root / "one_patch"
+        with patch.object(app, "cloud_run_index", return_value={one_name: [one_run]}) as query, \
+                patch.object(sys, "argv", ["patch", "--snapshot-dir", str(output),
+                                          "--output-dir", str(one_output), "--refresh-run", one_name,
+                                          "--no-upload"]):
+            app.main()
+            assert query.call_args.args[1] == {one_name}
+        with (one_output / "seed_inventory.csv").open() as handle:
+            recovered = {r["run_name"]: r for r in csv.DictReader(handle)}
+        assert recovered[one_name]["points"] == "3"
+        assert recovered[one_name]["run_id"] == "recovered_entity_seed1"
+        assert all(normalized(r) == normalized(recovered[r["run_name"]])
+                   for r in one_inventory if r["run_name"] != one_name)
+        with (one_output / (app.SCENE + "_aggregate.csv")).open() as handle:
+            entity_rows = [r for r in csv.DictReader(handle)
+                           if r["model"] == "linear_obs_entity_id_baseline"]
+        assert entity_rows and all(r["seed_count"] == "3" for r in entity_rows)
         newer_name = "smac_5m6m_paper_vdn_5m_s1"
         newer = SimpleNamespace(id="new_empty_attempt", created_at="2026-10-11T00:00:00Z",
                                 scan_history=lambda **kwargs: iter([]))
@@ -120,7 +157,7 @@ def main():
             except RuntimeError:
                 pass
             assert calls.call_count == 1
-    print("PASS: only six historical mixer queries; retained curves and source snapshot unchanged; "
+    print("PASS: six default controls or one exact missing entity-ID seed; retained curves and source snapshot unchanged; "
           "5m6m-only render/upload; absent snapshot and cloud failures never trigger full scans")
 
 

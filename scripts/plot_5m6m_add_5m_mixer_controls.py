@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch a saved 5m6m snapshot by fetching only six historical 5M controls.
+"""Patch saved 5m6m data: six 5M controls by default, or exact requested runs.
 
 Other curves are reused unchanged from the previous CSV snapshot. No training
 jobs, original W&B runs, or other maps are refreshed. There is no full-read
@@ -76,6 +76,8 @@ def main():
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--mean-window", type=int, default=100)
     parser.add_argument("--no-upload", action="store_true")
+    parser.add_argument("--refresh-run", action="append", default=[], metavar="EXACT_NAME",
+                        help="Refresh ONLY this registered run (repeatable); replaces the default six controls")
     args = parser.parse_args()
     if args.mean_window < 1 or "/" not in args.project:
         parser.error("positive mean window and ENTITY/PROJECT required")
@@ -85,17 +87,30 @@ def main():
         parser.error("Use a separate output directory to preserve the source snapshot")
     study.configure()
     plans = study.build_plans(study.charts.ROOT)
-    targets = [p for p in plans if p["label"] in {"historical_vdn", "historical_qmix"}]
+    registered = {p["job_name"] for p in plans}
+    if set(args.refresh_run) - registered:
+        parser.error("Unregistered 5m6m run: " + ", ".join(sorted(set(args.refresh_run) - registered)))
+    targets = ([p for p in plans if p["job_name"] in args.refresh_run] if args.refresh_run else
+               [p for p in plans if p["label"] in {"historical_vdn", "historical_qmix"}])
     curves, inventory = load_snapshot(snapshot, plans)
+    # Old snapshots may predate the six historical fallback rows. Record
+    # their absence explicitly without reading them during a single-run patch.
+    for p in plans:
+        if p["job_name"] not in inventory:
+            r = dict.fromkeys(study.charts.FIELDS, "")
+            r.update(scene=SCENE, model=p["label"], seed=p["seed"], run_name=p["job_name"],
+                     points=0, start_step=None, end_step=None, coverage="missing",
+                     note="Absent from saved snapshot; not refreshed unless explicitly selected")
+            inventory[p["job_name"]] = r
     wanted = {p["job_name"] for p in targets}
-    print("Reuse saved 5m6m data: {}; query ONLY six 5M VDN/QMIX runs; no other histories refreshed".format(
-        snapshot), flush=True)
+    print("Reuse saved 5m6m data: {}; query ONLY {} selected runs; no other histories refreshed".format(
+        snapshot, len(targets)), flush=True)
     # Exact filter only: unlike full snapshots, never scan the entire project.
     cloud = cloud_run_index(args.project, wanted, allow_full_scan=False)
     import plot_wandb_seed_aggregate as plotter
     for index, p in enumerate(targets, 1):
         name = p["job_name"]
-        print("READ {}/6: {}".format(index, name), flush=True)
+        print("READ {}/{}: {}".format(index, len(targets), name), flush=True)
         curve, details, note = study.charts.select_latest(
             p, "test_battle_won_mean", {}, cloud, {}, args.runtime_root / "wandb", plotter)
         if (curve is None and name in curves
@@ -105,7 +120,7 @@ def main():
         r = dict.fromkeys(study.charts.FIELDS, "")
         r.update(scene=SCENE, model=p["label"], seed=p["seed"], run_name=name,
                  points=0, start_step=None, end_step=None, coverage="missing",
-                 note="; ".join(filter(None, (p["inventory_note"], note))), **details)
+                 note="; ".join(filter(None, (p.get("inventory_note", ""), note))), **details)
         if curve is not None:
             x, y = curve
             curves[name] = curve
@@ -117,6 +132,8 @@ def main():
             curves.pop(name, None)
         inventory[name] = r
         print("{}: {} points={} end={}".format(name, r["coverage"], r["points"], r["end_step"]), flush=True)
+        if curve is None:
+            print("READ FAILURE: " + note, flush=True)
     output.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(output / "matplotlib"))
     ordered_inventory = [inventory[p["job_name"]] for p in plans]
@@ -139,8 +156,8 @@ def main():
         writer = csv.writer(handle)
         writer.writerow(["snapshot_directory", "snapshot_inventory_mtime", "refresh_scope"])
         writer.writerow([str(snapshot), (snapshot / "seed_inventory.csv").stat().st_mtime,
-                         "Only six historical 5M VDN/QMIX controls; all other cohorts reused unchanged"])
-    study.charts.RESULTS_TITLE = "5M mixer patch; other cohorts reused from saved snapshot"
+                         "Only these runs refreshed: " + ", ".join(sorted(wanted))])
+    study.charts.RESULTS_TITLE = "Selected-run patch; other cohorts reused from saved snapshot"
     paths = study.charts.render(SCENE, entries, output, plotter, args.mean_window)
     print("Patched 5m6m figures: " + str(output), flush=True)
     if not args.no_upload:

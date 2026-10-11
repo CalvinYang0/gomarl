@@ -145,6 +145,20 @@ cd /home/kyang/code/gomarl-dual-branch
 
 加 `--no-upload` 只生成本地结果。非参考组来自旧快照，并不代表刷新到了当前进度。
 
+若云端已有某个种子，但复用快照仍显示缺失，可只刷新该精确运行；
+`--refresh-run` 会替代默认六条 mixer 查询，不附带查询其他组：
+
+```bash
+/home/kyang/.conda/envs/marl_cpu/bin/python -u \
+  scripts/plot_5m6m_add_5m_mixer_controls.py \
+  --snapshot-dir /home/kyang/gomarl-runtime/gomarl-dual-branch/figures/5m6m_5m_mixer_patch \
+  --output-dir /home/kyang/gomarl-runtime/gomarl-dual-branch/figures/5m6m_entity_seed_patch \
+  --refresh-run smac_5m6m_linear_obs_entity_id_10m_s1_entityidcond
+```
+
+成功补入后更新均值图的种子数量；失败时打印具体读取错误。
+同名最新 attempt 没测试数据时仍不使用更旧 attempt 冒充。
+
 ```bash
 cd /home/kyang/code/gomarl-dual-branch
 /home/kyang/.conda/envs/marl_cpu/bin/python \
