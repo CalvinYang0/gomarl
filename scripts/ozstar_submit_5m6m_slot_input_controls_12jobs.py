@@ -8,6 +8,7 @@ import ozstar_submit_5m6m_linear_baseline_recheck_3seeds as submitter
 from ozstar_submit_linear_single_head_suite import _load_profiles, _plan
 
 GROUP = "5m6m_slot_input_controls_10m_12jobs"
+MIN_HOME_FREE_GIB = 3.0
 VARIANTS = {
     "linear_static10_nokl": "smac_slot_static10_hypercond",
     "linear_group_forward_hierarchy": "smac_slot_forward_hierarchy_hypercond",
@@ -75,8 +76,15 @@ def validate_installed_maps():
 
 def main():
     if os.environ.get("SUBMIT") == "YES":
-        if submitter.home_quota_free_gib() < 5:
-            raise RuntimeError("Require at least 5 GiB free before 12 media-enabled jobs; no jobs submitted")
+        free_gib = submitter.home_quota_free_gib()
+        print("/home quota free: {:.2f} GiB; minimum for this suite: {:.1f} GiB".format(
+            free_gib, MIN_HOME_FREE_GIB), flush=True)
+        if free_gib < MIN_HOME_FREE_GIB:
+            raise RuntimeError("Only {:.2f} GiB free; require at least {:.1f} GiB before "
+                               "12 media-enabled jobs; no jobs submitted".format(
+                                   free_gib, MIN_HOME_FREE_GIB))
+        print("Capacity warning: the 3 GiB startup check does not guarantee enough space "
+              "for all future videos and offline W&B data.", flush=True)
         validate_installed_maps()
     replacement = dict(GROUP=GROUP, SUITE_FILE=Path(__file__), SMOKE_SCRIPTS=SMOKE_SCRIPTS,
                        build_plans=build_plans)

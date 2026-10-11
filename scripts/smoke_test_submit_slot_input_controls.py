@@ -61,7 +61,7 @@ def main():
             with redirect_stdout(io.StringIO()), \
                  patch.dict(os.environ, SUBMIT="YES", REPO_DIR=str(repo), RUNTIME_ROOT=temp), \
                  patch.object(study, "validate_installed_maps"), \
-                 patch.object(study.submitter, "home_quota_free_gib", return_value=10), \
+                 patch.object(study.submitter, "home_quota_free_gib", return_value=3.33), \
                  patch.object(study.submitter, "guard_and_route", return_value={"logs": Path(temp)}), \
                  patch.object(study.submitter, "active_jobs", return_value={}) as active, \
                  patch.object(study.submitter, "completed_jobs", return_value={}) as completed, \
@@ -72,7 +72,8 @@ def main():
                 active.return_value = {plans[0]["job_name"]: "synthetic_running"}
                 completed.return_value = {p["job_name"]: "synthetic_complete" for p in plans[1:]}
                 calls.clear()
-                study.main()
+                with patch.object(study.submitter, "home_quota_free_gib", return_value=3.0):
+                    study.main()
                 assert not calls
                 active.return_value, completed.return_value = {}, {}
                 with patch.object(study.submitter.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "synthetic")):
@@ -83,17 +84,18 @@ def main():
                     else:
                         raise AssertionError("Failed preflight must prevent all jobs")
                 assert not calls
-                with patch.object(study.submitter, "home_quota_free_gib", return_value=4):
+                with patch.object(study.submitter, "home_quota_free_gib", return_value=2.99):
                     try:
                         study.main()
                     except RuntimeError as exc:
                         assert "no jobs submitted" in str(exc)
+                        assert "2.99 GiB free" in str(exc) and "3.0 GiB" in str(exc)
                     else:
                         raise AssertionError("Quota guard must stop submission")
         finally:
             os.chdir(cwd)
         assert study.submitter.build_plans is original
-    print("PASS: twelve matched 10M plans; required media; quota; preflight before any submission; idempotence")
+    print("PASS: twelve matched 10M plans; required media; 3.33/3.00 GiB accepted, 2.99 blocked; preflight before any submission; idempotence")
 
 
 if __name__ == "__main__":

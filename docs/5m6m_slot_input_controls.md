@@ -92,8 +92,13 @@ SUBMIT=YES REPO_DIR="$PWD" python -u scripts/ozstar_submit_5m6m_slot_input_contr
 ```
 
 Submission validates the installed map, config keys, code/media smoke tests,
-at least 5 GiB home-quota headroom, and all `sbatch --test-only` plans before
+at least 3 GiB home-quota headroom, and all `sbatch --test-only` plans before
 submitting anything. Exact-name active/completed jobs are retained. Real IDs
 are durably recorded in the suite manifest after each submission. Simulator-
 free smoke tests use synthetic episodes, do not upload, and are not evidence
 of scientific effectiveness or successful cluster training.
+
+The user-requested 3 GiB startup threshold replaces the original 5 GiB guard.
+Exactly 3 GiB is accepted; below 3 GiB still stops before any job submission.
+The submitter prints measured free space and a capacity warning: meeting this
+threshold does not guarantee sufficient space for the full media-enabled runs.
