@@ -98,8 +98,9 @@ W&B run：`smac_seven_maps_obs_head_comparison_3seeds_figures`。
 缺少的数据保留为空；最新 10M ID 不用之前的 ID、5M ID 或 attention-ID 补位。
 Obs 仅选择可视化新跑的 `_recheck` 批次，不读原 scalar-only 参考组。
 KL80 保留实际 5M 预算，不能标成 10M。
-输出包含 mean ± sample std 的 PNG/PDF、30 张独立 map/model/seed PNG，以及原始曲线和 seed inventory CSV。
-各个 seed 的图单独上传，不拼面板、不叠加三个种子；汇总图图例放在图外。
+输出包含 mean ± sample std 的 PNG/PDF、一张模型面板总图，以及原始曲线和 seed inventory CSV。
+恢复上一版布局：每个模型的三个 seed 在同一面板叠加，5m6m 十个模型汇成三列四行总图。
+每张地图上传均值汇总图和三种子面板总图，不再单独上传各个 seed；汇总图图例放在图外。
 平滑沿用 centered window=100 test points；需要看未平滑曲线可以加 `--mean-window 1`。
 
 默认目录：`/home/kyang/gomarl-runtime/gomarl-dual-branch/figures/5m6m_head_condition_comparison_3seeds`。

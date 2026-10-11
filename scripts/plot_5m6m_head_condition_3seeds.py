@@ -69,7 +69,7 @@ def build_plans(repo):
 def upload_if_changed(project, output_dir, outputs, inventory, window):
     signature = hashlib.sha256()
     settings = dict(project=project, group=GROUP, labels=LABELS, window=window,
-                    individual_seed_layout="one model and seed per image",
+                    individual_seed_layout="three seeds per model panel; one multi-model image per map",
                     selection="latest attempt per seed; shared seed interval only")
     signature.update(json.dumps(settings, sort_keys=True).encode())
     for filename in ("seed_curves.csv", "seed_inventory.csv"):

@@ -221,45 +221,56 @@ def render(scene, entries, output_dir, plotter, window):
         writer.writerow(["model", "step", "mean_fraction_smoothed", "sample_std_smoothed", "seed_count"])
         writer.writerows(rows)
 
-    # One model and ONE seed per image. No multi-model grid or three-seed
-    # overlay: every image is separately addressable in W&B. The aggregate
-    # above still compares models using their actual shared seed interval.
-    for model, (label, color) in scene_labels.items():
-        curves = dict(entries[model])
-        for seed in (1, 2, 3):
-            if seed not in curves and not REPORT_SEED_COVERAGE:
+    # Restore one panel per model with all its seeds, and one composite per
+    # map. Each seed retains its own observed curve and actual endpoint.
+    panel_models = [(model, labels) for model, labels in scene_labels.items()
+                    if entries[model] or REPORT_SEED_COVERAGE]
+    if not panel_models:
+        panel_models = list(scene_labels.items())
+    panel_cols = 3 if len(panel_models) > 7 else len(panel_models)
+    panel_rows = int(np.ceil(len(panel_models) / panel_cols))
+    fig, axes = plt.subplots(panel_rows, panel_cols,
+                             figsize=(4.6 * panel_cols, 4.2 * panel_rows),
+                             constrained_layout=True, sharey=True, squeeze=False)
+    axes = axes.ravel()
+    seed_ends = [x[-1] for seeds in entries.values() for _, (x, _) in seeds if x.size]
+    seed_horizon = min(TARGET_STEPS, max(100000, np.ceil(
+        max(seed_ends, default=TARGET_STEPS) / 100000) * 100000))
+    for axis, (model, (label, _)) in zip(axes, panel_models):
+        shown = set()
+        for seed, (x, y) in entries[model]:
+            keep = x <= TARGET_STEPS
+            x, y = x[keep], y[keep]
+            if not x.size:
                 continue
-            fig, axis = plt.subplots(figsize=(8.0, 4.8), constrained_layout=True)
-            horizon = TARGET_STEPS
-            if seed in curves:
-                x, y = curves[seed]
-                keep = x <= TARGET_STEPS
-                x, y = x[keep], y[keep]
-                if x.size:
-                    horizon = min(TARGET_STEPS, max(100000, np.ceil(x[-1] / 100000) * 100000))
-                    axis.plot(x, y * 100, alpha=0.2, linewidth=0.7, color=color, label="Raw")
-                    axis.plot(x, plotter.centered_rolling_mean(y, window) * 100,
-                              color=color, linewidth=1.8,
-                              label="Smoothed; to {:.2f}M".format(x[-1] / 1e6))
-                    axis.legend(frameon=False, fontsize=9)
-                else:
-                    axis.text(0.5, 0.5, "No test data within requested step budget",
-                              ha="center", va="center", transform=axis.transAxes)
-            else:
-                # Missing history is NOT a claim that a job was not submitted
-                # or crashed. Slurm status requires a separate read-only audit.
-                axis.text(0.5, 0.5, "Test history unavailable; job status not checked",
-                          ha="center", va="center", transform=axis.transAxes)
-            axis.set(title="{}\n{} — seed {}".format(title, label, seed),
-                     xlim=(0, horizon), ylim=(0, 100), xlabel="Environment Steps",
-                     ylabel="Test Win Rate (%)")
-            axis.xaxis.set_major_formatter(FuncFormatter(lambda v, _: "{:g}M".format(v / 1e6)))
-            axis.grid(alpha=0.3, linestyle="--")
-            fig.suptitle("Single seed; centered window={} test points".format(window), fontsize=9)
-            path = output_dir / "{}__{}__seed_{}.png".format(scene, model, seed)
-            fig.savefig(path, dpi=180)
-            plt.close(fig)
-            paths.append(path)
+            shown.add(seed)
+            axis.plot(x, y * 100, alpha=0.2, linewidth=0.6, color="C" + str(seed - 1))
+            axis.plot(x, plotter.centered_rolling_mean(y, window) * 100,
+                      label="seed {} (to {:.2f}M)".format(seed, x[-1] / 1e6),
+                      color="C" + str(seed - 1), linewidth=1.5)
+        axis.set(title=label, xlim=(0, seed_horizon), ylim=(0, 100), xlabel="Steps")
+        axis.xaxis.set_major_formatter(FuncFormatter(lambda v, _: "{:g}M".format(v / 1e6)))
+        axis.grid(alpha=0.3, linestyle="--")
+        if shown:
+            axis.legend(frameon=False, fontsize=8)
+            if REPORT_SEED_COVERAGE and shown != {1, 2, 3}:
+                axis.text(0.5, 0.04, "Missing test history: seed " +
+                          ", ".join(str(seed) for seed in sorted({1, 2, 3} - shown)),
+                          ha="center", va="bottom", transform=axis.transAxes, fontsize=8)
+        elif REPORT_SEED_COVERAGE:
+            # Missing history is not evidence of a failed or unsubmitted job.
+            axis.text(0.5, 0.5, "Test history unavailable (0/3 seeds);\njob status not checked",
+                      ha="center", va="center", transform=axis.transAxes, fontsize=8)
+    for index, axis in enumerate(axes):
+        if index >= len(panel_models):
+            axis.set_visible(False)
+        elif index % panel_cols == 0:
+            axis.set_ylabel("Test Win Rate (%)")
+    fig.suptitle(title + "\nIndividual seeds (faint: raw; solid: smoothed)", fontsize=10)
+    path = output_dir / (scene + "_individual_seeds.png")
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+    paths.append(path)
     return paths
 
 
@@ -273,14 +284,12 @@ def upload(project, output_dir, outputs, inventory, window):
                     name=GROUP + "_figures", group=GROUP, job_type="analysis", mode="online",
                     dir=str(output_dir), config={"target_steps": TARGET_STEPS, "mean_window": window,
                                                 "selection": "latest attempt per seed", "seeds": [1, 2, 3],
-                                                "individual_seed_layout": "one model and seed per image"}) as run:
+                                                "individual_seed_layout": "three seeds per model panel; one multi-model image per map"}) as run:
         payload = {"seed_inventory": wandb.Table(columns=list(FIELDS),
                     data=inventory_table_data(inventory))}
         for scene, paths in outputs.items():
             payload[scene + "_three_seed"] = wandb.Image(str(paths[0]))
-            for path in paths[2:]:
-                if path.suffix == ".png" and "__seed_" in path.stem:
-                    payload[path.stem] = wandb.Image(str(path))
+            payload[scene + "_individual_seeds"] = wandb.Image(str(paths[-1]))
         run.log(payload)
         artifact = wandb.Artifact(GROUP + "_available_seed_data", type="dataset")
         for path in sorted(output_dir.glob("*.csv")):

@@ -1,18 +1,18 @@
-# Separate seed images
+# Combined three-seed model panels
 
-The shared SMAC plotter uploads one image for each **map/model/seed**, rather
-than a multi-model panel or three overlaid seeds. The separate three-seed
-aggregate still compares models using their shared observed step interval.
+The shared SMAC plotter restores one image per map, with one panel per model
+and all three seed curves overlaid in that panel. Seeds use distinct colors;
+raw curves are faint and centered rolling means are solid. The separate
+three-seed aggregate still compares models using their shared observed interval.
 
-Files and W&B keys: `<scene>__<model>__seed_<1|2|3>.png` / matching stem.
-Each image contains only that seed's raw curve and its centered rolling mean
-(100 test points by default). It ends at that seed's actual observed progress,
+Files and W&B keys: `<scene>_individual_seeds.png` / matching stem.
+Each seed's rolling mean uses 100 test points by default and ends at its actual observed progress,
 capped at the requested budget. No interpolation from a different seed/cohort.
 Missing histories get an explicit unavailable-history placeholder, **not** a
 claim that the job was unsubmitted, pending or failed. Slurm status must be
-checked separately. Old composite files may remain locally but are not uploaded
-by the new plotter. 5m6m upload dedup includes the new layout version, so existing
-unchanged curve data can still receive the updated separate-image format once.
+checked separately. Old standalone seed files may remain locally but are not
+uploaded by the restored plotter. 5m6m upload dedup includes the layout version,
+so unchanged curve data can still receive the restored combined format once.
 
 Health-only uses a separate submitter and is not included in the 24-job suite.
 It is registered in both 5m6m and seven-map figure inventories by exact names:

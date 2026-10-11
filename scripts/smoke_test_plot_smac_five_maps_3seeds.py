@@ -111,11 +111,9 @@ def main():
             assert {row["seed_count"] for row in aggregate} == counts
             for suffix in ("_three_seed.png", "_three_seed.pdf"):
                 assert (output / (scene + suffix)).stat().st_size > 1000
-            for model in study.SCENE_MODELS[scene]:
-                for seed in (1, 2, 3):
-                    assert (output / "{}__{}__seed_{}.png".format(scene, model, seed)).stat().st_size > 1000
-        assert len(list(output.glob("*__seed_*.png"))) == 75
-        assert not list(output.glob("*_individual_seeds.png"))
+            assert (output / (scene + "_individual_seeds.png")).stat().st_size > 1000
+        assert not list(output.glob("*__seed_*.png"))
+        assert len(list(output.glob("*_individual_seeds.png"))) == 7
         assert study.charts.SCENE_MODELS["smac_3m"] == ("linear_baseline",)
         assert set(study.charts.SCENE_MODELS["smac_8m9m"]) == {
             "linear_baseline", "linear_id_baseline", "vdn", "qmix",
