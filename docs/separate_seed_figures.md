@@ -18,6 +18,16 @@ Health-only uses a separate submitter and is not included in the 24-job suite.
 It is registered in both 5m6m and seven-map figure inventories by exact names:
 `smac_5m6m_linear_health_only_10m_s{1,2,3}_healthcond`.
 
+The current upload inventory contains seven maps, 25 selected map/model
+cohorts and 75 exact seed names (30 names for the ten 5m6m models).
+Superseded replicas, legacy attention-ID, 5M ID and historical paper VDN/QMIX
+are excluded from discovery, CSV inventories, figures and new uploads, even
+when their records still exist. Keep the latest 5m6m visualization ID and
+3s5z visualization Obs/ID/ones cohorts. KL80 remains an explicitly labelled
+5M experiment; all other selected cohorts request 10M. Missing current data
+is never filled from an excluded old run. This change deletes no training
+records or previously uploaded W&B snapshots.
+
 Tests (synthetic data and mocked uploads only):
 `smoke_test_separate_seed_figures.py`,
 `smoke_test_plot_5m6m_head_condition_3seeds.py`,

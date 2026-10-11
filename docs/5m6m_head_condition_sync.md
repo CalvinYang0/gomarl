@@ -26,8 +26,8 @@ SUBMIT=YES /home/kyang/.conda/envs/marl_cpu/bin/python \
 不设置 `SUBMIT=YES` 只预览计划。提交前自动校验地图、磁盘配额、配置、
 真实地图尺寸及生产模型尺寸的 GRU/ID 前向与梯度路径，再做 Slurm 预检。
 tmux 已按本仓库运行中任务动态筛选，不需要另加固定作业 ID。
-六地图图入口已纳入这两组新线性 ID，以及 8m9m 的新 VDN/QMIX。
-旧 attention-ID 仅作为明确标注的历史参考，不能代替新线性 ID 的缺失数据。
+七地图图入口已纳入这两组新线性 ID，以及 8m9m 的新 VDN/QMIX。
+旧 attention-ID 已从当前图的读取和上传清单移除，不删除旧实验记录。
 
 tmux 只周期同步本仓库当前 `RUNNING` 作业的原始 W&B 数据。
 不周期绘图，不扫描已结束作业，不执行最终上传/删除本地记录。
@@ -35,74 +35,71 @@ tmux 只周期同步本仓库当前 `RUNNING` 作业的原始 W&B 数据。
 磁盘紧张时另用[已结束且云端核验通过的 W&B 副本清理](completed_wandb_cleanup.md)。
 它只删除准确的已结束 job 本地 W&B 目录，保留 Sacred/Slurm 日志，不修改 tmux 的运行任务同步逻辑。
 
-## 六张地图一次性出图
+## 七张地图一次性出图（不含旧参考组）
 
-`scripts/plot_smac_six_maps_3seeds.py` 一次读取 `3m`、`8m`、`8m_vs_9m`、`5m_vs_6m`、
-`3s_vs_5z`、`6h_vs_8z` 的三种子历史数据并上传同一个 analysis run。
+`scripts/plot_smac_seven_maps_3seeds.py` 一次读取 `3m`、`8m`、`8m_vs_9m`、`5m_vs_6m`、
+`3s_vs_5z`、`6h_vs_8z`、`MMM2` 的三种子数据并上传同一个 analysis run。
 每张地图分别生成 mean ± sample std 的 PNG/PDF 和个别 seed 曲线 PNG，
 不把不同地图混成一条胜率曲线。包含运行中和已结束的数据，不受 Slurm 状态过滤。
-读取与绘图共享同一模型清单，共 26 个实验批次、78 个精确 run 名称：
+读取与绘图共享同一模型清单，共 25 个实验组、75 个精确 run 名称：
 
-| 地图 | 当前实验及独立参考批次 | 每批种子 |
+| 地图 | 当前实验模型 | 每组种子 |
 | --- | --- | --- |
 | 3m | Linear Obs | 1/2/3 |
 | 8m（8 vs 8） | Linear Obs | 1/2/3 |
-| 8m_vs_9m | Linear Obs、Linear ID、VDN、QMIX、旧 attention-ID 参考 | 1/2/3 |
-| 5m_vs_6m | 下文十四批全部包含 | 1/2/3 |
-| 3s_vs_5z | Linear Obs、旧 attention-ID 参考 | 1/2/3 |
-| 6h_vs_8z | Linear Obs、Linear ID、旧 attention-ID 参考 | 1/2/3 |
+| 8m_vs_9m | Linear Obs、Linear ID、All-one、VDN、QMIX | 1/2/3 |
+| 5m_vs_6m | 下文十组全部包含 | 1/2/3 |
+| 3s_vs_5z | 新可视化批次的 Linear Obs、Linear ID、All-one | 1/2/3 |
+| 6h_vs_8z | Linear Obs、Linear ID | 1/2/3 |
+| MMM2 | 新可视化批次的 Linear Obs、Linear ID、All-one | 1/2/3 |
 
 清单对应本轮已配置的实验，不因任务结束或暂无数据而隐藏模型。
-旧 attention-ID 可能已取消或中断；标注的是预算，曲线仅画实际已有区间。
+清单是请求绘制的范围，不是提交成功证明。5m6m 的 10M VDN/QMIX 仍须核实提交记录；
+没有测试历史时显示缺失，不以旧 5M 对照代替。
 `8m` 是 8 vs 8，`8m_vs_9m` 是 8 vs 9，按精确 run 名称分别读取，标题和输出文件独立。
-旧入口 `plot_smac_five_maps_3seeds.py` 保持兼容，也会生成全部六张地图。
+旧入口 `plot_smac_five_maps_3seeds.py` 和 `plot_smac_six_maps_3seeds.py` 保持兼容，也会生成全部七张地图。
 其他地图未配置的条件不生成多余面板；已配置但暂无数据的条件保留 0/3 标注。
-旧 attention ID 不混入新线性 ID。
+旧批次、旧 attention-ID、5M ID 和历史 VDN/QMIX 不再读取或上传；旧原始数据和历史云端图不删除。
 
 ```bash
 cd /home/kyang/code/gomarl-dual-branch
 /home/kyang/.conda/envs/marl_cpu/bin/python \
-  scripts/plot_smac_six_maps_3seeds.py
+  scripts/plot_smac_seven_maps_3seeds.py
 ```
 
 每次手动调用生成一个新快照，只上传一次，然后退出；不会启动循环。
-W&B run：`smac_six_maps_obs_head_comparison_3seeds_figures`。
-目录：`/home/kyang/gomarl-runtime/gomarl-dual-branch/figures/smac_six_maps_latest_3seeds`。
-缺少种子时明确显示 n/3，排队的 global-state 无测试数据时标为 0/3。
+W&B run：`smac_seven_maps_obs_head_comparison_3seeds_figures`。
+目录：`/home/kyang/gomarl-runtime/gomarl-dual-branch/figures/smac_seven_maps_latest_3seeds`。
+缺少种子时明确显示 n/3，整组无测试数据时标为 0/3，不据此断言任务失败。
 
-## 单独查看 5m6m 全部十四批对照
+## 单独查看 5m6m 十组实验
 
-`scripts/plot_5m6m_head_condition_3seeds.py` 比较十四批精确 run 名称（42 个种子记录）：
+`scripts/plot_5m6m_head_condition_3seeds.py` 比较十组精确 run 名称（30 个种子记录）：
 
 | 组别 | 名称模板 | 预算 |
 | --- | --- | --- |
 | 原线性 obs 可视化新跑 | `smac_5m6m_linear_singlehead_baseline_10m_s{seed}_recheck` | 10M |
-| 正确线性 ID（新 10M） | `smac_5m6m_linear_id_baseline_10m_s{seed}_valuediag` | 10M |
-| 正确线性 ID（5M 独立对照） | `smac_5m6m_linear_id_5m_s{seed}_idkl80fix` | 5M |
+| 正确线性 ID（最新可视化批次） | `smac_5m6m_linear_id_10m_s{seed}_vizcoverage` | 10M |
 | 新线性 direct KL80 | `smac_5m6m_linear_kl80_direct_linearonly_5m_s{seed}_idkl80fix` | 5M |
 | global-state baseline | `smac_5m6m_linear_global_state_10m_s{seed}_statecond` | 10M |
 | 全 1 超网络输入 | `smac_5m6m_linear_ones_10m_s{seed}_signalcond` | 10M |
 | 单局 timestep 超网络输入 | `smac_5m6m_linear_timestep_10m_s{seed}_signalcond` | 10M |
 | Obs + 实体 ID | `smac_5m6m_linear_obs_entity_id_10m_s{seed}_entityidcond` | 10M |
+| Health-only 超网络输入 | `smac_5m6m_linear_health_only_10m_s{seed}_healthcond` | 10M |
 | VDN（新同设置对照） | `smac_5m6m_vdn_baseline_10m_s{seed}_valuediag` | 10M |
 | QMIX（新同设置对照） | `smac_5m6m_qmix_baseline_10m_s{seed}_valuediag` | 10M |
-| VDN（历史 paper 对照） | `smac_5m6m_paper_vdn_5m_s{seed}` | 5M |
-| QMIX（历史 paper 对照） | `smac_5m6m_paper_qmix_5m_s{seed}` | 5M |
-| 原始 scalar-only Linear Obs（参考，不替代新跑） | `smac_5m6m_linear_obs_baseline_10m_s{seed}_valuediag` | 10M |
-| 旧 attention-ID（参考，不是线性 ID） | `smac_5m6m_id_baseline_10m_s{seed}_valuediag` | 10M 预算 |
 
 新 VDN/QMIX 10M 使用独立精确名称，不混入 8m9m 或 Corridor，不与历史 5M 拼接。
-历史 VDN/QMIX 是不同训练批次的参考对照，不是严格同批次、同预算的消融。若历史本地记录已清理，
-省略 `--local-only` 可同时查找 W&B 云端，仍不回退到其他模型或预算的记录。
+历史 VDN/QMIX 不再出图。省略 `--local-only` 可同时查找当前精确名称的 W&B 云端数据，
+仍不回退到其他模型、旧批次或其他预算的记录。
 
 每组 seed 为 1/2/3。使用 `test_battle_won_mean`，同一 seed 只取最新 attempt；
 平均曲线只画当前可用 seed 的共同区间，图例明确写 `n/3 seeds`。
-缺少的数据保留为空，不以历史 attention ID 补位。
-10M ID 必须有其精确名称对应的测试记录；5M ID 和旧 attention-ID 都不能补位。
-5M ID 按实际预算作为独立参考，不延伸或拼接到 10M。
-Obs 新跑与原 scalar-only 批次分开，旧结果不能代替新的缺失数据。
-输出包含 mean ± sample std 的 PNG/PDF、十四批分别展开的种子图，以及原始曲线和 seed inventory CSV。
-十四批种子面板采用三列、五行排列，多余面板隐藏；汇总图将图例放在图外，避免遮住曲线。
+缺少的数据保留为空；最新 10M ID 不用之前的 ID、5M ID 或 attention-ID 补位。
+Obs 仅选择可视化新跑的 `_recheck` 批次，不读原 scalar-only 参考组。
+KL80 保留实际 5M 预算，不能标成 10M。
+输出包含 mean ± sample std 的 PNG/PDF、30 张独立 map/model/seed PNG，以及原始曲线和 seed inventory CSV。
+各个 seed 的图单独上传，不拼面板、不叠加三个种子；汇总图图例放在图外。
 平滑沿用 centered window=100 test points；需要看未平滑曲线可以加 `--mean-window 1`。
 
 默认目录：`/home/kyang/gomarl-runtime/gomarl-dual-branch/figures/5m6m_head_condition_comparison_3seeds`。
@@ -148,5 +145,5 @@ python scripts/smoke_test_counter_sync_tmux.py
 ```
 
 绘图检查使用合成 Sacred 数据，包括 NumPy scalar 的字典序列化形式。
-验证六地图的来源、8 vs 8 / 8 vs 9 不混用、各地图模型选择、缺少种子、一次性上传、PNG/PDF，
+验证七地图的来源、8 vs 8 / 8 vs 9 不混用、各地图模型选择、旧参考组排除、缺少种子、一次性上传、PNG/PDF，
 以及 5m6m 独立脚本的重复上传跳过和失败重试；不调用真实 W&B。

@@ -3,10 +3,9 @@
 
 Includes 3m, 8m (8 vs 8), 8m_vs_9m, 5m6m, 3s_vs_5z, 6h8z and MMM2.
 
-Include every configured control cohort in the current six-map study, not
-only Obs: corrected Linear-ID on 5m6m/8m9m/6h8z, VDN/QMIX on 5m6m/8m9m,
-and explicit legacy attention-ID references. Never substitute architectures
-or budgets, and never filter histories by Slurm state. Upload once per invocation.
+Include only the 25 selected map/model cohorts, without old replica or legacy
+attention-ID/5M ID/paper-control references. Never substitute architectures or
+budgets, and never filter histories by Slurm state. Upload once per invocation.
 """
 import plot_linear_counter_mmm2_threeway_3seeds as charts
 from ozstar_submit_3m_8m_obs_10m_3seeds import build_plans as marine_plans
@@ -32,11 +31,11 @@ SCENES = {
 SCENE_MODELS = {
     "smac_3m": ("linear_baseline",),
     "smac_8m": ("linear_baseline",),
-    "smac_8m9m": ("linear_baseline", "linear_id_baseline", "vdn", "qmix", "hyper_hypermarl_id",
+    "smac_8m9m": ("linear_baseline", "linear_id_baseline", "vdn", "qmix",
                    "linear_ones_baseline_vizcoverage"),
     "smac_5m6m": tuple(LABELS),
-    "smac_3svs5z": ("linear_baseline", "hyper_hypermarl_id") + tuple(PLOT_LABELS),
-    "smac_6h8z": ("linear_baseline", "linear_id_baseline", "hyper_hypermarl_id"),
+    "smac_3svs5z": tuple(PLOT_LABELS),
+    "smac_6h8z": ("linear_baseline", "linear_id_baseline"),
     "smac_mmm2": tuple(PLOT_LABELS),
 }
 
@@ -44,23 +43,21 @@ SCENE_MODELS = {
 def build_plans(repo):
     plans = marine_plans(repo) + head_plans(repo)
     for scene, map_name in (("smac_8m9m", "8m_vs_9m"),
-                            ("smac_3svs5z", "3s_vs_5z"),
                             ("smac_6h8z", "6h_vs_8z")):
         for plan in value_plans(repo, scene, map_name, GROUP):
-            if plan["label"] == "hyper_hypermarl_id":
-                plan["inventory_note"] = "Legacy attention-ID reference; may be stopped/partial; not corrected Linear ID"
-            plans.append(plan)
+            if plan["label"] == "linear_baseline":
+                plans.append(plan)
     plans.extend(id_plans(repo))
     plans.extend(mixer_plans(repo))
     # 5m6m's fresh ID cohort is already registered by head_plans. All other
-    # fresh cohorts remain separate from historical/current earlier replicas.
+    # fresh cohorts are selected without reading superseded replicas.
     plans.extend(dict(p, label=p["label"] + "_vizcoverage",
                       inventory_note="New visualization-covered 10M replica; not merged with older cohorts")
                  for p in covered_plans(repo) if p["scene"] != "smac_5m6m")
     for plan in plans:
         plan.setdefault("target_steps", 10000000)
-    if len(plans) != 105 or len({p["job_name"] for p in plans}) != 105:
-        raise RuntimeError("Expected 105 distinct runs across seven maps")
+    if len(plans) != 75 or len({p["job_name"] for p in plans}) != 75:
+        raise RuntimeError("Expected 75 distinct runs across seven maps")
     for scene in SCENES:
         models = set(SCENE_MODELS[scene])
         selected = [p for p in plans if p["scene"] == scene]
@@ -83,7 +80,8 @@ def configure():
     charts.REPORT_SEED_COVERAGE = True
     charts.TARGET_STEPS = 10000000
     charts.SCENES = SCENES
-    charts.LABELS = dict(LABELS, **PLOT_LABELS)
+    charts.LABELS = dict(LABELS, **PLOT_LABELS,
+                         linear_id_baseline=("Linear ID-based (10M)", "#e6550d"))
     charts.SCENE_MODELS = SCENE_MODELS
     charts.build_plans = build_plans
 
