@@ -117,6 +117,34 @@ W&B analysis run 名称：`smac_5m6m_head_condition_comparison_3seeds_figures`�
 
 ## 立即生成并上传
 
+### 只补历史 5M VDN/QMIX（不重新拉其他实验）
+
+已有七地图快照时，不要为了补两个参考组再跑完整七地图读取。使用：
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+/home/kyang/.conda/envs/marl_cpu/bin/python -u \
+  scripts/plot_5m6m_add_5m_mixer_controls.py
+```
+
+只向 W&B 查询 `smac_5m6m_paper_{vdn,qmix}_5m_s{1,2,3}` 六个精确名称。
+其他 5m6m 组复用上次七地图目录里的 `seed_inventory.csv` 和 `seed_curves.csv`，
+保留原来的缺失标记、来源和进度，不重新扫描其训练文件或读取云端历史。
+只重画并上传 5m6m；其他地图不更新。结果写到独立的 `figures/5m6m_5m_mixer_patch`，
+不覆盖源快照。日志在每条云端历史读取前打印 `READ n/6`。
+缺少或不兼容的快照直接报错，不自动全量重拉；精确名称查询失败也不扫描整个项目。
+若新 10M VDN/QMIX 已有数据，仍保持新组优先，历史 5M 不补进新组。
+
+上次使用单独 5m6m 绘图入口时，指定其缓存目录：
+
+```bash
+/home/kyang/.conda/envs/marl_cpu/bin/python -u \
+  scripts/plot_5m6m_add_5m_mixer_controls.py \
+  --snapshot-dir /home/kyang/gomarl-runtime/gomarl-dual-branch/figures/5m6m_head_condition_comparison_3seeds
+```
+
+加 `--no-upload` 只生成本地结果。非参考组来自旧快照，并不代表刷新到了当前进度。
+
 ```bash
 cd /home/kyang/code/gomarl-dual-branch
 /home/kyang/.conda/envs/marl_cpu/bin/python \

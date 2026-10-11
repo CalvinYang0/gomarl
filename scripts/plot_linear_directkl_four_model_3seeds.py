@@ -96,7 +96,7 @@ def local_run_index(wandb_root: Path, wanted: set[str]) -> dict[str, list[Path]]
     return index
 
 
-def cloud_run_index(project: str, wanted: set[str]) -> dict[str, list[Any]]:
+def cloud_run_index(project: str, wanted: set[str], allow_full_scan: bool = True) -> dict[str, list[Any]]:
     """Fetch only matching run metadata; histories load on demand."""
     import wandb
 
@@ -107,11 +107,13 @@ def cloud_run_index(project: str, wanted: set[str]) -> dict[str, list[Any]]:
             per_page=500,
         )
         found = list(runs)
-        if not found:
+        if not found and allow_full_scan:
             found = [run for run in api.runs(project, per_page=500)
                      if run.name in wanted]
     except Exception as exc:
         print("WARNING: filtered W&B discovery failed: {}".format(exc), file=sys.stderr)
+        if not allow_full_scan:
+            raise RuntimeError("Exact-name W&B query failed; refusing a full-project scan") from exc
         try:
             api = wandb.Api(timeout=90)
             found = [run for run in api.runs(project, per_page=500)
