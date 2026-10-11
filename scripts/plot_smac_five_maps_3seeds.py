@@ -3,7 +3,7 @@
 
 Includes 3m, 8m (8 vs 8), 8m_vs_9m, 5m6m, 3s_vs_5z, 6h8z and MMM2.
 
-Include 26 current cohorts and two explicitly labelled 5m6m 5M mixer fallbacks.
+Include 30 current cohorts and two explicitly labelled 5m6m 5M mixer fallbacks.
 Exclude old replica and legacy attention-ID/5M ID references. Never mix
 cohorts or budgets, or filter histories by Slurm state. Upload once per invocation.
 """
@@ -58,8 +58,8 @@ def build_plans(repo):
                  for p in covered_plans(repo) if p["scene"] != "smac_5m6m")
     for plan in plans:
         plan.setdefault("target_steps", 10000000)
-    if len(plans) != 84 or len({p["job_name"] for p in plans}) != 84:
-        raise RuntimeError("Expected 84 distinct runs across seven maps, including six labelled 5M fallback histories")
+    if len(plans) != 96 or len({p["job_name"] for p in plans}) != 96:
+        raise RuntimeError("Expected 96 distinct runs across seven maps, including six labelled 5M fallback histories")
     for scene in SCENES:
         models = set(SCENE_MODELS[scene])
         selected = [p for p in plans if p["scene"] == scene]

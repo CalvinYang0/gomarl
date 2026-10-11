@@ -44,7 +44,8 @@ class ValueDiagnosticSummary:
                     logger.log_stat(prefix + suffix, value, t_env)
 
 
-def episode_value_samples(agent_q, mixer, batch, gamma, summary):
+def episode_value_samples(agent_q, mixer, batch, gamma, summary,
+                          group_agent_q=None, group_observations=None, group_masks=None):
     """Aggregate executed-action Q values; padding/dead agents are excluded."""
     rewards = batch["reward"][:, :-1].float()
     terminated = batch["terminated"][:, :-1].float()
@@ -63,9 +64,17 @@ def episode_value_samples(agent_q, mixer, batch, gamma, summary):
         summary.add("agent_{}_q".format(agent), utilities[:, :, agent][mask & alive[:, :, agent]])
 
     with th.enable_grad():
-        inputs = utilities.detach().requires_grad_(True)
-        joint = mixer(inputs, states)
-        sensitivity = th.autograd.grad(joint.sum(), inputs)[0]
+        if group_agent_q is None:
+            inputs = utilities.detach().requires_grad_(True)
+            joint = mixer(inputs, states)
+            sensitivity = th.autograd.grad(joint.sum(), inputs)[0]
+        else:
+            group_actions = actions.unsqueeze(2).expand(-1, -1, 2, -1, -1)
+            inputs = group_agent_q.gather(-1, group_actions).squeeze(-1).detach().requires_grad_(True)
+            joint = mixer(inputs, states, group_observations, group_masks)
+            # Report sensitivity to the executed important head, not an
+            # invented single-head approximation of the hierarchical value.
+            sensitivity = th.autograd.grad(joint.sum(), inputs)[0][:, :, 0]
     joint = joint.detach()
     summary.add("q_tot", joint.squeeze(-1)[mask])
     summary.add("mixer_dqtot_dqi", sensitivity[mask.unsqueeze(-1).expand_as(sensitivity)])
@@ -107,11 +116,18 @@ def collect_value_diagnostics(mac, mixer, batch, gamma, summary):
     try:
         with th.random.fork_rng(devices=cuda_devices), th.no_grad():
             mac.init_hidden(batch.batch_size)
-            q_values = th.stack([
-                mac.forward(batch, t=t, test_mode=True)
-                for t in range(batch.max_seq_length - 1)
-            ], dim=1)
-            episode_value_samples(q_values, mixer, batch, gamma, summary)
+            q_values, group_values, group_obs = [], [], []
+            for t in range(batch.max_seq_length - 1):
+                q_values.append(mac.forward(batch, t=t, test_mode=True))
+                if getattr(mac.agent, "is_grouped", False):
+                    group_values.append(mac.latest_group_q)
+                    group_obs.append(mac.latest_group_observations)
+            q_values = th.stack(q_values, dim=1)
+            episode_value_samples(
+                q_values, mixer, batch, gamma, summary,
+                th.stack(group_values, 1) if group_values else None,
+                th.stack(group_obs, 1) if group_obs else None,
+                mac.agent.group_masks(q_values) if group_values else None)
     finally:
         mac.hidden_states = saved_hidden
         for module, training in saved_modes:

@@ -12,8 +12,8 @@ import plot_5m6m_head_condition_3seeds as study
 
 def main():
     plans = study.build_plans(study.charts.ROOT)
-    assert len(plans) == 36
-    assert len(study.LABELS) == 12
+    assert len(plans) == 48
+    assert len(study.LABELS) == 16
     assert {p["label"] for p in plans} == set(study.LABELS)
     health = [p for p in plans if p["label"] == "linear_health_baseline"]
     assert len(health) == 3 and all("healthcond" in p["job_name"] for p in health)
@@ -92,7 +92,7 @@ def main():
         output = runtime / "figures" / study.OUTPUT_SUBDIR
         with (output / "seed_inventory.csv").open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 36
+        assert len(inventory) == 48
         assert excluded_names.isdisjoint(row["run_name"] for row in inventory)
         assert all(row["source"] == "sacred" and row["points"] == "4"
                    for row in inventory if row["coverage"] != "missing")
@@ -130,7 +130,7 @@ def main():
             upload.side_effect = None
             study.upload_if_changed(*args)
             assert checkpoint.read_text() != before
-    print("PASS: ten current cohorts plus two labelled 5M mixer fallbacks, 5M VDN visible when 10M absent, one 10M QMIX seed never filled from 5M, obsolete IDs excluded, exact seeds, Sacred NumPy scalars, "
+    print("PASS: fourteen current cohorts plus two labelled 5M mixer fallbacks, 5M VDN visible when 10M absent, one 10M QMIX seed never filled from 5M, obsolete IDs excluded, exact seeds, Sacred NumPy scalars, "
           "PNG/PDF, upload dedup and failure retry")
 
 

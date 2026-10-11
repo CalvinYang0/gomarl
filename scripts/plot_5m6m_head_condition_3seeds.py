@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload ten current 5m6m cohorts, with labelled 5M VDN/QMIX fallbacks.
+"""Upload fourteen current 5m6m cohorts, with labelled 5M VDN/QMIX fallbacks.
 
 Uses exact run names and the latest attempt per seed. Periodic invocations
 upload only when curve data, seed inventory or plotting settings change.
@@ -21,6 +21,7 @@ from ozstar_submit_5m6m_obs_entity_id_10m_3seeds import build_plans as entity_id
 from ozstar_submit_5m6m_vdn_qmix_10m_3seeds import build_plans as mixer_plans
 from ozstar_submit_head_input_24jobs import build_plans as covered_plans, PLOT_LABELS
 from ozstar_submit_5m6m_health_only_10m_3seeds import build_plans as health_plans
+from ozstar_submit_5m6m_slot_input_controls_12jobs import build_plans as slot_plans, PLOT_LABELS as SLOT_LABELS
 
 GROUP = "smac_5m6m_head_condition_comparison_3seeds"
 OUTPUT_SUBDIR = "5m6m_head_condition_comparison_3seeds"
@@ -39,12 +40,14 @@ LABELS = {
     "historical_qmix": ("QMIX (historical 5M paper control)", "#7f7f7f"),
 }
 FALLBACK_MODELS = {"smac_5m6m": {"vdn": "historical_vdn", "qmix": "historical_qmix"}}
+LABELS.update(SLOT_LABELS)
 _BASE_UPLOAD = charts.upload
 
 
 def build_plans(repo):
     plans = [plan for plan in visualization_plans(repo) if plan["label"] == "linear_baseline"]
     plans.extend(health_plans(repo))
+    plans.extend(slot_plans(repo))
     plans.extend(dict(p, label=p["label"] + "_vizcoverage",
                       inventory_note="New 10M ID cohort with required battle/policy diagnostics; not old ID data")
                  for p in covered_plans(repo) if p["scene"] == "smac_5m6m")
@@ -69,8 +72,8 @@ def build_plans(repo):
             5000000 if plan["label"] in {"linear_bayesg_kl80_keep", "historical_vdn", "historical_qmix"}
             else 10000000
         )
-    if len(plans) != 36 or len({p["job_name"] for p in plans}) != 36:
-        raise RuntimeError("Expected 36 distinct runs: ten current groups plus two 5M fallback groups")
+    if len(plans) != 48 or len({p["job_name"] for p in plans}) != 48:
+        raise RuntimeError("Expected 48 distinct runs: fourteen current groups plus two 5M fallback groups")
     if {p["label"] for p in plans} != set(LABELS):
         raise RuntimeError("Unexpected 5m6m model inventory")
     for label in LABELS:
