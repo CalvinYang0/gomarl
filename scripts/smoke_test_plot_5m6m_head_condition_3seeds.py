@@ -92,9 +92,13 @@ def main():
             aggregate = list(csv.DictReader(handle))
         assert {row["model"] for row in aggregate} == set(study.LABELS) - {"linear_id_baseline"}
         assert all(row["seed_count"] == "3" for row in aggregate)
-        for name in ("smac_5m6m_three_seed.png", "smac_5m6m_three_seed.pdf",
-                     "smac_5m6m_individual_seeds.png"):
+        for name in ("smac_5m6m_three_seed.png", "smac_5m6m_three_seed.pdf"):
             assert (output / name).stat().st_size > 1000
+        for label in study.LABELS:
+            for seed in (1, 2, 3):
+                assert (output / "smac_5m6m__{}__seed_{}.png".format(label, seed)).stat().st_size > 1000
+        assert len(list(output.glob("*__seed_*.png"))) == 48
+        assert not (output / "smac_5m6m_individual_seeds.png").exists()
         with patch.object(study, "_BASE_UPLOAD") as upload:
             args = ("hjh331-sjtu/gomarl", output, {}, inventory, 100)
             study.upload_if_changed(*args)

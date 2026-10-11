@@ -74,8 +74,13 @@ def main():
             expected = set(study.SCENE_MODELS[scene]) - {"linear_global_state_baseline"}
             assert {row["model"] for row in aggregate} == expected
             assert {row["seed_count"] for row in aggregate} == ({"2"} if scene == "smac_3m" else {"3"})
-            for suffix in ("_three_seed.png", "_three_seed.pdf", "_individual_seeds.png"):
+            for suffix in ("_three_seed.png", "_three_seed.pdf"):
                 assert (output / (scene + suffix)).stat().st_size > 1000
+            for model in study.SCENE_MODELS[scene]:
+                for seed in (1, 2, 3):
+                    assert (output / "{}__{}__seed_{}.png".format(scene, model, seed)).stat().st_size > 1000
+        assert len(list(output.glob("*__seed_*.png"))) == 105
+        assert not list(output.glob("*_individual_seeds.png"))
         assert study.charts.SCENE_MODELS["smac_3m"] == ("linear_baseline",)
         assert set(study.charts.SCENE_MODELS["smac_8m9m"]) == {
             "linear_baseline", "linear_id_baseline", "vdn", "qmix", "hyper_hypermarl_id",
