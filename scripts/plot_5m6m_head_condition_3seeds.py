@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload only the ten selected 5m6m experiment cohorts; no legacy references.
+"""Upload ten current 5m6m cohorts, with labelled 5M VDN/QMIX fallbacks.
 
 Uses exact run names and the latest attempt per seed. Periodic invocations
 upload only when curve data, seed inventory or plotting settings change.
@@ -35,7 +35,10 @@ LABELS = {
     "qmix": ("QMIX (new matched 10M)", "#393b79"),
     "linear_id_baseline_vizcoverage": PLOT_LABELS["linear_id_baseline_vizcoverage"],
     "linear_health_baseline": ("Linear health-only hyper-Obs (10M)", "#e7969c"),
+    "historical_vdn": ("VDN (historical 5M paper control)", "#d62728"),
+    "historical_qmix": ("QMIX (historical 5M paper control)", "#7f7f7f"),
 }
+FALLBACK_MODELS = {"smac_5m6m": {"vdn": "historical_vdn", "qmix": "historical_qmix"}}
 _BASE_UPLOAD = charts.upload
 
 
@@ -52,12 +55,22 @@ def build_plans(repo):
     plans.extend(signal_plans(repo))
     plans.extend(entity_id_plans(repo))
     plans.extend(mixer_plans(repo))
+    for method in ("vdn", "qmix"):
+        for seed in (1, 2, 3):
+            plans.append({
+                "scene": "smac_5m6m", "map_name": "5m_vs_6m",
+                "label": "historical_" + method, "seed": seed,
+                "job_name": "smac_5m6m_paper_{}_5m_s{}".format(method, seed),
+                "target_steps": 5000000,
+                "inventory_note": "Historical 5M paper control; displayed only if this method has no new 10M test history; never merged with 10M",
+            })
     for plan in plans:
         plan["target_steps"] = (
-            5000000 if plan["label"] == "linear_bayesg_kl80_keep" else 10000000
+            5000000 if plan["label"] in {"linear_bayesg_kl80_keep", "historical_vdn", "historical_qmix"}
+            else 10000000
         )
-    if len(plans) != 30 or len({p["job_name"] for p in plans}) != 30:
-        raise RuntimeError("Expected thirty distinct runs: ten groups, three seeds each")
+    if len(plans) != 36 or len({p["job_name"] for p in plans}) != 36:
+        raise RuntimeError("Expected 36 distinct runs: ten current groups plus two 5M fallback groups")
     if {p["label"] for p in plans} != set(LABELS):
         raise RuntimeError("Unexpected 5m6m model inventory")
     for label in LABELS:
@@ -69,6 +82,7 @@ def build_plans(repo):
 def upload_if_changed(project, output_dir, outputs, inventory, window):
     signature = hashlib.sha256()
     settings = dict(project=project, group=GROUP, labels=LABELS, window=window,
+                    cohort_fallbacks=FALLBACK_MODELS,
                     individual_seed_layout="three seeds per model panel; one multi-model image per map",
                     selection="latest attempt per seed; shared seed interval only")
     signature.update(json.dumps(settings, sort_keys=True).encode())
@@ -90,12 +104,13 @@ def upload_if_changed(project, output_dir, outputs, inventory, window):
 def configure():
     charts.GROUP = GROUP
     charts.DEFAULT_OUTPUT_SUBDIR = OUTPUT_SUBDIR
-    charts.RESULTS_TITLE = "selected head conditions / matched 10M VDN/QMIX controls"
+    charts.RESULTS_TITLE = "head conditions / VDN and QMIX (budgets labelled)"
     charts.REPORT_SEED_COVERAGE = True
     charts.TARGET_STEPS = 10000000
     charts.SCENES = {"smac_5m6m": ("5 Marines vs. 6 Marines", "test_battle_won_mean")}
     charts.LABELS = LABELS
     charts.SCENE_MODELS = {"smac_5m6m": tuple(LABELS)}
+    charts.SCENE_FALLBACK_MODELS = FALLBACK_MODELS
     charts.build_plans = build_plans
     charts.upload = upload_if_changed
 

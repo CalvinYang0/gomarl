@@ -12,8 +12,8 @@ import plot_5m6m_head_condition_3seeds as study
 
 def main():
     plans = study.build_plans(study.charts.ROOT)
-    assert len(plans) == 30
-    assert len(study.LABELS) == 10
+    assert len(plans) == 36
+    assert len(study.LABELS) == 12
     assert {p["label"] for p in plans} == set(study.LABELS)
     health = [p for p in plans if p["label"] == "linear_health_baseline"]
     assert len(health) == 3 and all("healthcond" in p["job_name"] for p in health)
@@ -26,8 +26,6 @@ def main():
         "smac_5m6m_linear_id_5m_s{}_idkl80fix",
         "smac_5m6m_linear_obs_baseline_10m_s{}_valuediag",
         "smac_5m6m_id_baseline_10m_s{}_valuediag",
-        "smac_5m6m_paper_vdn_5m_s{}",
-        "smac_5m6m_paper_qmix_5m_s{}",
     )
     excluded_names = {template.format(seed) for template in excluded_templates
                       for seed in (1, 2, 3)}
@@ -39,13 +37,19 @@ def main():
             for seed in (1, 2, 3)
         }
         assert all(p["target_steps"] == 10000000 for p in new_controls)
+        old_controls = [p for p in plans if p["label"] == "historical_" + method]
+        assert {p["job_name"] for p in old_controls} == {
+            "smac_5m6m_paper_{}_5m_s{}".format(method, seed) for seed in (1, 2, 3)
+        }
+        assert all(p["target_steps"] == 5000000 for p in old_controls)
     assert sum("entityidcond" in p["job_name"] for p in plans) == 3
     assert sum("statecond" in p["job_name"] for p in plans) == 3
     assert sum("idkl80fix" in p["job_name"] for p in plans) == 3
     assert sum("_recheck" in p["job_name"] for p in plans) == 3
     assert sum("signalcond" in p["job_name"] for p in plans) == 6
     for plan in plans:
-        assert plan["target_steps"] == (5000000 if plan["label"] == "linear_bayesg_kl80_keep"
+        assert plan["target_steps"] == (5000000 if plan["label"] in {
+            "linear_bayesg_kl80_keep", "historical_vdn", "historical_qmix"}
                                          else 10000000)
     with tempfile.TemporaryDirectory(prefix="gomarl-head-figures-") as tmp:
         runtime = Path(tmp)
@@ -65,7 +69,11 @@ def main():
                 "test_battle_won_mean": [1.0, 1.0],
             }))
         for plan in plans:
-            if plan["label"] == "linear_id_baseline_vizcoverage":
+            # VDN has no 10M data: use its separate 5M cohort. QMIX has one
+            # 10M seed: do NOT fill its other seeds from historical QMIX.
+            if plan["label"] in {"linear_id_baseline_vizcoverage", "vdn"}:
+                continue
+            if plan["label"] == "qmix" and plan["seed"] != 1:
                 continue
             path = runtime / "results/sacred/5m_vs_6m" / plan["label"] / str(plan["seed"])
             path.mkdir(parents=True)
@@ -84,16 +92,20 @@ def main():
         output = runtime / "figures" / study.OUTPUT_SUBDIR
         with (output / "seed_inventory.csv").open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 30
+        assert len(inventory) == 36
         assert excluded_names.isdisjoint(row["run_name"] for row in inventory)
         assert all(row["source"] == "sacred" and row["points"] == "4"
-                   for row in inventory if row["model"] != "linear_id_baseline_vizcoverage")
+                   for row in inventory if row["coverage"] != "missing")
         missing_ids = [row for row in inventory if row["model"] == "linear_id_baseline_vizcoverage"]
         assert len(missing_ids) == 3 and all(row["coverage"] == "missing" for row in missing_ids)
         with (output / "smac_5m6m_aggregate.csv").open() as handle:
             aggregate = list(csv.DictReader(handle))
-        assert {row["model"] for row in aggregate} == set(study.LABELS) - {"linear_id_baseline_vizcoverage"}
-        assert all(row["seed_count"] == "3" for row in aggregate)
+        assert {row["model"] for row in aggregate} == set(study.LABELS) - {
+            "linear_id_baseline_vizcoverage", "vdn", "historical_qmix"}
+        assert all(row["seed_count"] == ("1" if row["model"] == "qmix" else "3")
+                   for row in aggregate)
+        assert all("Historical 5M" in row["note"] for row in inventory
+                   if row["model"].startswith("historical_"))
         for name in ("smac_5m6m_three_seed.png", "smac_5m6m_three_seed.pdf"):
             assert (output / name).stat().st_size > 1000
         assert (output / "smac_5m6m_individual_seeds.png").stat().st_size > 1000
@@ -118,7 +130,7 @@ def main():
             upload.side_effect = None
             study.upload_if_changed(*args)
             assert checkpoint.read_text() != before
-    print("PASS: ten selected cohorts including health-only, latest visualization ID only, obsolete histories excluded even when present, KL80 alone at 5M, exact seeds, Sacred NumPy scalars, "
+    print("PASS: ten current cohorts plus two labelled 5M mixer fallbacks, 5M VDN visible when 10M absent, one 10M QMIX seed never filled from 5M, obsolete IDs excluded, exact seeds, Sacred NumPy scalars, "
           "PNG/PDF, upload dedup and failure retry")
 
 

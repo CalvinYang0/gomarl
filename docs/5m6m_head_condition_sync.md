@@ -41,7 +41,8 @@ tmux 只周期同步本仓库当前 `RUNNING` 作业的原始 W&B 数据。
 `3s_vs_5z`、`6h_vs_8z`、`MMM2` 的三种子数据并上传同一个 analysis run。
 每张地图分别生成 mean ± sample std 的 PNG/PDF 和个别 seed 曲线 PNG，
 不把不同地图混成一条胜率曲线。包含运行中和已结束的数据，不受 Slurm 状态过滤。
-读取与绘图共享同一模型清单，共 25 个实验组、75 个精确 run 名称：
+读取清单包含 25 个当前实验组，加上 5m6m 两个历史 5M mixer 备用组，共 81 个精确 run 名称。
+绘图在 VDN/QMIX 的新旧批次之间独立选择，最多显示原有 25 个模型面板：
 
 | 地图 | 当前实验模型 | 每组种子 |
 | --- | --- | --- |
@@ -55,11 +56,13 @@ tmux 只周期同步本仓库当前 `RUNNING` 作业的原始 W&B 数据。
 
 清单对应本轮已配置的实验，不因任务结束或暂无数据而隐藏模型。
 清单是请求绘制的范围，不是提交成功证明。5m6m 的 10M VDN/QMIX 仍须核实提交记录；
-没有测试历史时显示缺失，不以旧 5M 对照代替。
+按用户最新要求：某方法完全没有新 10M 测试历史时，显示明确标注的历史 5M 组三种子。
+新 10M 任一个种子有数据时只显示新组，不拿历史种子补位；两批都无数据时保留新组空面板。
 `8m` 是 8 vs 8，`8m_vs_9m` 是 8 vs 9，按精确 run 名称分别读取，标题和输出文件独立。
 旧入口 `plot_smac_five_maps_3seeds.py` 和 `plot_smac_six_maps_3seeds.py` 保持兼容，也会生成全部七张地图。
 其他地图未配置的条件不生成多余面板；已配置但暂无数据的条件保留 0/3 标注。
-旧批次、旧 attention-ID、5M ID 和历史 VDN/QMIX 不再读取或上传；旧原始数据和历史云端图不删除。
+旧批次、旧 attention-ID 和 5M ID 不读取；仅恢复上述 5m6m 历史 VDN/QMIX 备用组。
+旧原始数据和历史云端图不删除。
 
 ```bash
 cd /home/kyang/code/gomarl-dual-branch
@@ -74,7 +77,8 @@ W&B run：`smac_seven_maps_obs_head_comparison_3seeds_figures`。
 
 ## 单独查看 5m6m 十组实验
 
-`scripts/plot_5m6m_head_condition_3seeds.py` 比较十组精确 run 名称（30 个种子记录）：
+`scripts/plot_5m6m_head_condition_3seeds.py` 读取十个当前组和两个备用组（36 个种子记录），
+实际图里 VDN/QMIX 各显示一个独立批次：
 
 | 组别 | 名称模板 | 预算 |
 | --- | --- | --- |
@@ -88,10 +92,13 @@ W&B run：`smac_seven_maps_obs_head_comparison_3seeds_figures`。
 | Health-only 超网络输入 | `smac_5m6m_linear_health_only_10m_s{seed}_healthcond` | 10M |
 | VDN（新同设置对照） | `smac_5m6m_vdn_baseline_10m_s{seed}_valuediag` | 10M |
 | QMIX（新同设置对照） | `smac_5m6m_qmix_baseline_10m_s{seed}_valuediag` | 10M |
+| VDN（无新数据时的历史备用组） | `smac_5m6m_paper_vdn_5m_s{seed}` | 5M |
+| QMIX（无新数据时的历史备用组） | `smac_5m6m_paper_qmix_5m_s{seed}` | 5M |
 
 新 VDN/QMIX 10M 使用独立精确名称，不混入 8m9m 或 Corridor，不与历史 5M 拼接。
-历史 VDN/QMIX 不再出图。省略 `--local-only` 可同时查找当前精确名称的 W&B 云端数据，
-仍不回退到其他模型、旧批次或其他预算的记录。
+历史 VDN/QMIX 可作为整组备用数据，图例明确写历史 5M，不与新 10M 拼接。
+省略 `--local-only` 同时查找 W&B 云端数据，尤其适用于已清理本地文件的完成任务。
+仍不回退到其他模型或未指定的旧批次。
 
 每组 seed 为 1/2/3。使用 `test_battle_won_mean`，同一 seed 只取最新 attempt；
 平均曲线只画当前可用 seed 的共同区间，图例明确写 `n/3 seeds`。

@@ -12,13 +12,14 @@ import plot_smac_five_maps_3seeds as study
 
 def main():
     plans = study.build_plans(study.charts.ROOT)
-    assert len(plans) == 75
+    assert len(plans) == 81
     assert {p["scene"] for p in plans} == set(study.SCENES)
     assert not any(p["label"] in {
         "hyper_hypermarl_id", "linear_id_baseline_5m", "original_linear_baseline",
-        "historical_vdn", "historical_qmix",
     } for p in plans)
-    assert sum(len(models) for models in study.SCENE_MODELS.values()) == 25
+    assert sum(len(models) for models in study.SCENE_MODELS.values()) == 27
+    assert all(p["scene"] == "smac_5m6m" and p["target_steps"] == 5000000
+               for p in plans if p["label"].startswith("historical_"))
     # No queue filter: completed-map data is just as eligible as running data.
     marine_names = {}
     for scene, map_name in (("smac_8m", "8m"), ("smac_8m9m", "8m_vs_9m")):
@@ -96,7 +97,7 @@ def main():
         output = runtime / "figures" / study.OUTPUT_SUBDIR
         with (output / "seed_inventory.csv").open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 75
+        assert len(inventory) == 81
         missing = [row for row in inventory if row["coverage"] == "missing"]
         assert len(missing) == 5
         missing_new_obs = [row for row in missing if row["scene"] == "smac_3svs5z"]
@@ -106,6 +107,9 @@ def main():
             with (output / (scene + "_aggregate.csv")).open() as handle:
                 aggregate = list(csv.DictReader(handle))
             expected = set(study.SCENE_MODELS[scene]) - {"linear_global_state_baseline"}
+            if scene == "smac_5m6m":
+                # Both new cohorts have data: historic cohorts must not draw.
+                expected -= {"historical_vdn", "historical_qmix"}
             assert {row["model"] for row in aggregate} == expected
             counts = {"2"} if scene == "smac_3m" else {"2", "3"} if scene == "smac_3svs5z" else {"3"}
             assert {row["seed_count"] for row in aggregate} == counts
@@ -120,7 +124,7 @@ def main():
             "linear_ones_baseline_vizcoverage"}
         assert set(study.charts.SCENE_MODELS["smac_6h8z"]) == {
             "linear_baseline", "linear_id_baseline"}
-        assert len(study.charts.SCENE_MODELS["smac_5m6m"]) == 10
+        assert len(study.charts.SCENE_MODELS["smac_5m6m"]) == 12
         assert set(study.charts.SCENE_MODELS["smac_3svs5z"]) == set(study.PLOT_LABELS)
         assert set(study.charts.SCENE_MODELS["smac_mmm2"]) == set(study.PLOT_LABELS)
         fresh = [row for row in inventory if row["model"].endswith("_vizcoverage")]
@@ -144,7 +148,7 @@ def main():
                                            "--runtime-root", str(runtime)]):
                 study.main()
             upload.assert_not_called()
-    print("PASS: seven maps, 25 selected cohorts / 75 exact runs including health-only and 24 fresh replicas, no old-reference fallback, separate 8v8/8v9 histories, missing seeds retained, "
+    print("PASS: seven maps, 25 current cohorts plus two 5M mixer fallbacks / 81 exact runs, 5M cohorts hidden when new 10M exists, separate 8v8/8v9 histories, missing seeds retained, "
           "completed histories eligible, per-map models, PNG/PDF and one upload")
 
 

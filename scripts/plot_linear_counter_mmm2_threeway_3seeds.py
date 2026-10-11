@@ -45,6 +45,9 @@ RESULTS_TITLE = "current threeway results"
 REPORT_SEED_COVERAGE = False
 # Optional per-map model selection; other plotting wrappers retain all LABELS.
 SCENE_MODELS = {}
+# Optional, explicitly labelled whole-cohort fallbacks. Never replace only
+# missing seeds, and never stitch budgets or training vintages together.
+SCENE_FALLBACK_MODELS = {}
 
 
 def inventory_table_data(inventory):
@@ -149,6 +152,18 @@ def select_latest(plan, metric, local, cloud, sacred, wandb_root, plotter):
     return None, details, "; ".join(errors)
 
 
+def visible_entries(scene, entries):
+    selected = dict(entries)
+    for preferred, fallback in SCENE_FALLBACK_MODELS.get(scene, {}).items():
+        if entries.get(preferred):
+            selected.pop(fallback, None)
+        elif entries.get(fallback):
+            selected.pop(preferred, None)
+        else:
+            selected.pop(fallback, None)
+    return selected
+
+
 def render(scene, entries, output_dir, plotter, window):
     import matplotlib
     matplotlib.use("Agg")
@@ -156,6 +171,11 @@ def render(scene, entries, output_dir, plotter, window):
     from matplotlib.ticker import FuncFormatter
     import numpy as np
 
+    entries = visible_entries(scene, entries)
+    for preferred, fallback in SCENE_FALLBACK_MODELS.get(scene, {}).items():
+        if fallback in entries and entries[fallback]:
+            print("{}: no {} 10M test history; showing separately labelled {}".format(
+                scene, preferred, LABELS[fallback][0]), flush=True)
     title, _ = SCENES[scene]
     scene_labels = {model: LABELS[model] for model in entries}
     many_models = len(scene_labels) > 7
@@ -284,6 +304,7 @@ def upload(project, output_dir, outputs, inventory, window):
                     name=GROUP + "_figures", group=GROUP, job_type="analysis", mode="online",
                     dir=str(output_dir), config={"target_steps": TARGET_STEPS, "mean_window": window,
                                                 "selection": "latest attempt per seed", "seeds": [1, 2, 3],
+                                                "cohort_fallbacks": SCENE_FALLBACK_MODELS,
                                                 "individual_seed_layout": "three seeds per model panel; one multi-model image per map"}) as run:
         payload = {"seed_inventory": wandb.Table(columns=list(FIELDS),
                     data=inventory_table_data(inventory))}

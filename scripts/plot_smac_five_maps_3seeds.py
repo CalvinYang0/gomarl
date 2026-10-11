@@ -3,14 +3,14 @@
 
 Includes 3m, 8m (8 vs 8), 8m_vs_9m, 5m6m, 3s_vs_5z, 6h8z and MMM2.
 
-Include only the 25 selected map/model cohorts, without old replica or legacy
-attention-ID/5M ID/paper-control references. Never substitute architectures or
-budgets, and never filter histories by Slurm state. Upload once per invocation.
+Include 25 current cohorts and two explicitly labelled 5m6m 5M mixer fallbacks.
+Exclude old replica and legacy attention-ID/5M ID references. Never mix
+cohorts or budgets, or filter histories by Slurm state. Upload once per invocation.
 """
 import plot_linear_counter_mmm2_threeway_3seeds as charts
 from ozstar_submit_3m_8m_obs_10m_3seeds import build_plans as marine_plans
 from ozstar_submit_5m6m_value_diagnostics_10m_3seeds import build_plans as value_plans
-from plot_5m6m_head_condition_3seeds import build_plans as head_plans, LABELS
+from plot_5m6m_head_condition_3seeds import build_plans as head_plans, LABELS, FALLBACK_MODELS
 from ozstar_submit_linear_id_8m9m_6h8z_10m_3seeds import build_plans as id_plans
 from ozstar_submit_8m9m_vdn_qmix_10m_3seeds import build_plans as mixer_plans
 from ozstar_submit_head_input_24jobs import build_plans as covered_plans, PLOT_LABELS
@@ -56,8 +56,8 @@ def build_plans(repo):
                  for p in covered_plans(repo) if p["scene"] != "smac_5m6m")
     for plan in plans:
         plan.setdefault("target_steps", 10000000)
-    if len(plans) != 75 or len({p["job_name"] for p in plans}) != 75:
-        raise RuntimeError("Expected 75 distinct runs across seven maps")
+    if len(plans) != 81 or len({p["job_name"] for p in plans}) != 81:
+        raise RuntimeError("Expected 81 distinct runs across seven maps, including six labelled 5M fallback histories")
     for scene in SCENES:
         models = set(SCENE_MODELS[scene])
         selected = [p for p in plans if p["scene"] == scene]
@@ -83,6 +83,7 @@ def configure():
     charts.LABELS = dict(LABELS, **PLOT_LABELS,
                          linear_id_baseline=("Linear ID-based (10M)", "#e6550d"))
     charts.SCENE_MODELS = SCENE_MODELS
+    charts.SCENE_FALLBACK_MODELS = FALLBACK_MODELS
     charts.build_plans = build_plans
 
 
