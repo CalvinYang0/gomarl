@@ -32,6 +32,12 @@ slot_importance_ema: 0.8
 slot_demote_ratio: 0.5
 slot_heatmap_interval: 100000
 
+# Ordinary fixed action head; masks affect every mixer state path only.
+mixer_input_control: "static_gate"  # static_gate | group_qchange | group_tderror
+mixer_input_initial_probability: 0.1
+mixer_input_gate_threshold: 0.1
+mixer_input_gate_temperature: 0.5
+
 # Clean model variants:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)
 # - hypermarl_id: id-conditioned dynamic-head baseline; learned e_i only provides

@@ -13,6 +13,11 @@ CORE_VALUE_METRICS = frozenset("test_value/" + key for key in (
     "q_tot_mean", "q_tot_std", "agent_q_mean", "q_mc_bias_mean",
     "q_mc_abs_error_mean", "mixer_dqtot_dqi_mean", "mixer_w1_mean",
     "mixer_w_final_mean", "naturally_terminal_episode_mean", "q_mc_bias_count",
+    "q_tot_important_mean", "q_tot_unimportant_mean",
+    "q_mc_bias_important_mean", "q_mc_bias_unimportant_mean",
+    "q_mc_abs_error_important_mean", "q_mc_abs_error_unimportant_mean",
+    "mixer_dqtot_dqi_unimportant_mean",
+    "mixer_w1_unimportant_mean", "mixer_w_final_unimportant_mean",
 ))
 
 
@@ -87,6 +92,16 @@ def episode_value_samples(agent_q, mixer, batch, gamma, summary,
             w2 = mixer.hyper_w_final(flat_states).abs().reshape(*mask.shape, -1)
         summary.add("mixer_w1", w1[mask])
         summary.add("mixer_w_final", w2[mask])
+    elif hasattr(mixer, "diagnostic_parameters"):
+        with th.no_grad():
+            w1, w2 = mixer.diagnostic_parameters(states)
+        summary.add("mixer_w1", w1[mask])
+        summary.add("mixer_w_final", w2[mask])
+        if mixer.grouped:
+            with th.no_grad():
+                w1, w2 = mixer.diagnostic_parameters(states, group=1)
+            summary.add("mixer_w1_unimportant", w1[mask])
+            summary.add("mixer_w_final_unimportant", w2[mask])
 
     returns = th.zeros_like(rewards)
     future = th.zeros_like(rewards[:, 0])
@@ -101,6 +116,18 @@ def episode_value_samples(agent_q, mixer, batch, gamma, summary,
     calibration_mask = mask & complete.unsqueeze(-1)
     summary.add("q_mc_bias", bias[calibration_mask])
     summary.add("q_mc_abs_error", bias[calibration_mask].abs())
+    if getattr(mixer, "grouped", False) and hasattr(mixer, "values"):
+        with th.enable_grad():
+            ordinary_q = utilities.detach().requires_grad_(True)
+            branches = mixer.values(ordinary_q, states, mode="eval")
+            other_sensitivity = th.autograd.grad(branches[..., 1].sum(), ordinary_q)[0]
+        summary.add("mixer_dqtot_dqi_unimportant", other_sensitivity[mask.unsqueeze(-1).expand_as(other_sensitivity)])
+        for group, label in enumerate(("important", "unimportant")):
+            value = branches[..., group].detach()
+            residual = value - returns.squeeze(-1)
+            summary.add("q_tot_" + label, value[mask])
+            summary.add("q_mc_bias_" + label, residual[calibration_mask])
+            summary.add("q_mc_abs_error_" + label, residual[calibration_mask].abs())
     summary.add("q_mc_squared_error", bias[calibration_mask].square())
     summary.add("initial_q_mc_bias", bias[:, 0][complete & mask[:, 0]])
 

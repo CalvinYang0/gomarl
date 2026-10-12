@@ -1,0 +1,142 @@
+"""One ordinary agent network; only mixer state inputs are controlled."""
+import copy
+from pathlib import Path
+
+import torch as th
+from torch.optim import Adam, RMSprop
+
+from modules.mixers.state_input_control import StateInputControlMixer
+from utils.mixer_state_importance import log_state_snapshot, score_state_slots, state_slot_names
+from utils.rl_utils import build_td_lambda_targets
+
+
+class MixerInputLearner:
+    def __init__(self, mac, scheme, logger, args):
+        del scheme
+        if mac.agent.model_type != "qmix_minimal" or mac.agent.hyper_out_w is not None:
+            raise ValueError("Mixer controls require the ordinary fixed qmix_minimal action head")
+        if not getattr(args, "double_q", True):
+            raise ValueError("Mixer controls require Double-Q")
+        self.mac, self.logger, self.args = mac, logger, args
+        self.target_mac = copy.deepcopy(mac)
+        self.mixer = StateInputControlMixer(args)
+        self.target_mixer = copy.deepcopy(self.mixer)
+        state_slot_names(args, self.mixer.state_dim)
+        self.params = list(mac.parameters()) + list(self.mixer.parameters())
+        if args.optimizer == "adam":
+            self.optimiser = Adam(self.params, lr=args.lr)
+        elif args.optimizer == "rmsprop":
+            self.optimiser = RMSprop(self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
+        else:
+            raise ValueError("Unsupported optimizer")
+        self.interval = int(getattr(args, "slot_group_interval", 1000))
+        self.budget = int(getattr(args, "slot_importance_samples", 256))
+        self.image_interval = int(getattr(args, "slot_heatmap_interval", 100000))
+        if min(self.interval, self.budget, self.image_interval) <= 0:
+            raise ValueError("Invalid mixer diagnostic schedule")
+        self.train_steps = self.last_target_update_episode = 0
+        self.last_image_t = -self.image_interval
+        self.log_stats_t = -args.learner_log_interval - 1
+        self.last_losses = self.last_double_actions = None
+
+    def _rollout(self, mac, batch):
+        mac.init_hidden(batch.batch_size)
+        return th.stack([mac.forward(batch, t) for t in range(batch.max_seq_length)], 1)
+
+    def train(self, batch, t_env, episode_num):
+        self.mac.agent.train()
+        rewards = batch["reward"][:, :-1]
+        terminated = batch["terminated"][:, :-1].float()
+        mask = batch["filled"][:, :-1].float() * batch["filled"][:, 1:].float()
+        if mask.shape[1] > 1:
+            mask[:, 1:] *= (1 - terminated[:, :-1]).cumprod(1)
+        important = self._rollout(self.mac, batch)
+        chosen = important[:, :-1].gather(-1, batch["actions"][:, :-1].long()).squeeze(-1)
+        states = batch["state"][:, :-1]
+        joint = self.mixer.values(chosen, states, "train")
+        with th.no_grad():
+            target_q = self._rollout(self.target_mac, batch)
+            selected = important.detach().masked_fill(batch["avail_actions"] == 0, -th.inf).argmax(-1, keepdim=True)
+            self.last_double_actions = selected.clone()
+            evaluated = target_q.gather(-1, selected).squeeze(-1)
+            target_joint = self.target_mixer.values(evaluated, batch["state"], "target")
+            targets = build_td_lambda_targets(rewards, terminated * mask, mask, target_joint,
+                                             self.args.n_agents, self.args.gamma, self.args.td_lambda)
+        error = joint - targets
+        expanded = mask.expand_as(error)
+        losses = (error.square() * expanded).sum((0, 1)) / expanded.sum((0, 1)).clamp(min=1)
+        # Average two independent TD losses, not TD on an averaged Q_tot.
+        loss = losses.mean()
+        if not th.isfinite(loss):
+            raise RuntimeError("Non-finite mixer-input TD loss")
+        self.optimiser.zero_grad()
+        loss.backward()
+        norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
+        if not th.isfinite(norm):
+            raise RuntimeError("Non-finite mixer-input gradient norm")
+        self.optimiser.step()
+        self.train_steps += 1
+        self.last_losses = losses.detach().clone()
+        regroup = self.mixer.grouped and self.train_steps % self.interval == 0
+        image_due = t_env - self.last_image_t >= self.image_interval
+        if regroup or image_due:
+            # Reconstruct utilities AFTER the update so probes evaluate one
+            # coherent current checkpoint. Freeze them and the original TD
+            # targets for every perturbation; scoring never re-selects actions.
+            with th.no_grad():
+                probe_q = self._rollout(self.mac, batch)[:, :-1]
+                probe_chosen = probe_q.gather(-1, batch["actions"][:, :-1].long()).squeeze(-1)
+            measured = score_state_slots(self.mixer, probe_chosen, states, targets, mask, self.budget)
+            migration = None
+            if measured is not None:
+                qchange, tderror, count = measured
+                self.mixer.qchange_scores.copy_(qchange)
+                self.mixer.tderror_scores.copy_(tderror)
+                self.logger.log_stat("mixer_input/probe_count", count, t_env)
+                if regroup:
+                    migration = self.mixer.apply_scores(qchange, tderror)
+                    # Partition ownership is structural, not lagged parameters.
+                    self.target_mixer.sync_partition(self.mixer)
+            else:
+                self.logger.log_stat("mixer_input/no_valid_probes", 1, t_env)
+            log_state_snapshot(self.mixer, self.args, self.logger, t_env, self.train_steps,
+                               migration, images=image_due or regroup)
+            if image_due:
+                self.last_image_t = t_env
+        if episode_num - self.last_target_update_episode >= self.args.target_update_interval:
+            self._update_targets()
+            self.last_target_update_episode = episode_num
+        if t_env - self.log_stats_t >= self.args.learner_log_interval:
+            self.logger.log_stat("loss_td", loss.item(), t_env)
+            self.logger.log_stat("loss_td_important", losses[0].item(), t_env)
+            if len(losses) == 2:
+                self.logger.log_stat("loss_td_unimportant", losses[1].item(), t_env)
+            self.logger.log_stat("grad_norm", norm.item(), t_env)
+            self.logger.log_stat("td_error_abs", (error.abs() * expanded).sum().item() / expanded.sum().clamp(min=1).item(), t_env)
+            self.log_stats_t = t_env
+
+    def _update_targets(self):
+        self.target_mac.load_state(self.mac)
+        self.target_mixer.load_state_dict(self.mixer.state_dict())
+
+    def cuda(self):
+        self.mac.cuda()
+        self.target_mac.cuda()
+        self.mixer.cuda()
+        self.target_mixer.cuda()
+
+    def save_models(self, path):
+        self.mac.save_models(path)
+        th.save(self.mixer.state_dict(), str(Path(path) / "mixer.th"))
+        th.save(self.optimiser.state_dict(), str(Path(path) / "opt.th"))
+        th.save(dict(train_steps=self.train_steps, last_target_update_episode=self.last_target_update_episode,
+                     last_image_t=self.last_image_t), str(Path(path) / "mixer_input_schedule.th"))
+
+    def load_models(self, path):
+        self.mac.load_models(path)
+        self.mixer.load_state_dict(th.load(str(Path(path) / "mixer.th"), map_location="cpu"))
+        self.optimiser.load_state_dict(th.load(str(Path(path) / "opt.th"), map_location="cpu"))
+        schedule = th.load(str(Path(path) / "mixer_input_schedule.th"), map_location="cpu")
+        for key, value in schedule.items():
+            setattr(self, key, value)
+        self._update_targets()
