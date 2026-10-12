@@ -102,3 +102,23 @@ The user-requested 3 GiB startup threshold replaces the original 5 GiB guard.
 Exactly 3 GiB is accepted; below 3 GiB still stops before any job submission.
 The submitter prints measured free space and a capacity warning: meeting this
 threshold does not guarantee sufficient space for the full media-enabled runs.
+
+## Startup regression (2026-10-12)
+
+The initial group mixer incorrectly read `args.obs_shape`. Real
+`run_sequential` only assigns `n_agents`, `n_actions`, and `state_shape` to
+args; the raw Obs shape lives in the batch scheme. The simulator-free fixture
+had inserted an extra `obs_shape`, hiding the missing-field error. This
+startup failure was reproduced locally for grouped models.
+
+The mixer now receives the already constructed agent's raw `obs_dim`
+explicitly. Regression checks remove the fixture-only argument and exercise
+the actual `run_sequential` runner/scheme/MAC/learner wiring, stubbing only
+environment metadata and stopping before the first rollout. All four model
+paths also undergo optimizer, diagnostic, migration and checkpoint checks
+without that argument. This does not establish the error recorded in every
+remote log or rule out subsequent cluster/runtime problems.
+
+After updating the code, repeat the same submit command. Exact-name active or
+completed jobs are retained; failed attempts are not retained and can be
+resubmitted. Do not cancel the three running static-gate replicas.

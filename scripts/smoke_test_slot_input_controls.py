@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Real four-model updates on synthetic episodes; never launch SC2/upload."""
 from copy import copy
+import importlib
 import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch as th
 
@@ -18,6 +20,54 @@ from utils.value_diagnostics import collect_value_diagnostics, ValueDiagnosticSu
 from utils.logging import Logger
 
 
+def check_real_startup(args, logger):
+    """Exercise real runner/scheme/MAC/learner wiring; stub only environment.
+
+    Stop after learner construction, before SC2 rollout or data uploads.
+    Do not add the helper-only args.obs_shape that hid the original failure.
+    """
+    entry = importlib.import_module("run.run")
+    startup_args = copy(args)
+    startup_args.runner = "synthetic_slot_startup"
+    startup_args.buffer_size = 2
+    startup_args.use_wandb = False
+    assert not hasattr(startup_args, "obs_shape")
+    reached = []
+
+    class StartupComplete(Exception):
+        pass
+
+    class MetadataRunner:
+        def __init__(self, args, logger):
+            pass
+
+        def get_env_info(self):
+            return dict(n_agents=5, n_actions=12, obs_shape=55,
+                        state_shape=98, episode_limit=4)
+
+        def setup(self, scheme, groups, preprocess, mac):
+            assert scheme["obs"]["vshape"] == mac.agent.obs_dim == 55
+
+    def construct(mac, scheme, logger, args):
+        assert not hasattr(args, "obs_shape")
+        learner = SlotGroupLearner(mac, scheme, logger, args)
+        if mac.agent.is_grouped:
+            assert learner.mixer.obs_dim == mac.agent.obs_dim == 55
+            assert learner.mixer.small[0].state_dim == 5 * 55 + 55
+        reached.append(True)
+        raise StartupComplete()
+
+    with patch.dict(entry.r_REGISTRY, synthetic_slot_startup=MetadataRunner), \
+         patch.dict(entry.le_REGISTRY, slot_group_learner=construct):
+        try:
+            entry.run_sequential(startup_args, logger)
+        except StartupComplete:
+            pass
+        else:
+            raise AssertionError("Real startup must reach learner construction")
+    assert reached == [True]
+
+
 def check_model(model, directory):
     th.manual_seed(71)
     baseline, _, batch, logger = make_case("linear_baseline", "5m_vs_6m", production_shapes=True)
@@ -27,9 +77,12 @@ def check_model(model, directory):
     args.local_results_path, args.unique_token, args.seed = directory, "synthetic", 1
     args.name = args.wandb_run_name = "SYNTHETIC_QA_" + model
     args.slot_group_interval, args.slot_importance_samples = 2, 32
+    # Production runner assigns n_agents/n_actions/state_shape, not obs_shape.
+    del args.obs_shape
+    check_real_startup(args, logger)
     mac = SlotGroupMAC(batch.scheme, {"agents": args.n_agents}, args)
     learner = SlotGroupLearner(mac, batch.scheme, logger, args)
-    assert args.obs_shape == 55 and args.n_agents == 5 and args.n_actions == 12
+    assert mac.agent.obs_dim == 55 and args.n_agents == 5 and args.n_actions == 12
     # Same first-head architecture as matched baseline when all inputs open.
     shared = {k: v for k, v in baseline.agent.state_dict().items() if k in mac.agent.state_dict()}
     mac.agent.load_state_dict(shared, strict=False)
@@ -153,7 +206,7 @@ def check_model(model, directory):
     learner.load_models(str(checkpoint))
     assert learner.train_steps == 2
     assert th.equal(mac.agent.important_slots, learner.target_mac.agent.important_slots)
-    print("PASS:", model, "real optimizer/targets; no KL; grouping; diagnostics; heatmap; checkpoint", flush=True)
+    print("PASS:", model, "real startup without args.obs_shape; optimizer/targets; no KL; grouping; diagnostics; heatmap; checkpoint", flush=True)
 
 
 def main():

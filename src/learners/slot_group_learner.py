@@ -23,7 +23,7 @@ class SlotGroupLearner:
             raise ValueError("Slot controls require important-head Double-Q")
         self.target_mac = copy.deepcopy(mac)
         self.target_mac.agent.target_gate_soft = True
-        self.mixer = SlotGroupMixer(args) if mac.agent.is_grouped else QMixer(args)
+        self.mixer = SlotGroupMixer(args, mac.agent.obs_dim) if mac.agent.is_grouped else QMixer(args)
         self.target_mixer = copy.deepcopy(self.mixer)
         self.params = list(mac.parameters()) + list(self.mixer.parameters())
         if args.optimizer == "adam":

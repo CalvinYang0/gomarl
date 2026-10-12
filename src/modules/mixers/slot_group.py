@@ -8,10 +8,14 @@ from .qmix import QMixer
 
 
 class SlotGroupMixer(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, obs_dim):
         super().__init__()
         self.hierarchical = args.clean_model_type.endswith("hierarchy_hypercond")
-        self.n_agents, self.obs_dim = args.n_agents, int(args.obs_shape)
+        # run_sequential stores the observation shape in the batch scheme,
+        # NOT args.obs_shape. Use the already constructed agent's raw width.
+        self.n_agents, self.obs_dim = args.n_agents, int(obs_dim)
+        if self.obs_dim <= 0:
+            raise ValueError("Group mixer requires a positive raw observation width")
         local = copy(args)
         # Preserve a fixed shape as membership changes. Membership bits
         # distinguish excluded fields from genuinely zero observed fields.

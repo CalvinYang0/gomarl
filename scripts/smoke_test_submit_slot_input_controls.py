@@ -10,6 +10,7 @@ import tempfile
 from unittest.mock import patch
 
 import ozstar_submit_5m6m_slot_input_controls_12jobs as study
+import ozstar_submit_linear_directkl_four_model_3seeds as history
 from ozstar_submit_linear_three_model_counter_mmm2_10m_3seeds import validate_config_keys
 
 
@@ -39,16 +40,25 @@ def main():
         assert p["memory"] == ("24G" if "static10" in p["label"] else "48G")
         assert "--time=2-00:00:00" in p["sbatch_args"]
     validate_config_keys(repo, plans)
+    # Failed attempts must not be treated as already-completed replicas.
+    records = "\n".join("{}|{}|FAILED|1:0".format(99000 + i, p["job_name"])
+                        for i, p in enumerate(plans))
+    with patch.object(history, "run", return_value=records):
+        assert history.completed_jobs("synthetic_user") == {}
     with tempfile.TemporaryDirectory(prefix="gomarl-submit-slots-") as temp:
         calls = []
+        submitted_names = []
+        expected_missing = 12
         def run(command, **kwargs):
             if command == ["id", "-un"]:
                 return "synthetic_user"
             if command == ["git", "rev-parse", "HEAD"]:
                 return "synthetic_commit"
             assert command[:2] == ["sbatch", "--parsable"]
-            assert calls.count("test-only") == 12
+            assert calls.count("test-only") == expected_missing
             calls.append("submit")
+            submitted_names.append(next(arg.split("=", 1)[1] for arg in command
+                                        if arg.startswith("--job-name=")))
             return str(99000 + calls.count("submit"))
         def preflight(command, **kwargs):
             if command[0] == "sbatch":
@@ -69,6 +79,17 @@ def main():
                  patch.object(study.submitter, "run", side_effect=run):
                 study.main()
                 assert calls.count("submit") == 12
+                # Match the reported cluster state: static seeds active,
+                # nine grouped seeds failed. Retry exactly those nine.
+                static = [p for p in plans if p["label"] == "linear_static10_nokl"]
+                active.return_value = {p["job_name"]: "synthetic_running" for p in static}
+                calls.clear()
+                submitted_names.clear()
+                expected_missing = 9
+                study.main()
+                assert calls.count("submit") == 9
+                assert set(submitted_names) == {p["job_name"] for p in plans
+                                                if p["label"] != "linear_static10_nokl"}
                 active.return_value = {plans[0]["job_name"]: "synthetic_running"}
                 completed.return_value = {p["job_name"]: "synthetic_complete" for p in plans[1:]}
                 calls.clear()
@@ -95,7 +116,7 @@ def main():
         finally:
             os.chdir(cwd)
         assert study.submitter.build_plans is original
-    print("PASS: twelve matched 10M plans; required media; 3.33/3.00 GiB accepted, 2.99 blocked; preflight before any submission; idempotence")
+    print("PASS: twelve matched 10M plans; retain 3 active static seeds and retry exactly 9 failed grouped seeds; required media; 3.33/3.00 GiB accepted, 2.99 blocked; preflight before any submission; idempotence")
 
 
 if __name__ == "__main__":
