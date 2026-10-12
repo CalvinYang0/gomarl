@@ -8,6 +8,7 @@ import ozstar_submit_5m6m_linear_baseline_recheck_3seeds as submitter
 from ozstar_submit_8m9m_vdn_qmix_10m_3seeds import build_fixed_head_plans
 
 GROUP = "5m6m_qmix_mixer_input_controls_10m_9jobs"
+MIN_HOME_FREE_GIB = 2.0
 VARIANTS = {
     "qmix_state_static10": "static_gate",
     "qmix_state_group_qchange": "group_qchange",
@@ -59,9 +60,10 @@ def build_plans(repo):
 def main():
     if os.environ.get("SUBMIT") == "YES":
         free = submitter.home_quota_free_gib()
-        print("/home quota free: {:.2f} GiB; minimum 3.00 GiB".format(free), flush=True)
-        if free < 3.0:
-            raise RuntimeError("Require at least 3 GiB before nine media-enabled jobs; no jobs submitted")
+        print("/home quota free: {:.2f} GiB; minimum {:.2f} GiB".format(free, MIN_HOME_FREE_GIB), flush=True)
+        if free < MIN_HOME_FREE_GIB:
+            raise RuntimeError("Require at least 2 GiB before nine media-enabled jobs; no jobs submitted")
+        print("Capacity warning: 2 GiB is only a startup threshold; videos and offline data will keep growing.", flush=True)
         from ozstar_submit_5m6m_id_kl80_3seeds import validate_installed_map
         validate_installed_map()
     replacement = dict(GROUP=GROUP, SUITE_FILE=Path(__file__), SMOKE_SCRIPTS=SMOKE_SCRIPTS, build_plans=build_plans)

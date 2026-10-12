@@ -41,7 +41,7 @@ SUBMIT=YES REPO_DIR="$PWD" /home/kyang/.conda/envs/marl_cpu/bin/python -u \
   scripts/ozstar_submit_5m6m_mixer_input_controls_9jobs.py
 ```
 
-省略 SUBMIT 只预览。最低 3 GiB 配额，不保证所有未来媒体空间；精确同名活动或
+省略 SUBMIT 只预览。最低 2 GiB 配额（含恰好 2 GiB），不保证所有未来媒体空间；精确同名活动或
 成功任务跳过，失败任务可重试。所有模型／配置／地图检查与 sbatch --test-only
 通过后才提交，日志 manifest 记录每个 job ID。
 

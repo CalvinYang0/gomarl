@@ -56,7 +56,7 @@ def main():
             with redirect_stdout(io.StringIO()), \
                  patch.dict(os.environ, SUBMIT="YES", REPO_DIR=str(repo), RUNTIME_ROOT=temp), \
                  patch("ozstar_submit_5m6m_id_kl80_3seeds.validate_installed_map"), \
-                 patch.object(study.submitter, "home_quota_free_gib", return_value=3.0), \
+                 patch.object(study.submitter, "home_quota_free_gib", return_value=2.28), \
                  patch.object(study.submitter, "guard_and_route", return_value={"logs": Path(temp)}), \
                  patch.object(study.submitter, "active_jobs", return_value=retained) as active, \
                  patch.object(study.submitter, "completed_jobs", return_value={}), \
@@ -69,7 +69,10 @@ def main():
                 calls.clear()
                 study.main()
                 assert not calls
-                with patch.object(study.submitter, "home_quota_free_gib", return_value=2.99):
+                with patch.object(study.submitter, "home_quota_free_gib", return_value=2.0):
+                    study.main()
+                assert not calls
+                with patch.object(study.submitter, "home_quota_free_gib", return_value=1.99):
                     try:
                         study.main()
                     except RuntimeError as exc:
@@ -84,7 +87,7 @@ def main():
     plotting = build_plans(repo)
     assert len(plotting) == 15 and len({p["job_name"] for p in plotting}) == 15
     assert {p["label"] for p in plotting} == set(study.VARIANTS) | {"qmix", "historical_qmix"}
-    print("PASS: 9 exact ordinary-head jobs; declared config; all preflights before submit; idempotence; 3 GiB guard; isolated plotting")
+    print("PASS: 9 exact ordinary-head jobs; declared config; all preflights before submit; idempotence; 2.28/2.00 GiB accepted, 1.99 blocked; isolated plotting")
 
 
 if __name__ == "__main__":
