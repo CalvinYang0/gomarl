@@ -12,12 +12,14 @@ import torch as th
 
 def state_slot_names(args, state_dim):
     env = args.env_args
-    if env.get("map_name") == "5m_vs_6m" and not env.get("obs_instead_of_state", False):
-        names = ["ally_{}_{}".format(i, field) for i in range(5)
+    marine_maps = {"5m_vs_6m": (5, 6), "8m_vs_9m": (8, 9)}
+    if env.get("map_name") in marine_maps and not env.get("obs_instead_of_state", False):
+        allies, enemies = marine_maps[env["map_name"]]
+        names = ["ally_{}_{}".format(i, field) for i in range(allies)
                  for field in ("health", "cooldown", "x", "y")]
-        names += ["enemy_{}_{}".format(i, field) for i in range(6) for field in ("health", "x", "y")]
+        names += ["enemy_{}_{}".format(i, field) for i in range(enemies) for field in ("health", "x", "y")]
         if env.get("state_last_action", True):
-            names += ["ally_{}_last_action_{}".format(i, a) for i in range(5) for a in range(args.n_actions)]
+            names += ["ally_{}_last_action_{}".format(i, a) for i in range(allies) for a in range(args.n_actions)]
         if env.get("state_timestep_number", False):
             names += ["episode_timestep"]
         if len(names) != state_dim:
@@ -56,6 +58,58 @@ def score_state_slots(mixer, agent_qs, states, targets, valid, budget=256):
     return qchange, tderror, len(selected)
 
 
+@th.no_grad()
+def score_state_slot_calibration(mixer, agent_qs, states, returns, valid, budget=256):
+    """Masking benefit = (MSE(Q,G)-MSE(Q_masked,G))/max(E[G^2],1e-6).
+
+    G is an observed complete-episode discounted return, not true optimal Q.
+    Agent Q/actions/checkpoint and G remain fixed. Remove both slot value and
+    membership bit; probe its current owning branch. Positive means removal
+    improves calibration: the ORIGINAL slot is less desirable, not important.
+    """
+    indices = valid.reshape(-1).bool().nonzero().flatten()
+    if not indices.numel():
+        return None
+    if budget < 1:
+        raise ValueError("Calibration scoring requires positive probe budget")
+    selected = indices[th.linspace(0, len(indices) - 1, min(budget, len(indices)),
+                                  device=indices.device).long()]
+    q = agent_qs.detach().reshape(-1, agent_qs.shape[-1])[selected].unsqueeze(1)
+    s = states.detach().reshape(-1, mixer.state_dim)[selected].unsqueeze(1)
+    g = returns.detach().reshape(-1, 1)[selected].unsqueeze(1)
+    scale = g.square().mean().clamp(min=1e-6)
+    result = s.new_zeros(mixer.state_dim)
+    original_error, masked_error = result.clone(), result.clone()
+    masks = mixer.masks(s, "eval")
+    for group, mask in enumerate(masks):
+        base = mixer.conditioned_value(q, s, group, mask)
+        base_error = (base - g).square().mean()
+        for j in range(mixer.state_dim):
+            if not mask[..., j].bool().any():
+                continue
+            removed = mask.clone()
+            removed[..., j] = 0
+            changed = mixer.conditioned_value(q, s, group, removed)
+            original_error[j] = base_error
+            masked_error[j] = (changed - g).square().mean()
+            result[j] = (original_error[j] - masked_error[j]) / scale
+    if not th.isfinite(result).all():
+        raise RuntimeError("Non-finite calibration improvement scores")
+    return result, len(selected), original_error, masked_error
+
+
+@th.no_grad()
+def complete_episode_returns(rewards, terminated, valid, gamma):
+    """No bootstrap: incomplete/time-limit-only episodes cannot define G."""
+    returns = th.zeros_like(rewards)
+    future = th.zeros_like(rewards[:, 0])
+    for t in reversed(range(rewards.shape[1])):
+        future = (rewards[:, t] + gamma * (1 - terminated[:, t]) * future) * valid[:, t]
+        returns[:, t] = future
+    complete = (terminated * valid).sum(dim=1, keepdim=True) > 0
+    return returns, valid * complete.to(valid)
+
+
 def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, images=True):
     names = state_slot_names(args, mixer.state_dim)
     if mixer.grouped:
@@ -80,6 +134,13 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
                   qchange=mixer.qchange_scores.cpu().tolist(), tderror=mixer.tderror_scores.cpu().tolist(),
                   ranking_ema=mixer.score_ema.cpu().tolist(), migration=migration,
                   note="Fixed agent Q and fixed own-branch TD target; not action flips or win-rate attribution")
+    if mixer.variant == "group_calibration":
+        result.update(normalized_removal_gain=mixer.removal_gain_scores.cpu().tolist(),
+                      calibration_probe_count=int(mixer.calibration_probe_count.item()),
+                      original_mc_mse=mixer.original_mc_mse.cpu().tolist(),
+                      masked_mc_mse=mixer.masked_mc_mse.cpu().tolist(),
+                      ranking_definition="slot quality = sigmoid(-normalized_removal_gain); high gain means remove",
+                      metric_definition="(MSE(Q,G)-MSE(Q_masked,G))/max(mean(G^2),1e-6); G = complete observed return")
     path = directory / (stem + ".json")
     path.write_text(json.dumps(result, indent=2, allow_nan=False))
     import matplotlib.pyplot as plt
@@ -90,8 +151,9 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
         fig.colorbar(pixel, ax=axes[0])
         axes[1].bar(range(len(names)), result["qchange"])
         axes[1].set_ylabel("mean abs Q_tot change")
-        axes[2].bar(range(len(names)), result["tderror"])
-        axes[2].set_ylabel("positive mean TD error increase")
+        axes[2].bar(range(len(names)), result.get("normalized_removal_gain", result["tderror"]))
+        axes[2].set_ylabel("normalized masking benefit" if mixer.variant == "group_calibration"
+                           else "positive mean TD error increase")
         for axis in axes:
             axis.set_xticks(range(len(names)), labels=names, rotation=90, fontsize=6)
         title = "{} / {} / seed={} / t_env={}".format(args.env_args.get("map_name"), mixer.variant, args.seed, t_env)

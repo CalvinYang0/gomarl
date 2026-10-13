@@ -67,6 +67,7 @@ class Logger:
             or key.startswith("test_hyper_obs_importance/")
             or key.startswith("test_policy_importance/")
             or key.startswith("slot_input/")
+            or key.startswith("mixer_input/")
             or key.startswith("test_visualization/")
             or key.startswith("train_gate/")
             or key.startswith("kl80_random_auxiliary_")

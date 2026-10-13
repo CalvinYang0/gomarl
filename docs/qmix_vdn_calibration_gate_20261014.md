@@ -1,0 +1,80 @@
+# Fresh 10M baselines and return-calibration-based mixer grouping
+
+18 new jobs: seeds 1/2/3 for each model/map below.
+
+| Map | Models | Jobs |
+| --- | --- | --- |
+| 5m_vs_6m | ordinary-head QMIX and VDN | 6 |
+| 8m_vs_9m | ordinary-head QMIX and VDN | 6 |
+| 5m_vs_6m | ordinary agent, two mixer groups, masking calibration improvement | 3 |
+| 8m_vs_9m | ordinary agent, static mixer state gate p0=.1, no KL | 3 |
+
+New names end `fresh20261014`. Group:
+`qmix_vdn_calibration_gate_10m_3seeds_fresh20261014`. Historical names are not
+reused, so old completed runs do not prevent these reruns. Repeated invocation
+retains active/completed exact new names; never cancels jobs. T_MAX=10,050,000,
+test every 10k, value diagnostics every 100k, ten battle videos every 1M, named
+gate/group heatmaps and JSON. Ordinary fixed action heads; standard QMIX mixer
+hypernetworks remain.
+
+## Corrected metric: prediction error, NOT statistical variance
+
+The user clarified that “variance” means distance from a theoretical value.
+True expected/optimal return is unavailable. Use complete replay episodes'
+observed discounted return G as a Monte Carlo proxy, without target-Q bootstrap.
+Incomplete/time-limit-only episodes are excluded. This estimates calibration
+against the behavior policy's sampled returns, not true optimal Q, and noisy
+returns/off-policy differences remain possible confounders.
+
+For up to 256 valid transitions at one fixed checkpoint, hold chosen actions,
+agent Q and G fixed. Remove a slot from its owning mixer branch's state mask,
+including both value and membership bit. Define:
+
+```
+G_t = sum_k gamma**k * reward_(t+k), through the natural terminal
+error_original_j = mean((Q_tot - G)**2)
+error_masked_j = mean((Q_tot_without_slot_j - G)**2)
+removal_gain_j = (error_original_j - error_masked_j) / max(mean(G**2), 1e-6)
+slot_quality_j = sigmoid(-clip(removal_gain_j, -20, 20))
+```
+
+The common return-based denominator preserves direction and does not allow
+inflated predicted Q to suppress the score. Raw before/after MSE is also logged.
+Positive gain: removing the slot improves predictions; the ORIGINAL slot is
+less desirable. Negative gain: removing it makes predictions worse; prefer to
+retain it. Gains remain signed, never clipped to zero. No centered statistical
+variance is used; a constant prediction bias must contribute to error.
+
+Every 1000 optimizer updates, EMA=.8 of slot quality selects the highest-quality
+slot outside the important group. Demote the lowest-quality important slot if
+below half the group's highest quality, preserving at least one slot. Initial
+important group is empty. Both complementary branches have separate own TD
+targets/losses, averaged to train the same ordinary agent. Acting and Double-Q
+action selection still use that agent, never the mixer. No complete episodes
+means skip migration. The score is a calibration heuristic, not proof that a
+slot caused overestimation or that removing it improves win rate. Reassignment
+changes the branch being probed; reset reassigned slots' EMA initialization.
+
+JSON includes `normalized_removal_gain`, `original_mc_mse`, `masked_mc_mse`,
+`ranking_ema`, `migration`, masks and state-slot names. W&B includes
+`mixer_input/partition_probability_heatmap`, `mixer_input/calibration_probe_count`,
+`mixer_input/normalized_removal_gain_mean`, `mixer_input/important_count`.
+The `mixer_input/` scalar allowlist is fixed (previously only direct image logs
+were uploaded). Track win rate and `test_value/q_mc_bias_mean`, plus each branch's
+calibration diagnostics; magnitude of agent Q alone is not performance.
+
+8m9m gate is static across observations, learned per state field, p0=.1, no KL;
+evaluation uses p>.1. The heatmap's second row is the actual evaluation mask.
+
+## Server submission
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+git pull --ff-only origin codex/linear-id-baselines
+SUBMIT=YES REPO_DIR="$PWD" /home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_submit_qmix_vdn_calibration_gate_18jobs.py
+```
+
+Omit `SUBMIT=YES` for preview. Both installed map definitions/files are checked;
+minimum 2 GiB free /home quota is only a startup guard, not sufficient capacity
+for 18 video-enabled jobs. Manifest/job IDs go to runtime `ozstar_logs`. The
+local cleanup tool also preserves this new cohort after completion.

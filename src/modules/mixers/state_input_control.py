@@ -12,7 +12,7 @@ class StateInputControlMixer(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.variant = args.mixer_input_control
-        if self.variant not in {"static_gate", "group_qchange", "group_tderror"}:
+        if self.variant not in {"static_gate", "group_qchange", "group_tderror", "group_calibration"}:
             raise ValueError("Unknown mixer state control: " + self.variant)
         self.state_dim = math.prod(args.state_shape) if isinstance(args.state_shape, (tuple, list)) else int(args.state_shape)
         self.grouped = self.variant != "static_gate"
@@ -26,6 +26,10 @@ class StateInputControlMixer(nn.Module):
         self.register_buffer("score_initialized", th.zeros(self.state_dim, dtype=th.bool))
         self.register_buffer("qchange_scores", th.zeros(self.state_dim))
         self.register_buffer("tderror_scores", th.zeros(self.state_dim))
+        if self.variant == "group_calibration":
+            for name in ("removal_gain_scores", "original_mc_mse", "masked_mc_mse"):
+                self.register_buffer(name, th.zeros(self.state_dim))
+            self.register_buffer("calibration_probe_count", th.zeros((), dtype=th.long))
         self.register_buffer("grouping_updates", th.zeros((), dtype=th.long))
         self.ema = float(getattr(args, "slot_importance_ema", .8))
         self.demote_ratio = float(getattr(args, "slot_demote_ratio", .5))
@@ -83,7 +87,7 @@ class StateInputControlMixer(nn.Module):
         return self.values(agent_qs, states, mode="eval")[..., :1]
 
     @th.no_grad()
-    def apply_scores(self, qchange, tderror):
+    def apply_scores(self, qchange, tderror, removal_gain=None):
         for scores in (qchange, tderror):
             if scores.shape != self.score_ema.shape or not th.isfinite(scores).all() or (scores < 0).any():
                 raise ValueError("Invalid mixer state attribution")
@@ -92,6 +96,12 @@ class StateInputControlMixer(nn.Module):
         if not self.grouped:
             return None
         scores = qchange if self.variant == "group_qchange" else tderror
+        if self.variant == "group_calibration":
+            if (removal_gain is None or removal_gain.shape != self.score_ema.shape or
+                    not th.isfinite(removal_gain).all()):
+                raise ValueError("Invalid signed calibration improvement scores")
+            self.removal_gain_scores.copy_(removal_gain)
+            scores = th.sigmoid(-removal_gain.clamp(-20, 20))
         before = self.important_slots.clone()
         self.score_ema.copy_(th.where(self.score_initialized,
                                      self.ema * self.score_ema + (1 - self.ema) * scores, scores))
@@ -121,3 +131,6 @@ class StateInputControlMixer(nn.Module):
         for name in ("important_slots", "score_ema", "score_initialized", "qchange_scores",
                      "tderror_scores", "grouping_updates"):
             getattr(self, name).copy_(getattr(source, name))
+        if self.variant == "group_calibration":
+            for name in ("removal_gain_scores", "original_mc_mse", "masked_mc_mse", "calibration_probe_count"):
+                getattr(self, name).copy_(getattr(source, name))

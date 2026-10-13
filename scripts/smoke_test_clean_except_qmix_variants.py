@@ -74,6 +74,13 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(targets, [])
         self.assertTrue(set(paths) <= set(kept))
 
+    def test_new_requested_cohort_survives_after_completion(self):
+        paths = self.run_data('smac_8m9m_qmix_baseline_10m_s1_fresh20261014',
+                              'qmix_vdn_calibration_gate_10m_3seeds_fresh20261014', 1)
+        targets, kept = c.inventory(self.root, set(), lambda j: True)
+        self.assertEqual(targets, [])
+        self.assertTrue(set(paths) <= set(kept))
+
     def test_symlink_is_not_followed(self):
         sacred, wandb, _ = self.run_data('old_s1', 'old', 1)
         protected = self.root / 'protected.txt'

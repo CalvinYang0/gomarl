@@ -6,7 +6,9 @@ import torch as th
 from torch.optim import Adam, RMSprop
 
 from modules.mixers.state_input_control import StateInputControlMixer
-from utils.mixer_state_importance import log_state_snapshot, score_state_slots, state_slot_names
+from utils.mixer_state_importance import (log_state_snapshot, score_state_slots,
+                                          score_state_slot_calibration, complete_episode_returns,
+                                          state_slot_names)
 from utils.rl_utils import build_td_lambda_targets
 
 
@@ -93,8 +95,25 @@ class MixerInputLearner:
                 self.mixer.qchange_scores.copy_(qchange)
                 self.mixer.tderror_scores.copy_(tderror)
                 self.logger.log_stat("mixer_input/probe_count", count, t_env)
+                removal_gain = None
+                if self.mixer.variant == "group_calibration":
+                    returns, calibration_mask = complete_episode_returns(rewards, terminated, mask, self.args.gamma)
+                    estimate = score_state_slot_calibration(self.mixer, probe_chosen, states,
+                                                           returns, calibration_mask, self.budget)
+                    if estimate is None:
+                        self.mixer.calibration_probe_count.zero_()
+                        self.logger.log_stat("mixer_input/no_complete_calibration_probes", 1, t_env)
+                    else:
+                        removal_gain, count, original_error, masked_error = estimate
+                        self.mixer.calibration_probe_count.fill_(count)
+                        self.mixer.removal_gain_scores.copy_(removal_gain)
+                        self.mixer.original_mc_mse.copy_(original_error)
+                        self.mixer.masked_mc_mse.copy_(masked_error)
+                        self.logger.log_stat("mixer_input/calibration_probe_count", count, t_env)
+                        self.logger.log_stat("mixer_input/normalized_removal_gain_mean", removal_gain.mean().item(), t_env)
                 if regroup:
-                    migration = self.mixer.apply_scores(qchange, tderror)
+                    if self.mixer.variant != "group_calibration" or removal_gain is not None:
+                        migration = self.mixer.apply_scores(qchange, tderror, removal_gain)
                     # Partition ownership is structural, not lagged parameters.
                     self.target_mixer.sync_partition(self.mixer)
             else:

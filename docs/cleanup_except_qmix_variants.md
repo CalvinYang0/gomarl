@@ -10,6 +10,8 @@ Always retained, including all seeds and retries:
 - `smac_5m6m_qmix_state_group_qchange_*`
 - `smac_5m6m_qmix_state_group_tderror_*`
 - Their group `5m6m_qmix_mixer_input_controls_10m_9jobs`.
+- The newly requested October 14 cohort group
+  `qmix_vdn_calibration_gate_10m_3seeds_fresh20261014`, including its fresh baselines.
 
 All running/pending/completing jobs are retained. Unknown ownership/state is
 retained. Terminal state must be confirmed with Slurm accounting and repository

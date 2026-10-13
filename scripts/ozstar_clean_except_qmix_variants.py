@@ -20,6 +20,7 @@ from ozstar_clean_uploaded_completed_runs import command, job_finished, RUN_PATH
 ROOT = Path('/home/kyang/gomarl-runtime/gomarl-dual-branch')
 REPO = Path('/home/kyang/code/gomarl-dual-branch')
 KEEP_GROUP = '5m6m_qmix_mixer_input_controls_10m_9jobs'
+KEEP_GROUPS = {KEEP_GROUP, 'qmix_vdn_calibration_gate_10m_3seeds_fresh20261014'}
 KEEP = re.compile(r'^smac_5m6m_qmix_state_(?:static10|group_qchange|group_tderror)_')
 LOG = re.compile(r'(.+)_([0-9]+)\.(?:out|err)$')
 CATEGORIES = ('models', 'tb_logs', 'battle_traces', 'test_battle_videos',
@@ -82,7 +83,7 @@ def inventory(root, live, finished, live_names=()):
                 and all(finished(j) for j in jobs))
 
     def record(path, name, group, closed):
-        keep = bool(KEEP.match(str(name))) or group == KEEP_GROUP
+        keep = bool(KEEP.match(str(name))) or group in KEEP_GROUPS
         removable = bool(name) and not keep and closed
         if group:
             groups.setdefault(group, []).append(removable)
@@ -137,7 +138,7 @@ def inventory(root, live, finished, live_names=()):
         for path in children(root / 'results' / category):
             matches = [g for g in groups if path.name == g or path.name.startswith(g + '__')]
             group = max(matches, key=len) if matches else None
-            safe = (group and group != KEEP_GROUP and all(groups[group])
+            safe = (group and group not in KEEP_GROUPS and all(groups[group])
                     and not unresolved_live)
             (targets if safe else retained).append(path)
     # Shared artifacts first; their ownership evidence (Sacred configs) must
