@@ -85,8 +85,8 @@ def main():
         assert study.submitter.build_plans is original
     from plot_5m6m_mixer_input_controls_3seeds import build_plans
     plotting = build_plans(repo)
-    assert len(plotting) == 15 and len({p["job_name"] for p in plotting}) == 15
-    assert {p["label"] for p in plotting} == set(study.VARIANTS) | {"qmix", "historical_qmix"}
+    assert len(plotting) == 21 and len({p["job_name"] for p in plotting}) == 21
+    assert {p["label"] for p in plotting} == set(study.VARIANTS) | {"qmix", "historical_qmix", "vdn", "historical_vdn"}
     print("PASS: 9 exact ordinary-head jobs; declared config; all preflights before submit; idempotence; 2.28/2.00 GiB accepted, 1.99 blocked; isolated plotting")
 
 

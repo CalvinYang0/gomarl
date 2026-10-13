@@ -53,6 +53,17 @@ cd /home/kyang/code/gomarl-dual-branch &&
   scripts/plot_5m6m_mixer_input_controls_3seeds.py --local-only --mean-window 10
 ```
 
-仅这九个新实验和三种子 QMIX baseline；新 QMIX 完全无数据才整组显示历史
+仅这九个新实验和 VDN/QMIX baseline；每个新 baseline 完全无数据才整组显示历史
 5M，不补单个 seed、不拼接预算。加 --no-upload 仅本地出图。删掉 --local-only
-仅精确查询这十五个名称，查询失败不扫描全项目。原 hyper-head 实验不混入新组。
+仅精确查询这二十一个名称，查询失败不扫描全项目。原 hyper-head 实验不混入新组。
+
+要一起更新上一轮四个 agent-head 门控／分组、Obs、ID 及本轮三个 mixer 控制，使用：
+
+```bash
+/home/kyang/.conda/envs/marl_cpu/bin/python -u \
+  scripts/plot_5m6m_latest_controls_3seeds.py --mean-window 10
+```
+
+这张图有十一组当前模型，读取三十九个精确名称（含两个历史备用组）。云端只查询
+六条 10M VDN/QMIX；其他组仅读本地 W&B/Sacred。云端查询失败报错，不冒充新组未运行。
+加 --local-only 完全禁用云端读取，此时缺失仅表示本地没有可读曲线，不代表未提交。
