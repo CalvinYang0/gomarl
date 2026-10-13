@@ -25,12 +25,14 @@ class MixerInputLearner:
         self.target_mixer = copy.deepcopy(self.mixer)
         state_slot_names(args, self.mixer.state_dim)
         self.params = list(mac.parameters()) + list(self.mixer.parameters())
-        if args.optimizer == "adam":
-            self.optimiser = Adam(self.params, lr=args.lr)
-        elif args.optimizer == "rmsprop":
-            self.optimiser = RMSprop(self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
-        else:
-            raise ValueError("Unsupported optimizer")
+        self.detach_unimportant = bool(getattr(args, "mixer_input_detach_unimportant", False))
+        if self.detach_unimportant and not self.mixer.grouped:
+            raise ValueError("Unimportant gradient isolation requires two mixer groups")
+        self.main_params = (list(mac.parameters()) + list(self.mixer.mixers[0].parameters())
+                            if self.detach_unimportant else self.params)
+        self.other_params = list(self.mixer.mixers[1].parameters()) if self.detach_unimportant else []
+        self.optimiser = self._make_optimiser(self.main_params)
+        self.other_optimiser = self._make_optimiser(self.other_params) if self.other_params else None
         self.interval = int(getattr(args, "slot_group_interval", 1000))
         self.budget = int(getattr(args, "slot_importance_samples", 256))
         self.image_interval = int(getattr(args, "slot_heatmap_interval", 100000))
@@ -40,6 +42,14 @@ class MixerInputLearner:
         self.last_image_t = -self.image_interval
         self.log_stats_t = -args.learner_log_interval - 1
         self.last_losses = self.last_double_actions = None
+
+    def _make_optimiser(self, params):
+        args = self.args
+        if args.optimizer == "adam":
+            return Adam(params, lr=args.lr)
+        if args.optimizer == "rmsprop":
+            return RMSprop(params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
+        raise ValueError("Unsupported optimizer")
 
     def _rollout(self, mac, batch):
         mac.init_hidden(batch.batch_size)
@@ -55,7 +65,7 @@ class MixerInputLearner:
         important = self._rollout(self.mac, batch)
         chosen = important[:, :-1].gather(-1, batch["actions"][:, :-1].long()).squeeze(-1)
         states = batch["state"][:, :-1]
-        joint = self.mixer.values(chosen, states, "train")
+        joint = self.mixer.values(chosen, states, "train", detach_unimportant=self.detach_unimportant)
         with th.no_grad():
             target_q = self._rollout(self.target_mac, batch)
             selected = important.detach().masked_fill(batch["avail_actions"] == 0, -th.inf).argmax(-1, keepdim=True)
@@ -72,11 +82,17 @@ class MixerInputLearner:
         if not th.isfinite(loss):
             raise RuntimeError("Non-finite mixer-input TD loss")
         self.optimiser.zero_grad()
+        if self.other_optimiser is not None:
+            self.other_optimiser.zero_grad()
         loss.backward()
-        norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
-        if not th.isfinite(norm):
+        norm = th.nn.utils.clip_grad_norm_(self.main_params, self.args.grad_norm_clip)
+        other_norm = (th.nn.utils.clip_grad_norm_(self.other_params, self.args.grad_norm_clip)
+                      if self.other_params else norm.new_zeros(()))
+        if not th.isfinite(norm) or not th.isfinite(other_norm):
             raise RuntimeError("Non-finite mixer-input gradient norm")
         self.optimiser.step()
+        if self.other_optimiser is not None:
+            self.other_optimiser.step()
         self.train_steps += 1
         self.last_losses = losses.detach().clone()
         regroup = self.mixer.grouped and self.train_steps % self.interval == 0
@@ -131,6 +147,9 @@ class MixerInputLearner:
             if len(losses) == 2:
                 self.logger.log_stat("loss_td_unimportant", losses[1].item(), t_env)
             self.logger.log_stat("grad_norm", norm.item(), t_env)
+            if self.detach_unimportant:
+                self.logger.log_stat("mixer_input/grad_norm_unimportant", other_norm.item(), t_env)
+                self.logger.log_stat("mixer_input/unimportant_agent_gradient_detached", 1, t_env)
             self.logger.log_stat("td_error_abs", (error.abs() * expanded).sum().item() / expanded.sum().clamp(min=1).item(), t_env)
             self.log_stats_t = t_env
 
@@ -148,14 +167,21 @@ class MixerInputLearner:
         self.mac.save_models(path)
         th.save(self.mixer.state_dict(), str(Path(path) / "mixer.th"))
         th.save(self.optimiser.state_dict(), str(Path(path) / "opt.th"))
+        if self.other_optimiser is not None:
+            th.save(self.other_optimiser.state_dict(), str(Path(path) / "opt_unimportant.th"))
         th.save(dict(train_steps=self.train_steps, last_target_update_episode=self.last_target_update_episode,
-                     last_image_t=self.last_image_t), str(Path(path) / "mixer_input_schedule.th"))
+                     last_image_t=self.last_image_t, detach_unimportant=self.detach_unimportant),
+                str(Path(path) / "mixer_input_schedule.th"))
 
     def load_models(self, path):
+        schedule = th.load(str(Path(path) / "mixer_input_schedule.th"), map_location="cpu")
+        if bool(schedule.get("detach_unimportant", False)) != self.detach_unimportant:
+            raise ValueError("Checkpoint gradient routing differs; use a fresh run")
         self.mac.load_models(path)
         self.mixer.load_state_dict(th.load(str(Path(path) / "mixer.th"), map_location="cpu"))
         self.optimiser.load_state_dict(th.load(str(Path(path) / "opt.th"), map_location="cpu"))
-        schedule = th.load(str(Path(path) / "mixer_input_schedule.th"), map_location="cpu")
+        if self.other_optimiser is not None:
+            self.other_optimiser.load_state_dict(th.load(str(Path(path) / "opt_unimportant.th"), map_location="cpu"))
         for key, value in schedule.items():
             setattr(self, key, value)
         self._update_targets()

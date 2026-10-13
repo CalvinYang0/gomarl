@@ -76,9 +76,10 @@ class StateInputControlMixer(nn.Module):
         return (core.hyper_w1(flat).abs().reshape(*shape, -1),
                 core.hyper_w_final(flat).abs().reshape(*shape, -1))
 
-    def values(self, agent_qs, states, mode="eval"):
+    def values(self, agent_qs, states, mode="eval", detach_unimportant=False):
         masks = self.masks(states, mode)
-        return th.cat([self.conditioned_value(agent_qs, states, g, masks[g])
+        return th.cat([self.conditioned_value(agent_qs.detach() if detach_unimportant and g == 1 else agent_qs,
+                                             states, g, masks[g])
                        for g in range(len(self.mixers))], dim=-1)
 
     def forward(self, agent_qs, states):

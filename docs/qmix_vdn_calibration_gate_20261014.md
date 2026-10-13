@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 5m_vs_6m | ordinary-head QMIX and VDN | 6 |
 | 8m_vs_9m | ordinary-head QMIX and VDN | 6 |
-| 5m_vs_6m | ordinary agent, two mixer groups, masking calibration improvement | 3 |
+| 5m_vs_6m | ordinary agent, two mixer groups, masking calibration improvement, isolated auxiliary gradients | 3 |
 | 8m_vs_9m | ordinary agent, static mixer state gate p0=.1, no KL | 3 |
 
 New names end `fresh20261014`. Group:
@@ -49,11 +49,24 @@ Every 1000 optimizer updates, EMA=.8 of slot quality selects the highest-quality
 slot outside the important group. Demote the lowest-quality important slot if
 below half the group's highest quality, preserving at least one slot. Initial
 important group is empty. Both complementary branches have separate own TD
-targets/losses, averaged to train the same ordinary agent. Acting and Double-Q
+targets/losses. Important TD updates the ordinary agent and important mixer;
+unimportant TD receives detached agent utilities and updates only its mixer.
+The loss retains historical 0.5/0.5 weights, but each parameter set has its own
+optimizer and gradient clipping, so a large auxiliary gradient cannot rescale
+the actor's update through a shared clip norm. Acting and Double-Q
 action selection still use that agent, never the mixer. No complete episodes
 means skip migration. The score is a calibration heuristic, not proof that a
 slot caused overestimation or that removing it improves win rate. Reassignment
 changes the branch being probed; reset reassigned slots' EMA initialization.
+
+Isolation is explicit: `mixer_input_detach_unimportant=True`. Historical config
+defaults to False so old jobs remain reproducible. New isolated group run names
+contain `qmix_state_group_calibration_isolated`, unlike the previous shared-gradient
+names; they will not be mistaken for already completed runs. Baseline/gate names
+are unchanged. Existing jobs are not cancelled or modified. Checkpoint schedules
+record routing mode; resuming across modes is refused before loading parameters.
+The auxiliary optimizer is stored in `opt_unimportant.th`. Heatmap JSON records
+`unimportant_agent_gradient_detached`.
 
 JSON includes `normalized_removal_gain`, `original_mc_mse`, `masked_mc_mse`,
 `ranking_ema`, `migration`, masks and state-slot names. W&B includes

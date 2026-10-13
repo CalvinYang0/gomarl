@@ -130,6 +130,7 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
     directory.mkdir(parents=True, exist_ok=True)
     stem = "step_{:09d}_update_{:07d}".format(int(t_env), updates)
     result = dict(t_env=int(t_env), train_updates=updates, variant=mixer.variant,
+                  unimportant_agent_gradient_detached=bool(getattr(args, "mixer_input_detach_unimportant", False)),
                   state_slot_names=names, row_labels=labels, masks_or_probability=rows.tolist(),
                   qchange=mixer.qchange_scores.cpu().tolist(), tderror=mixer.tderror_scores.cpu().tolist(),
                   ranking_ema=mixer.score_ema.cpu().tolist(), migration=migration,

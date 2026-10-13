@@ -37,6 +37,7 @@ mixer_input_control: "static_gate"  # static_gate | group_qchange | group_tderro
 mixer_input_initial_probability: 0.1
 mixer_input_gate_threshold: 0.1
 mixer_input_gate_temperature: 0.5
+mixer_input_detach_unimportant: False  # explicit opt-in; historical dual TD stays reproducible
 
 # Clean model variants:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)

@@ -31,10 +31,11 @@ def main():
         assert plan['exports']['GROUP_NAME'] == GROUP
         extra = dict(item.split('=', 1) for item in shlex.split(plan['exports']['EXTRA_ARGS']))
         assert extra['test_value_diagnostics'] == 'True'
-        if plan['label'] == 'qmix_state_group_calibration':
+        if plan['label'] == 'qmix_state_group_calibration_isolated':
             assert plan['map_name'] == '5m_vs_6m'
             assert extra['mixer_input_control'] == 'group_calibration'
             assert extra['slot_group_interval'] == '1000'
+            assert extra['mixer_input_detach_unimportant'] == 'True'
         elif plan['label'] == 'qmix_state_static10':
             assert plan['map_name'] == '8m_vs_9m'
             assert extra['mixer_input_control'] == 'static_gate'

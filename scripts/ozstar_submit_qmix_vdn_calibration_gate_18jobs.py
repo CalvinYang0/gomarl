@@ -10,6 +10,7 @@ from ozstar_submit_5m6m_mixer_input_controls_9jobs import build_plans as control
 GROUP = "qmix_vdn_calibration_gate_10m_3seeds_fresh20261014"
 SMOKE_SCRIPTS = ("scripts/smoke_test_mixer_input_controls.py",
                  "scripts/smoke_test_mixer_calibration.py",
+                 "scripts/smoke_test_mixer_gradient_isolation.py",
                  "scripts/smoke_test_submit_calibration_gate.py")
 
 
@@ -36,11 +37,12 @@ def build_plans(repo):
             if plan['label'] != 'qmix':
                 continue
             grouped = scene == 'smac_5m6m'
-            label = 'qmix_state_group_calibration' if grouped else 'qmix_state_static10'
+            label = 'qmix_state_group_calibration_isolated' if grouped else 'qmix_state_static10'
             plan['label'] = label
             extra = controls[plan['seed']]['exports']['EXTRA_ARGS']
             if grouped:
                 extra = extra.replace('mixer_input_control=static_gate', 'mixer_input_control=group_calibration')
+                extra += ' mixer_input_detach_unimportant=True'
             plan['exports']['EXTRA_ARGS'] = extra
             name = '{}_{}_10m_s{}_fresh20261014'.format(scene, label, plan['seed'])
             plans.append(rename(plan, name))
