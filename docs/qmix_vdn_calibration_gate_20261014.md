@@ -111,3 +111,20 @@ Outputs under runtime `figures/8m9m_qmix_variants_3seeds`:
 `seed_inventory.csv`, raw and aggregate curve CSVs. Remove `--no-upload` to
 upload the figure snapshot to W&B; `--local-only` still prevents cloud history
 queries. No scheduler-state filtering or synthetic data in production figures.
+
+## Both 5m6m and 8m9m, with W&B figure upload
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+git pull --ff-only origin codex/linear-id-baselines
+/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/plot_5m6m_8m9m_qmix_variants_3seeds.py --local-only --mean-window 10
+```
+
+This reads 21 exact runs: 5m6m fresh QMIX, original static gate/Q-change/TD-error
+mixer controls, and the new return-error gradient-isolated group; 8m9m fresh
+QMIX and static gate. Three planned seeds each. Shared-gradient and isolated
+group models are separately labelled; no VDN, hyper-generated action heads, or
+other-map substitutions. Missing local curves stay missing and seed coverage
+is explicit. Both maps' mean/std figures, individual-seed images and CSVs go
+to one W&B figure snapshot; `Uploaded figures:` prints its URL. Local output
+directory is runtime `figures/5m6m_8m9m_qmix_variants_3seeds`.
