@@ -22,7 +22,9 @@ from ozstar_clean_uploaded_completed_runs import RUN_RE, command, job_index, TER
 
 GROUP = 'qmix_vdn_calibration_gate_10m_3seeds_fresh20261014'
 GROUPS = (GROUP, '5m6m_score_gradient_factorial_10m_6jobs_20261014',
-          '5m6m_qchange_three_ablation_10m_9jobs_20261015')
+          '5m6m_qchange_three_ablation_10m_9jobs_20261015',
+          '8m9m_ones_gate_regularization_10m_9jobs_20261015',
+          'qchange_gate_ablation_10m_18jobs_20261015')
 SESSION = 'gomarl-calibration-sync'
 
 

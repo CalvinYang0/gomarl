@@ -1,5 +1,6 @@
 """One ordinary agent network; only mixer state inputs are controlled."""
 import copy
+import math
 from pathlib import Path
 
 import torch as th
@@ -10,6 +11,7 @@ from utils.mixer_state_importance import (log_state_snapshot, score_state_slots,
                                           score_state_slot_calibration, complete_episode_returns,
                                           score_state_slot_variance, state_slot_names)
 from utils.rl_utils import build_td_lambda_targets
+from utils.mixer_gate_regularization import gate_variance_coefficients, gate_penalties
 
 
 class MixerInputLearner:
@@ -38,10 +40,20 @@ class MixerInputLearner:
         self.image_interval = int(getattr(args, "slot_heatmap_interval", 100000))
         if min(self.interval, self.budget, self.image_interval) <= 0:
             raise ValueError("Invalid mixer diagnostic schedule")
+        self.gate_l1_coef = float(getattr(args, "mixer_gate_l1_coef", 0))
+        self.gate_variance_coef = float(getattr(args, "mixer_gate_variance_coef", 0))
+        if any(not math.isfinite(c) or c < 0 for c in (self.gate_l1_coef, self.gate_variance_coef)):
+            raise ValueError("Gate penalty coefficients must be finite and nonnegative")
+        if (self.gate_l1_coef or self.gate_variance_coef) and self.mixer.variant != "static_gate":
+            raise ValueError("Gate penalties require static_gate")
+        self.gate_variance_interval = int(getattr(args, "mixer_gate_variance_interval", 100))
+        if self.gate_variance_coef and (self.gate_variance_interval <= 0 or self.budget < 2):
+            raise ValueError("Invalid gate variance schedule/budget")
         self.train_steps = self.last_target_update_episode = 0
         self.last_image_t = -self.image_interval
         self.log_stats_t = -args.learner_log_interval - 1
         self.last_losses = self.last_double_actions = None
+        self.last_gate_penalties = None
 
     def _make_optimiser(self, params):
         args = self.args
@@ -78,7 +90,25 @@ class MixerInputLearner:
         expanded = mask.expand_as(error)
         losses = (error.square() * expanded).sum((0, 1)) / expanded.sum((0, 1)).clamp(min=1)
         # Average two independent TD losses, not TD on an averaged Q_tot.
-        loss = losses.mean()
+        td_loss = losses.mean()
+        if self.gate_variance_coef and self.train_steps % self.gate_variance_interval == 0:
+            estimate = gate_variance_coefficients(self.mixer, chosen, states, mask, self.budget)
+            self.mixer.gate_variance_probe_update.fill_(self.train_steps)
+            self.mixer.gate_variance_probability_at_probe.copy_(self.mixer.gate_logits.sigmoid().detach())
+            if estimate is None:
+                self.mixer.gate_variance_probe_count.zero_()
+                self.mixer.gate_variance_difference.zero_()
+                self.mixer.gate_original_variance.zero_()
+                self.mixer.gate_masked_variance.zero_()
+            else:
+                difference, original, masked, count = estimate
+                self.mixer.gate_variance_difference.copy_(difference)
+                self.mixer.gate_original_variance.copy_(original)
+                self.mixer.gate_masked_variance.copy_(masked)
+                self.mixer.gate_variance_probe_count.fill_(count)
+        l1_penalty, variance_penalty = gate_penalties(self.mixer, self.gate_l1_coef, self.gate_variance_coef)
+        loss = td_loss + self.gate_l1_coef * l1_penalty + self.gate_variance_coef * variance_penalty
+        self.last_gate_penalties = th.stack((l1_penalty.detach(), variance_penalty.detach()))
         if not th.isfinite(loss):
             raise RuntimeError("Non-finite mixer-input TD loss")
         self.optimiser.zero_grad()
@@ -159,7 +189,18 @@ class MixerInputLearner:
             self._update_targets()
             self.last_target_update_episode = episode_num
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
-            self.logger.log_stat("loss_td", loss.item(), t_env)
+            self.logger.log_stat("loss_td", td_loss.item(), t_env)
+            if self.gate_l1_coef or self.gate_variance_coef:
+                self.logger.log_stat("mixer_input/loss_total", loss.item(), t_env)
+                self.logger.log_stat("mixer_input/gate_l1", l1_penalty.item(), t_env)
+                self.logger.log_stat("mixer_input/gate_variance_penalty", variance_penalty.item(), t_env)
+                self.logger.log_stat("mixer_input/gate_l1_weighted", self.gate_l1_coef * l1_penalty.item(), t_env)
+                self.logger.log_stat("mixer_input/gate_variance_weighted", self.gate_variance_coef * variance_penalty.item(), t_env)
+                if self.gate_variance_coef:
+                    self.logger.log_stat("mixer_input/gate_variance_probe_count", self.mixer.gate_variance_probe_count.item(), t_env)
+                p = self.mixer.gate_logits.sigmoid().detach()
+                self.logger.log_stat("mixer_input/gate_probability_mean", p.mean().item(), t_env)
+                self.logger.log_stat("mixer_input/gate_eval_open_count", (p > self.mixer.threshold).sum().item(), t_env)
             self.logger.log_stat("loss_td_important", losses[0].item(), t_env)
             if len(losses) == 2:
                 self.logger.log_stat("loss_td_unimportant", losses[1].item(), t_env)
@@ -188,7 +229,8 @@ class MixerInputLearner:
             th.save(self.other_optimiser.state_dict(), str(Path(path) / "opt_unimportant.th"))
         th.save(dict(train_steps=self.train_steps, last_target_update_episode=self.last_target_update_episode,
                      last_image_t=self.last_image_t, detach_unimportant=self.detach_unimportant,
-                     append_mask=self.mixer.append_mask, variant=self.mixer.variant),
+                     append_mask=self.mixer.append_mask, variant=self.mixer.variant,
+                     gate_l1_coef=self.gate_l1_coef, gate_variance_coef=self.gate_variance_coef),
                 str(Path(path) / "mixer_input_schedule.th"))
 
     def load_models(self, path):
@@ -199,6 +241,9 @@ class MixerInputLearner:
             raise ValueError("Checkpoint state input encoding differs; use a fresh run")
         if schedule.get("variant", self.mixer.variant) != self.mixer.variant:
             raise ValueError("Checkpoint importance criterion differs; use a fresh run")
+        for key in ("gate_l1_coef", "gate_variance_coef"):
+            if float(schedule.get(key, 0)) != getattr(self, key):
+                raise ValueError("Checkpoint gate regularization differs; use a fresh run")
         self.mac.load_models(path)
         self.mixer.load_state_dict(th.load(str(Path(path) / "mixer.th"), map_location="cpu"))
         self.optimiser.load_state_dict(th.load(str(Path(path) / "opt.th"), map_location="cpu"))

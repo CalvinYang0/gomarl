@@ -31,6 +31,12 @@ def main():
         new_manifest.write_text(json.dumps(dict(group=c.GROUPS[2], plans=[dict(job_name=variance), dict(job_name=ablation)],
             submitted={variance: '789'}, retained={ablation: '456'})))
         assert c.manifest_jobs(logs) == {'123': name, '456': ablation, '789': variance}
+        gate = 'smac_8m9m_qmix_state_static10_variance_10m_s1_ablate20261015'
+        gate_manifest = logs / (c.GROUPS[4] + '_20261015_1.json')
+        gate_manifest.write_text(json.dumps(dict(group=c.GROUPS[4], plans=[dict(job_name=gate), dict(job_name=ablation)],
+            submitted={gate: '890'}, retained={ablation: '456'})))
+        assert c.manifest_jobs(logs) == {'123': name, '456': ablation, '789': variance, '890': gate}
+        gate_manifest.unlink()
         new_manifest.unlink()
         extra_manifest.unlink()  # Only this test fixture; remaining tests use one run.
         run = wandb / 'offline-run-20261014_120000-ab12'

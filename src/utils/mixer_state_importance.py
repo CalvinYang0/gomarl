@@ -153,6 +153,9 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
     if mixer.grouped:
         rows = th.stack((mixer.important_slots, ~mixer.important_slots)).float().cpu()
         labels = ["important membership", "unimportant membership"]
+    elif mixer.variant == "ones":
+        rows = th.ones(2, mixer.state_dim)
+        labels = ["constant ones condition", "constant ones (no gate)"]
     else:
         p = mixer.gate_logits.sigmoid().detach().cpu()
         rows = th.stack((p, (p > mixer.threshold).float()))
@@ -175,6 +178,18 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
                   append_membership_features=mixer.append_mask,
                   mixer_condition_dim=mixer.mixers[0].state_dim,
                   note="Fixed agent Q and fixed own-branch TD target; not action flips or win-rate attribution")
+    result.update(gate_l1_coef=float(getattr(args, "mixer_gate_l1_coef", 0)),
+                  gate_variance_coef=float(getattr(args, "mixer_gate_variance_coef", 0)))
+    if hasattr(mixer, "gate_variance_difference"):
+        result.update(gate_variance_difference=mixer.gate_variance_difference.cpu().tolist(),
+                      gate_variance_penalty_coefficients=mixer.gate_variance_difference.clamp(min=0).cpu().tolist(),
+                      gate_original_variance=mixer.gate_original_variance.cpu().tolist(),
+                      gate_masked_variance=mixer.gate_masked_variance.cpu().tolist(),
+                      gate_variance_probe_count=int(mixer.gate_variance_probe_count.item()),
+                      gate_variance_probe_update=int(mixer.gate_variance_probe_update.item()),
+                      gate_variance_probability_at_probe=mixer.gate_variance_probability_at_probe.cpu().tolist(),
+                      gate_variance_interval=int(getattr(args, "mixer_gate_variance_interval", 100)),
+                      gate_variance_definition="Var(Q_tot(p*state))-Var(Q_tot(p*state with field j zero)); population variance; detached positive part weights p_j")
     if mixer.variant == "group_calibration":
         result.update(normalized_removal_gain=mixer.removal_gain_scores.cpu().tolist(),
                       calibration_probe_count=int(mixer.calibration_probe_count.item()),
@@ -209,6 +224,12 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
             axes[2].set_ylabel("Var(Q_tot) - Var(Q_tot_replaced)")
             axes[1].axhline(0, color="black", linewidth=.5)
             axes[2].axhline(0, color="black", linewidth=.5)
+        elif hasattr(mixer, "gate_variance_difference"):
+            axes[1].bar(range(len(names)), result["gate_variance_difference"])
+            axes[1].set_ylabel("signed variance-removal gain")
+            axes[1].axhline(0, color="black", linewidth=.5)
+            axes[2].bar(range(len(names)), result["gate_variance_penalty_coefficients"])
+            axes[2].set_ylabel("detached gate penalty coefficient")
         else:
             axes[1].bar(range(len(names)), result["qchange"])
             axes[1].set_ylabel("mean abs Q_tot change")

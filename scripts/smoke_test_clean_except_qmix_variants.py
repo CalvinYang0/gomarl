@@ -114,6 +114,13 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(targets, [])
         self.assertTrue(set(paths) <= set(kept))
 
+    def test_8m9m_gate_regularization_cohort_is_preserved(self):
+        paths = self.run_data('smac_8m9m_qmix_state_static10_variance_10m_s1_ablate20261015',
+                              '8m9m_ones_gate_regularization_10m_9jobs_20261015', 60)
+        targets, kept = c.inventory(self.root, set(), lambda j: True)
+        self.assertEqual(targets, [])
+        self.assertTrue(set(paths) <= set(kept))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -12,10 +12,10 @@ class StateInputControlMixer(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.variant = args.mixer_input_control
-        if self.variant not in {"static_gate", "group_qchange", "group_tderror", "group_calibration", "group_variance"}:
+        if self.variant not in {"ones", "static_gate", "group_qchange", "group_tderror", "group_calibration", "group_variance"}:
             raise ValueError("Unknown mixer state control: " + self.variant)
         self.state_dim = math.prod(args.state_shape) if isinstance(args.state_shape, (tuple, list)) else int(args.state_shape)
-        self.grouped = self.variant != "static_gate"
+        self.grouped = self.variant not in {"ones", "static_gate"}
         # Explicit compatibility switch: historical groups concatenated their
         # membership bits. The input-only ablation removes those extra features.
         self.append_mask = self.grouped and bool(getattr(args, "mixer_input_append_mask", True))
@@ -42,7 +42,15 @@ class StateInputControlMixer(nn.Module):
         self.demote_ratio = float(getattr(args, "slot_demote_ratio", .5))
         if not 0 <= self.ema < 1 or not 0 < self.demote_ratio < 1:
             raise ValueError("Invalid mixer grouping settings")
-        self.gate_logits = nn.Parameter(th.full((self.state_dim,), math.log(p / (1 - p)))) if not self.grouped else None
+        self.gate_logits = nn.Parameter(th.full((self.state_dim,), math.log(p / (1 - p)))) if self.variant == "static_gate" else None
+        if float(getattr(args, "mixer_gate_variance_coef", 0)) > 0:
+            if self.variant != "static_gate":
+                raise ValueError("Gate variance penalty requires static_gate")
+            for name in ("gate_variance_difference", "gate_original_variance", "gate_masked_variance"):
+                self.register_buffer(name, th.zeros(self.state_dim))
+            self.register_buffer("gate_variance_probe_count", th.zeros((), dtype=th.long))
+            self.register_buffer("gate_variance_probe_update", th.full((), -1, dtype=th.long))
+            self.register_buffer("gate_variance_probability_at_probe", th.zeros(self.state_dim))
         local = copy(args)
         # Partition bits distinguish excluded fields from observed zeros.
         local.state_shape = self.state_dim * (2 if self.append_mask else 1)
@@ -53,6 +61,8 @@ class StateInputControlMixer(nn.Module):
             raise ValueError("Invalid mixer forward mode")
         if self.grouped:
             return th.stack((self.important_slots, ~self.important_slots)).to(states)
+        if self.variant == "ones":
+            return th.ones_like(states).unsqueeze(0)
         probability = self.gate_logits.sigmoid()
         if mode == "train":
             logits = self.gate_logits.expand_as(states)
@@ -65,6 +75,8 @@ class StateInputControlMixer(nn.Module):
         return gate.unsqueeze(0)
 
     def controlled_input(self, states, mask):
+        if self.variant == "ones":
+            return th.ones_like(states)
         observed = states * mask
         if self.append_mask:
             observed = th.cat((observed, mask.expand_as(states)), dim=-1)
