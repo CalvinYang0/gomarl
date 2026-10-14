@@ -14,8 +14,11 @@ def main():
     study.configure()
     c = study.charts
     plans = study.build_plans(c.ROOT)
-    assert len(plans) == 21
-    assert not any(p['label'] == 'vdn' for p in plans)
+    assert len(plans) == 27
+    for scene in study.SCENE_MODELS:
+        vdn = [p for p in plans if p['scene'] == scene and p['label'] == 'vdn']
+        assert {p['seed'] for p in vdn} == {1, 2, 3}
+        assert all(p['job_name'].endswith('fresh20261014') for p in vdn)
     with tempfile.TemporaryDirectory(prefix='synthetic-two-map-qmix-') as temp:
         root = Path(temp)
         for p in plans:
@@ -34,7 +37,7 @@ def main():
         output = root / 'figures' / c.DEFAULT_OUTPUT_SUBDIR
         with (output / 'seed_inventory.csv').open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 21
+        assert len(inventory) == 27
         assert sum(row['coverage'] == 'missing' for row in inventory) == 1
         for scene, models in study.SCENE_MODELS.items():
             for suffix in ('three_seed.png', 'three_seed.pdf', 'individual_seeds.png'):
@@ -45,7 +48,7 @@ def main():
             for row in rows:
                 assert float(row['step']) <= 6000000
                 assert row['seed_count'] == ('2' if row['model'] == 'qmix_state_group_calibration_isolated' else '3')
-    print('PASS: two maps; 21 exact names; isolated new groups included; no VDN/map mixing; shared intervals; missing seeds explicit; no cloud/upload')
+    print('PASS: two maps; 27 exact names; fresh VDN three seeds on each map; isolated groups; no map/cohort mixing; shared intervals; missing seeds explicit; no cloud/upload')
 
 
 if __name__ == '__main__':

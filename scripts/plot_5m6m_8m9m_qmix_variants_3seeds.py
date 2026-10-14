@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two-map QMIX mixer variants; explicit cohorts, no cross-map substitution."""
+"""Two-map QMIX mixer variants and fresh VDN; no cross-map substitution."""
 import sys
 
 import plot_linear_counter_mmm2_threeway_3seeds as charts
@@ -8,6 +8,7 @@ from ozstar_submit_qmix_vdn_calibration_gate_18jobs import build_plans as fresh_
 
 LABELS = {
     'qmix': ('QMIX ordinary fixed head (fresh 10M)', '#7f7f7f'),
+    'vdn': ('VDN ordinary fixed head (fresh 10M)', '#ff7f0e'),
     'qmix_state_static10': ('QMIX static state gate p0=0.1, no KL (10M)', '#bcbd22'),
     'qmix_state_group_qchange': ('QMIX Q-change groups / shared-gradient dual TD (10M)', '#08519c'),
     'qmix_state_group_tderror': ('QMIX TD-error groups / shared-gradient dual TD (10M)', '#a50f15'),
@@ -15,18 +16,18 @@ LABELS = {
 }
 SCENE_MODELS = {
     'smac_5m6m': tuple(LABELS),
-    'smac_8m9m': ('qmix', 'qmix_state_static10'),
+    'smac_8m9m': ('qmix', 'vdn', 'qmix_state_static10'),
 }
 _CLOUD_QUERY = charts.cloud_run_index
 
 
 def build_plans(repo):
     plans = original_controls(repo)
-    plans.extend(p for p in fresh_plans(repo) if p['label'] == 'qmix' or
+    plans.extend(p for p in fresh_plans(repo) if p['label'] in {'qmix', 'vdn'} or
                  p['label'] == 'qmix_state_group_calibration_isolated' or
                  (p['scene'] == 'smac_8m9m' and p['label'] == 'qmix_state_static10'))
-    if len(plans) != 21 or len({p['job_name'] for p in plans}) != 21:
-        raise RuntimeError('Expected 15 5m6m + 6 8m9m distinct experiment names')
+    if len(plans) != 27 or len({p['job_name'] for p in plans}) != 27:
+        raise RuntimeError('Expected 18 5m6m + 9 8m9m distinct experiment names')
     for scene, models in SCENE_MODELS.items():
         selected = [p for p in plans if p['scene'] == scene]
         if {p['label'] for p in selected} != set(models):
@@ -40,7 +41,7 @@ def build_plans(repo):
 def configure():
     charts.GROUP = 'smac_5m6m_8m9m_qmix_mixer_variants_3seeds'
     charts.DEFAULT_OUTPUT_SUBDIR = '5m6m_8m9m_qmix_variants_3seeds'
-    charts.RESULTS_TITLE = 'QMIX mixer-input variants'
+    charts.RESULTS_TITLE = 'QMIX mixer-input variants and VDN'
     charts.REPORT_SEED_COVERAGE = True
     charts.TARGET_STEPS = 10000000
     charts.SCENES = {

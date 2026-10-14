@@ -120,10 +120,10 @@ git pull --ff-only origin codex/linear-id-baselines
 /home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/plot_5m6m_8m9m_qmix_variants_3seeds.py --local-only --mean-window 10
 ```
 
-This reads 21 exact runs: 5m6m fresh QMIX, original static gate/Q-change/TD-error
+This reads 27 exact runs: 5m6m fresh QMIX/VDN, original static gate/Q-change/TD-error
 mixer controls, and the new return-error gradient-isolated group; 8m9m fresh
-QMIX and static gate. Three planned seeds each. Shared-gradient and isolated
-group models are separately labelled; no VDN, hyper-generated action heads, or
+QMIX/VDN and static gate. Three planned seeds each. Shared-gradient and isolated
+group models are separately labelled; no historical VDN, hyper-generated action heads, or
 other-map substitutions. Missing local curves stay missing and seed coverage
 is explicit. Both maps' mean/std figures, individual-seed images and CSVs go
 to one W&B figure snapshot; `Uploaded figures:` prints its URL. Local output
