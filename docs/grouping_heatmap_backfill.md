@@ -29,10 +29,11 @@ Missing saved partitions are reported as failures, not reconstructed from final
 weights or fabricated. A missing PNG can be regenerated only from its actual
 archived JSON membership.
 
-Backfill uploads all saved PNG/JSON snapshots to the **original training run**,
+Backfill preserves all saved PNG/JSON snapshots in the **original training run**,
 then adds latest heatmap, latest membership table, a `grouping_evolution` image,
 and a `grouping_history` table containing every saved step and its heatmap file
-path (all referenced PNGs are uploaded in Files).
+path (all referenced PNGs are present in Files). Every original JSON file is
+preserved byte-for-byte in `grouping_snapshots.zip`, with its original filename.
 Where original offline grouping-media files still exist, the tool also uploads
 them at their exact original `media/images/...` paths, repairing old history
 image references without adding new history rows. The original heatmap summary
@@ -46,13 +47,41 @@ summary is deferred to prevent concurrent summary writes. Rerun after completion
 
 Uploads share the existing synchronization/cleanup lock. If locked, retry later.
 Successful file fingerprints are saved in `grouping_backfill/uploaded_files.json`;
-repeating the command skips unchanged files and repairs the summary. Do not
+repeating the command checks cloud file names/MD5/size, skips unchanged files,
+and repairs the summary. Existing ordinary-sync images are reused even if there
+is no backfill ledger. A locally recorded success alone cannot hide a cloud file
+that was removed or replaced. Do not
 delete the generated `grouping_backfill` folder or this ledger while uploads
-are pending. Up to four files upload concurrently, without downloading training
+are pending. Up to eight files upload concurrently, without downloading training
 histories. PNG staging uses symlinks rather than duplicating the large image
 archives on quota-limited `/home`; generated tables and evolution images are
 small additional files. Keep the original snapshots until upload finishes.
 Previously removed local data cannot be backfilled by this tool.
+
+## Faster uploader (supersedes the per-file implementation)
+
+The first implementation called public `Run.upload_file` for every file. In
+SDK 0.18.7 that builds a client, requests an upload URL, sends one file, and
+queries the resulting file separately. It also did not check media already
+uploaded by ordinary sync, so a 151-snapshot run requested 456 file uploads.
+
+The replacement queries the selected run's file metadata once, reuses identical
+PNG contents (preferring original `media/images/...` paths), combines the original
+JSONs in one deterministic ZIP, and requests up to 64 upload URLs per batch.
+It uses the same SDK upload/check-response transport with one reused client per
+worker; there is no per-file post-upload public lookup. With all native images
+already on cloud, a typical run needs only four files: ZIP, two tables, overview.
+When images are genuinely missing they are still all uploaded; no snapshot is
+dropped or subsampled. Original cloud copies are never deleted. Latest image and
+history references point to the reused canonical images. Interrupted old runs
+can resume using the same command; a cloud checksum check recognizes uploads
+that completed before the local ledger was updated. Worker PUTs and SDK retries
+are bounded; Ctrl+C cancels queued work rather than draining every file.
+
+An already-running old Python process does not pick up this change. Stop that
+specific foreground backfill before pulling/restarting; do not remove the lock,
+kill training jobs, or start a second uploader concurrently. The exact elapsed
+speedup depends on network/storage latency; no upload-time guarantee is assumed.
 
 Already-running Python processes will not reload this logging change. The
 backfill tool supports their saved JSON too; new starts include the native keys.

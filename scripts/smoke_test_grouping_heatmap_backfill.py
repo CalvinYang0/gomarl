@@ -4,6 +4,8 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import tempfile
+import threading
+import zipfile
 from types import SimpleNamespace
 from unittest.mock import patch
 import wandb
@@ -56,7 +58,11 @@ def main():
             pass
         bundle = study.prepare_bundle(directory, 'mixer_input', source, root / 'output')
         bundle_root, files, summary = bundle
-        assert len(files) == 8 and summary['mixer_input/grouping_t_env'] == 20
+        assert len(files) == 7 and summary['mixer_input/grouping_t_env'] == 20
+        archive = bundle_root / summary['mixer_input/grouping_snapshot_archive']
+        with zipfile.ZipFile(archive) as package:
+            assert sorted(package.namelist()) == sorted(p.name for p in directory.glob('*.json'))
+            assert all(package.read(p.name) == p.read_bytes() for p in directory.glob('*.json'))
         assert (bundle_root / native_image.relative_to(sdk_dir)).is_symlink()
         assert summary['mixer_input/important_slot_names'] == ['health', 'cooldown']
         assert summary['mixer_input/unimportant_slot_names'] == []
@@ -85,32 +91,62 @@ def main():
         summary_api.update(summary)
         assert updates[-1]['test_return_mean'] == 11.
         assert updates[-1]['mixer_input/grouping_history']['_type'] == 'table-file'
-        uploaded, ledger = [], {}
+        uploaded, ledger, remote, batches = [], {}, {}, []
+        transfer_lock = threading.Lock()
         original = {'test_battle_won_mean': .75, '_step': 10050000}
         run = SimpleNamespace(name=source['name'], state='finished', summary=original.copy(),
                               url='https://example.invalid/SYNTHETIC_QA')
-        run.upload_file = lambda path, root: uploaded.append(str(Path(path).relative_to(root)))
+        def forbid_individual(*a, **kw):
+            raise AssertionError('The slow per-file public API must never be called')
+        run.upload_file = forbid_individual
+        run.files = lambda names, per_page: [SimpleNamespace(name=name, md5=remote[name]['md5'], size=remote[name]['size'])
+                                            for name in names if name in remote]
+        class FakeTransport:
+            def __init__(self, project, source_id):
+                assert project == 'SYNTHETIC/QA' and source_id == run_id
+            def urls(self, names):
+                batches.append(names)
+                return [], {name: {'name': name, 'uploadUrl': 'https://example.invalid/QA'} for name in names}
+            def transfer(self, path, entry, headers):
+                with transfer_lock:
+                    uploaded.append(entry['name'])
+                    remote[entry['name']] = study.fingerprints(path)
         api = SimpleNamespace(run=lambda path: run, flush=lambda: None)
         state = root / 'ledger.json'
-        assert study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state, workers=2)
-        assert len(uploaded) == 8 and all(run.summary[k] == v for k, v in original.items())
-        study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state)
-        assert len(uploaded) == 8  # Idempotent file uploads.
+        assert study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state,
+                                   workers=2, uploader_factory=FakeTransport, batch_size=3)
+        assert len(uploaded) == 6 and len(batches) == 2
+        assert all(run.summary[k] == v for k, v in original.items())
+        study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state, uploader_factory=FakeTransport)
+        assert len(uploaded) == 6  # Idempotent uploads, validated against cloud.
+        # Restart can reuse native images uploaded by ordinary sync, even with
+        # no backfill ledger. Only the ZIP, two tables, and overview need PUTs.
+        remote = {name: info for name, info in remote.items() if name.endswith('.png') and
+                  not name.endswith('grouping_evolution.png')}
+        ledger.clear()
+        study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state, uploader_factory=FakeTransport)
+        assert len(uploaded) == 10
+        # A stale local success cannot hide a remotely deleted file.
+        del remote[summary['mixer_input/grouping_snapshot_archive']]
+        study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state, uploader_factory=FakeTransport)
+        assert len(uploaded) == 11
         run.state = 'running'
-        assert not study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state)
+        assert not study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state, uploader_factory=FakeTransport)
         run.name = 'WRONG_RUN'
         try:
-            study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state)
+            study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state, uploader_factory=FakeTransport)
             raise AssertionError('Cloud identity mismatch must fail closed')
         except ValueError:
             pass
         run.name, run.state = source['name'], 'finished'
         ledger.clear()
-        def fail(*a, **kw):
-            raise RuntimeError('Synthetic upload failure')
-        run.upload_file = fail
+        remote.clear()
+        class FailedTransport(FakeTransport):
+            def transfer(self, *a, **kw):
+                raise RuntimeError('Synthetic upload failure')
         try:
-            study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state, workers=1)
+            study.upload_bundle(api, 'SYNTHETIC/QA', source, bundle, ledger, state, workers=1,
+                                uploader_factory=FailedTransport)
             raise AssertionError('Failed uploads must propagate')
         except RuntimeError:
             assert ledger['SYNTHETIC/QA/' + run_id] == {}
@@ -119,7 +155,28 @@ def main():
             raise AssertionError('Overlapping groups must fail')
         except ValueError:
             pass
-    print('PASS: exact 24-run scope; real offline metadata; original-run identity; history preserved; all snapshots; recovery; SDK table; retry; live-summary guard')
+        # Actual uploader wiring: batched URL scope/headers and relative URLs.
+        calls = []
+        class FakeBackend:
+            api_url = 'https://example.invalid'
+            def upload_urls(self, project, names, run, entity):
+                calls.append(('urls', project, names, run, entity))
+                return 'QA-storage', ['Content-Type:image/png'], {name: {'uploadUrl': '/QA-put'} for name in names}
+            def upload_file_retry(self, url, handle, extra_headers):
+                calls.append(('put', url, handle.read(), extra_headers))
+        with patch.object(study.BatchedRunUploader, '_make_api', return_value=FakeBackend()):
+            transport = study.BatchedRunUploader('SYNTHETIC/QA', run_id)
+            headers, entries = transport.urls(['a.png', 'b.png'])
+            transport.transfer(sdk_image_path, entries['a.png'], headers)
+            assert calls[0] == ('urls', 'QA', ['a.png', 'b.png'], run_id, 'SYNTHETIC')
+            assert calls[1][1] == 'https://example.invalid/QA-put'
+            assert calls[1][3] == {'Content-Type': 'image/png'}
+        with patch('requests.sessions.Session.request', side_effect=AssertionError('Offline QA must not access network')):
+            actual = study.BatchedRunUploader('SYNTHETIC/QA', run_id)
+            assert actual.control.retry_timedelta.total_seconds() == 60
+            assert actual.control.FILE_PUSHER_TIMEOUT == 60
+            assert actual.control._upload_file_session.put.keywords['timeout'] == 60
+    print('PASS: original run/history safety; exact archived JSON ZIP; batch transport; cloud checksum reuse; PNG dedup; restart; removed-file repair; failure ledger; live-summary guard')
 
 
 if __name__ == '__main__':

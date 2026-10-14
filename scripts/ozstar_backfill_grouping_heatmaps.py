@@ -6,13 +6,17 @@ API file/summary updates do not change history, run status or performance curves
 No project-wide history download. Dry-run is the default; use --upload to write.
 """
 import argparse
+import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import timedelta
 import fcntl
-from hashlib import sha256
+from hashlib import md5, sha256
 import json
 import os
 from pathlib import Path
 import sys
+import threading
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from utils.grouping_diagnostics import membership
@@ -130,7 +134,7 @@ def prepare_bundle(directory, prefix, source, output):
     import shutil
     root = output / source['id']
     target = root / 'grouping_backfill' / prefix / directory.parent.name
-    records, files, previous_names = [], [], None
+    records, files, json_files, previous_names = [], [], [], None
     for path in sorted(directory.glob('step_*.json')):
         data = json.loads(path.read_text())
         names, selected = membership(data)
@@ -159,11 +163,22 @@ def prepare_bundle(directory, prefix, source, output):
                              source['name'] + ' — recovered saved partition t_env=' + str(data['t_env']))
         data['_selected'], data['_image'] = selected, file_descriptor(image_target, root, 'image-file')
         records.append(data)
-        files.extend([json_target, image_target])
+        json_files.append(json_target)
+        files.append(image_target)
     records.sort(key=lambda r: (r['t_env'], r['train_updates']))
     if not records:
         raise ValueError('No saved partitions: ' + str(directory))
     last = records[-1]
+    # Keep every original JSON byte in one deterministic, compressed archive.
+    # Hundreds of small HTTP PUTs convey no extra information over this ZIP.
+    archive = target / 'grouping_snapshots.zip'
+    with zipfile.ZipFile(archive, 'w') as package:
+        for path in json_files:
+            entry = zipfile.ZipInfo(path.name, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            entry.external_attr = 0o600 << 16
+            package.writestr(entry, path.read_bytes())
+    files.append(archive)
     # Repair original history image references as well, when their native
     # offline media files still exist. Keep the SDK's original relative paths.
     native_root = source.get('directory', Path('/nonexistent-SYNTHETIC-source')) / 'files'
@@ -199,6 +214,7 @@ def prepare_bundle(directory, prefix, source, output):
                prefix + '/important_slot_names': [n for n, yes in zip(names, last['_selected']) if yes],
                prefix + '/unimportant_slot_names': [n for n, yes in zip(names, last['_selected']) if not yes],
                prefix + '/grouping_backfill_snapshot_count': len(records)}
+    summary[prefix + '/grouping_snapshot_archive'] = archive.relative_to(root).as_posix()
     for key, table in tables.items():
         path = target / (key + '.table.json')
         write_json(path, table)
@@ -214,32 +230,156 @@ def prepare_bundle(directory, prefix, source, output):
     return root, files, summary
 
 
-def upload_bundle(api, project, source, bundle, ledger, state_path, workers=4):
+def cloud_inventory(run, files, root):
+    """One paginated metadata query, no downloads or training-history scan."""
+    return {f.name: dict(md5=f.md5, size=f.size) for f in
+            run.files(names=[p.relative_to(root).as_posix() for p in files], per_page=1000)}
+
+
+def fingerprints(path):
+    raw = path.read_bytes()
+    digest = md5(raw).digest()
+    return dict(sha256=sha256(raw).hexdigest(), md5=base64.b64encode(digest).decode(),
+                md5hex=digest.hex(), size=len(raw))
+
+
+def matches_cloud(meta, local):
+    return bool(meta and meta.get('size') == local['size'] and
+                meta.get('md5') in (local['md5'], local['md5hex']))
+
+
+def reuse_images(bundle, remote):
+    """Share one identical PNG per run; prefer already uploaded native media."""
+    root, files, summary = bundle
+    groups, aliases = {}, {}
+    for path in files:
+        if path.suffix == '.png':
+            info = fingerprints(path)
+            groups.setdefault(info['sha256'], []).append((path, info))
+    for members in groups.values():
+        existing = [p for p, info in members
+                    if matches_cloud(remote.get(p.relative_to(root).as_posix()), info)]
+        candidates = existing or [p for p, _ in members]
+        chosen = min(candidates, key=lambda p: (not p.relative_to(root).as_posix().startswith('media/images/'), str(p)))
+        canonical = chosen.relative_to(root).as_posix()
+        aliases.update({p.relative_to(root).as_posix(): canonical for p, _ in members
+                        if p != chosen})
+    for descriptor in summary.values():
+        if isinstance(descriptor, dict) and descriptor.get('_type') == 'image-file':
+            descriptor['path'] = aliases.get(descriptor['path'], descriptor['path'])
+    history_key = next(k for k in summary if k.endswith('/grouping_history'))
+    descriptor = summary[history_key]
+    path = root / descriptor['path']
+    table = json.loads(path.read_text())
+    for row in table['data']:
+        row[-1] = aliases.get(row[-1], row[-1])
+    write_json(path, table)
+    descriptor.update(file_descriptor(path, root, 'table-file'))
+    filtered = [p for p in files if p.relative_to(root).as_posix() not in aliases]
+    return (root, filtered, summary), len(aliases)
+
+
+class BatchedRunUploader:
+    """W&B 0.18.7's own transport, with batched URL requests and reused clients.
+
+    No per-file public File lookup. Each transfer thread keeps its own SDK
+    session. Only the main thread requests upload URLs. No run init/resume.
+    """
+    def __init__(self, project, source_id):
+        from wandb.sdk.internal.internal_api import Api
+        self.entity, self.project = project.split('/', 1)
+        self.run_id = source_id
+        self.factory = Api
+        self.local = threading.local()
+        self.control = self._make_api()
+
+    def _make_api(self):
+        # Instance-scoped class setting, consumed during SDK construction.
+        # Bound one stalled PUT and retry cycle without changing user settings.
+        base = self.factory
+        class BoundedApi(base):
+            FILE_PUSHER_TIMEOUT = 60
+        return BoundedApi(default_settings={'entity': self.entity, 'project': self.project},
+                          retry_timedelta=timedelta(seconds=60))
+
+    def urls(self, names):
+        _, headers, entries = self.control.upload_urls(self.project, names,
+                                                      run=self.run_id, entity=self.entity)
+        if set(entries) != set(names):
+            raise RuntimeError('Incomplete upload URL batch; no missing file may be acknowledged')
+        return headers, entries
+
+    def transfer(self, path, entry, headers):
+        if not hasattr(self.local, 'api'):
+            self.local.api = self._make_api()
+        api = self.local.api
+        url = entry['uploadUrl']
+        if url.startswith('/'):
+            url = api.api_url + url
+        extra = dict(header.split(':', 1) for header in headers)
+        with path.open('rb') as handle:
+            # This is the same retry/check-response operation used by Api.push.
+            api.upload_file_retry(url, handle, extra_headers=extra)
+
+
+def save_ledger(state_path, ledger):
+    temporary = state_path.with_suffix('.tmp')
+    write_json(temporary, ledger)
+    temporary.replace(state_path)
+
+
+def upload_bundle(api, project, source, bundle, ledger, state_path, workers=8,
+                  uploader_factory=BatchedRunUploader, batch_size=64):
     run_path = project + '/' + source['id']
     run = api.run(run_path)
     if run.name != source['name']:
         raise ValueError('Refuse to upload into different cloud run: ' + run_path)
     root, files, summary = bundle
+    remote = cloud_inventory(run, files, root)
+    bundle, reused = reuse_images(bundle, remote)
+    root, files, summary = bundle
     # Isolate the exact source ID and the selected project in the upload ledger.
     done = ledger.setdefault(run_path, {})
-    pending = [(p, sha256(p.read_bytes()).hexdigest()) for p in files
-               if done.get(p.relative_to(root).as_posix()) != sha256(p.read_bytes()).hexdigest()]
-    print('UPLOAD {}: {} changed files ({} unchanged)'.format(
-        source['name'], len(pending), len(files) - len(pending)), flush=True)
+    pending, cloud_skipped = [], 0
+    for path in files:
+        relative = path.relative_to(root).as_posix()
+        info = fingerprints(path)
+        if matches_cloud(remote.get(relative), info):
+            done[relative] = info['sha256']
+            cloud_skipped += 1
+        else:
+            # Cloud existence/checksum, not an old local ledger alone, is
+            # authoritative. Repair externally removed or replaced files too.
+            pending.append((path, info['sha256']))
+    save_ledger(state_path, ledger)
+    print('UPLOAD {}: {} files needed; {} already on cloud; {} duplicate PNGs reused'.format(
+        source['name'], len(pending), cloud_skipped, reused), flush=True)
     uploaded = 0
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(run.upload_file, str(p), root=str(root)): (p, digest)
-                   for p, digest in pending}
-        for future in as_completed(futures):
-            future.result()  # Failed uploads never advance their fingerprint.
-            path, digest = futures[future]
-            done[path.relative_to(root).as_posix()] = digest
-            temporary = state_path.with_suffix('.tmp')
-            write_json(temporary, ledger)
-            temporary.replace(state_path)
-            uploaded += 1
-            if uploaded % 10 == 0 or uploaded == len(pending):
-                print('  files acknowledged: {}/{}'.format(uploaded, len(pending)), flush=True)
+    if pending:
+        transport = uploader_factory(project, source['id'])
+        pool = ThreadPoolExecutor(max_workers=workers)
+        try:
+            for offset in range(0, len(pending), batch_size):
+                batch = pending[offset:offset + batch_size]
+                names = [p.relative_to(root).as_posix() for p, _ in batch]
+                headers, entries = transport.urls(names)
+                futures = {pool.submit(transport.transfer, p, entries[p.relative_to(root).as_posix()], headers):
+                           (p, digest) for p, digest in batch}
+                try:
+                    for future in as_completed(futures):
+                        future.result()  # Failed PUTs never advance their fingerprint.
+                        path, digest = futures[future]
+                        done[path.relative_to(root).as_posix()] = digest
+                        save_ledger(state_path, ledger)
+                        uploaded += 1
+                        if uploaded % 10 == 0 or uploaded == len(pending):
+                            print('  files acknowledged: {}/{}'.format(uploaded, len(pending)), flush=True)
+                except BaseException:
+                    for future in futures:
+                        future.cancel()  # Do not drain hundreds of queued uploads on Ctrl+C.
+                    raise
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
     # Refresh after uploads. Preserve unrelated summary/performance keys.
     api.flush()
     run = api.run(run_path)
@@ -261,7 +401,7 @@ def main():
         '/home/kyang/gomarl-runtime/gomarl-dual-branch')))
     parser.add_argument('--project', default='hjh331-sjtu/gomarl')
     parser.add_argument('--upload', action='store_true')
-    parser.add_argument('--workers', type=int, default=4, choices=range(1, 9))
+    parser.add_argument('--workers', type=int, default=8, choices=range(1, 9))
     args = parser.parse_args()
     runtime = args.runtime_root
     plans = wanted_plans(Path(__file__).resolve().parents[1])
