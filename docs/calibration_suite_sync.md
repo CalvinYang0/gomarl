@@ -4,6 +4,9 @@ The old login-node upload windows scan RUNNING jobs only, so a job leaving
 squeue can lose its final upload. This new tool reads actual submitted/retained
 IDs from `qmix_vdn_calibration_gate_10m_3seeds_fresh20261014` manifests, then queries
 Slurm accounting for State/ExitCode/Elapsed and checks the repository WorkDir.
+It also reads `5m6m_score_gradient_factorial_10m_6jobs_20261014` manifests for
+the missing score/gradient comparison cells. Use `restart` after pulling this
+update so an existing uploader process loads both cohorts.
 No inferred contiguous job-ID range is used. Missing accounting remains UNKNOWN.
 COMPLETED means Slurm success, not independently verified 10M training coverage.
 

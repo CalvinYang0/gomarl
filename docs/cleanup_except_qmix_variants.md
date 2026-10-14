@@ -12,6 +12,8 @@ Always retained, including all seeds and retries:
 - Their group `5m6m_qmix_mixer_input_controls_10m_9jobs`.
 - The newly requested October 14 cohort group
   `qmix_vdn_calibration_gate_10m_3seeds_fresh20261014`, including its fresh baselines.
+- The six factorial-ablation jobs in
+  `5m6m_score_gradient_factorial_10m_6jobs_20261014`.
 
 All running/pending/completing jobs are retained. Unknown ownership/state is
 retained. Terminal state must be confirmed with Slurm accounting and repository

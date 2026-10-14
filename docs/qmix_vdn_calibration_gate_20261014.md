@@ -120,8 +120,9 @@ git pull --ff-only origin codex/linear-id-baselines
 /home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/plot_5m6m_8m9m_qmix_variants_3seeds.py --local-only --mean-window 10
 ```
 
-This reads 27 exact runs: 5m6m fresh QMIX/VDN, original static gate/Q-change/TD-error
-mixer controls, and the new return-error gradient-isolated group; 8m9m fresh
+This reads 33 exact runs: 5m6m fresh QMIX/VDN, original static gate/Q-change/TD-error
+mixer controls, return-error gradient-isolated group, and the two missing
+factorial cells (Q-change/isolated and return-error/shared); 8m9m fresh
 QMIX/VDN and static gate. Three planned seeds each. Shared-gradient and isolated
 group models are separately labelled; no historical VDN, hyper-generated action heads, or
 other-map substitutions. Missing local curves stay missing and seed coverage
@@ -137,7 +138,7 @@ explicit. It creates a NEW named project workspace, filtered to the new figure
 snapshot run ID, with sibling sections:
 
 - `Media`: collapsed by default, contains the two mean/std comparison figures.
-- `5m6m`: open, one column, six ordered per-model three-seed images.
+- `5m6m`: open, one column, eight ordered per-model three-seed images.
 - `8m9m`: open, one column, three ordered per-model three-seed images.
 
 No existing workspace is overwritten and no horizontal montage is uploaded.

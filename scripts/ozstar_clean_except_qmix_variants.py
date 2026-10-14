@@ -20,7 +20,8 @@ from ozstar_clean_uploaded_completed_runs import command, job_finished, RUN_PATH
 ROOT = Path('/home/kyang/gomarl-runtime/gomarl-dual-branch')
 REPO = Path('/home/kyang/code/gomarl-dual-branch')
 KEEP_GROUP = '5m6m_qmix_mixer_input_controls_10m_9jobs'
-KEEP_GROUPS = {KEEP_GROUP, 'qmix_vdn_calibration_gate_10m_3seeds_fresh20261014'}
+KEEP_GROUPS = {KEEP_GROUP, 'qmix_vdn_calibration_gate_10m_3seeds_fresh20261014',
+               '5m6m_score_gradient_factorial_10m_6jobs_20261014'}
 KEEP = re.compile(r'^smac_5m6m_qmix_state_(?:static10|group_qchange|group_tderror)_')
 LOG = re.compile(r'(.+)_([0-9]+)\.(?:out|err)$')
 CATEGORIES = ('models', 'tb_logs', 'battle_traces', 'test_battle_videos',

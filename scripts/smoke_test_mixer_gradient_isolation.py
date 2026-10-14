@@ -21,16 +21,17 @@ def check(condition, message):
 def main():
     th.set_num_threads(1)
     with tempfile.TemporaryDirectory() as temp:
-        for optimizer in ('adam', 'rmsprop'):
-            print('CHECK gradient isolation: optimizer={} torch={}'.format(optimizer, th.__version__), flush=True)
+        for variant, optimizer in ((v, o) for v in ('group_calibration', 'group_qchange')
+                                   for o in ('adam', 'rmsprop')):
+            print('CHECK gradient isolation: variant={} optimizer={} torch={}'.format(variant, optimizer, th.__version__), flush=True)
             th.manual_seed(37)
             mac, _, batch, logger = make_case('baseline', '5m_vs_6m', production_shapes=True,
-                config_overrides=dict(clean_model_type='qmix_minimal', mixer_input_control='group_calibration',
+                config_overrides=dict(clean_model_type='qmix_minimal', mixer_input_control=variant,
                                       mixer_input_detach_unimportant=True, optimizer=optimizer,
                                       slot_group_interval=1000, slot_importance_samples=8,
                                       grad_norm_clip=.01))
             args = mac.args
-            args.local_results_path, args.unique_token = temp, 'SYNTHETIC_ISOLATION_' + optimizer
+            args.local_results_path, args.unique_token = temp, 'SYNTHETIC_ISOLATION_' + variant + '_' + optimizer
             args.seed, args.wandb_run_name = 1, 'SYNTHETIC_ISOLATION'
             a = MixerInputLearner(mac, batch.scheme, logger, args)
             a.last_image_t = 10  # No grouping/media during the update comparison.
@@ -76,7 +77,7 @@ def main():
                   optimizer + ': auxiliary optimizer did not update its mixer')
             check(th.equal(a.last_double_actions, b.last_double_actions),
                   optimizer + ': auxiliary scaling changed Double-Q actions')
-            path = Path(temp) / optimizer
+            path = Path(temp) / (variant + '_' + optimizer)
             path.mkdir()
             a.save_models(path)
             check((path / 'opt_unimportant.th').is_file(), optimizer + ': auxiliary checkpoint missing')
@@ -92,7 +93,7 @@ def main():
                 raise AssertionError('Cannot resume across gradient-routing modes')
             check(all(th.equal(x, y) for x, y in zip(saved, b.params)),
                   optimizer + ': incompatible checkpoint partially changed parameters')
-            print('PASS: {} detached actor; both mixers train; separate clipping; identical actor update under huge auxiliary loss; checkpoint'.format(optimizer))
+            print('PASS: {} {} detached actor; both mixers train; separate clipping; close actor update under huge auxiliary loss; checkpoint'.format(variant, optimizer))
 
 
 if __name__ == '__main__':

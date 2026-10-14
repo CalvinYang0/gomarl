@@ -81,6 +81,13 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(targets, [])
         self.assertTrue(set(paths) <= set(kept))
 
+    def test_factorial_ablation_is_preserved_after_completion(self):
+        paths = self.run_data('smac_5m6m_qmix_state_group_calibration_shared_10m_s1_ablate20261014',
+                              '5m6m_score_gradient_factorial_10m_6jobs_20261014', 1)
+        targets, kept = c.inventory(self.root, set(), lambda j: True)
+        self.assertEqual(targets, [])
+        self.assertTrue(set(paths) <= set(kept))
+
     def test_symlink_is_not_followed(self):
         sacred, wandb, _ = self.run_data('old_s1', 'old', 1)
         protected = self.root / 'protected.txt'

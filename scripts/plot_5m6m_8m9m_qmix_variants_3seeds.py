@@ -5,6 +5,7 @@ import sys
 import plot_linear_counter_mmm2_threeway_3seeds as charts
 from ozstar_submit_5m6m_mixer_input_controls_9jobs import build_plans as original_controls
 from ozstar_submit_qmix_vdn_calibration_gate_18jobs import build_plans as fresh_plans
+from ozstar_submit_5m6m_score_gradient_ablation_6jobs import build_plans as ablation_plans
 
 LABELS = {
     'qmix': ('QMIX ordinary fixed head (fresh 10M)', '#7f7f7f'),
@@ -13,6 +14,8 @@ LABELS = {
     'qmix_state_group_qchange': ('QMIX Q-change groups / shared-gradient dual TD (10M)', '#08519c'),
     'qmix_state_group_tderror': ('QMIX TD-error groups / shared-gradient dual TD (10M)', '#a50f15'),
     'qmix_state_group_calibration_isolated': ('QMIX return-error groups / isolated auxiliary TD (10M)', '#2ca02c'),
+    'qmix_state_group_qchange_isolated': ('QMIX Q-change groups / isolated auxiliary TD (10M)', '#17becf'),
+    'qmix_state_group_calibration_shared': ('QMIX return-error groups / shared-gradient dual TD (10M)', '#9467bd'),
 }
 SCENE_MODELS = {
     'smac_5m6m': tuple(LABELS),
@@ -38,11 +41,12 @@ def upload(project, output_dir, outputs, inventory, window):
 
 def build_plans(repo):
     plans = original_controls(repo)
+    plans.extend(ablation_plans(repo))
     plans.extend(p for p in fresh_plans(repo) if p['label'] in {'qmix', 'vdn'} or
                  p['label'] == 'qmix_state_group_calibration_isolated' or
                  (p['scene'] == 'smac_8m9m' and p['label'] == 'qmix_state_static10'))
-    if len(plans) != 27 or len({p['job_name'] for p in plans}) != 27:
-        raise RuntimeError('Expected 18 5m6m + 9 8m9m distinct experiment names')
+    if len(plans) != 33 or len({p['job_name'] for p in plans}) != 33:
+        raise RuntimeError('Expected 24 5m6m + 9 8m9m distinct experiment names')
     for scene, models in SCENE_MODELS.items():
         selected = [p for p in plans if p['scene'] == scene]
         if {p['label'] for p in selected} != set(models):

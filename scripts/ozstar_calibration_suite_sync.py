@@ -21,14 +21,16 @@ import yaml
 from ozstar_clean_uploaded_completed_runs import RUN_RE, command, job_index, TERMINAL
 
 GROUP = 'qmix_vdn_calibration_gate_10m_3seeds_fresh20261014'
+GROUPS = (GROUP, '5m6m_score_gradient_factorial_10m_6jobs_20261014')
 SESSION = 'gomarl-calibration-sync'
 
 
 def manifest_jobs(logs):
     jobs = {}
-    for path in sorted(logs.glob(GROUP + '_*.json')):
+    paths = sorted({p for group in GROUPS for p in logs.glob(group + '_*.json')})
+    for path in paths:
         record = json.loads(path.read_text())
-        if record.get('group') != GROUP:
+        if record.get('group') not in GROUPS:
             continue
         wanted = {p['job_name'] for p in record.get('plans', [])}
         for field in ('retained', 'submitted'):
@@ -161,7 +163,7 @@ def sync_once(repo, runtime, python, ended_only=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('status', 'once', 'start', 'loop'))
+    parser.add_argument('action', choices=('status', 'once', 'start', 'restart', 'loop'))
     parser.add_argument('--ended-only', action='store_true')
     args = parser.parse_args()
     repo = Path(os.environ.get('REPO_DIR', '/home/kyang/code/gomarl-dual-branch')).resolve()
@@ -191,6 +193,9 @@ def main():
     else:
         manifest_jobs(logs)  # Fail before creating a window with wrong scope.
         exists = subprocess.run(['tmux', 'has-session', '-t', '=' + SESSION], capture_output=True).returncode == 0
+        if args.action == 'restart' and exists:
+            subprocess.run(['tmux', 'kill-session', '-t', '=' + SESSION], check=True)
+            exists = False  # Restart only our uploader, never any training job.
         if exists:
             dead = command(['tmux', 'display-message', '-p', '-t', SESSION + ':sync', '#{pane_dead}'])
             if dead == '0':
