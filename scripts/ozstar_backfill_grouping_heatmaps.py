@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""Backfill saved partitions into ORIGINAL W&B runs, without resuming training.
+
+Only group experiments in the four input-control cohorts are selected. Public
+API file/summary updates do not change history, run status or performance curves.
+No project-wide history download. Dry-run is the default; use --upload to write.
+"""
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import fcntl
+from hashlib import sha256
+import json
+import os
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from utils.grouping_diagnostics import membership
+
+
+def wanted_plans(repo):
+    from ozstar_submit_5m6m_slot_input_controls_12jobs import build_plans as heads
+    from ozstar_submit_5m6m_mixer_input_controls_9jobs import build_plans as mixers
+    from ozstar_submit_qmix_vdn_calibration_gate_18jobs import build_plans as fresh
+    from ozstar_submit_5m6m_score_gradient_ablation_6jobs import build_plans as ablation
+    return {p['job_name']: p for build in (heads, mixers, fresh, ablation)
+            for p in build(repo) if '_group_' in p['job_name']}
+
+
+def source_runs(wandb_root, wanted):
+    """Read bounded metadata only. Never scan training history to find a name."""
+    from wandb.proto import wandb_internal_pb2
+    from wandb.sdk.internal.datastore import DataStore
+    for directory in sorted(wandb_root.glob('offline-run-*')):
+        if directory.is_symlink():
+            continue
+        paths = list(directory.glob('run-*.wandb'))
+        if len(paths) != 1:
+            continue
+        scanner = DataStore()
+        try:
+            scanner.open_for_scan(str(paths[0]))
+            for _ in range(128):
+                raw = scanner.scan_data()
+                if raw is None:
+                    break
+                record = wandb_internal_pb2.Record()
+                record.ParseFromString(raw)
+                if record.HasField('run'):
+                    if record.run.display_name in wanted:
+                        config = {item.key: json.loads(item.value_json) for item in record.run.config.update}
+                        run_id = paths[0].stem.removeprefix('run-')
+                        if record.run.run_id != run_id:
+                            raise ValueError('Run ID/file name mismatch: ' + str(paths[0]))
+                        yield dict(id=run_id, name=record.run.display_name, config=config, directory=directory)
+                    break
+        except (OSError, ValueError) as exc:
+            print('UNREADABLE metadata: {}: {}'.format(paths[0], exc), flush=True)
+        finally:
+            scanner.close()
+
+
+def snapshot_directories(results, source):
+    config = source['config']
+    identity = sha256(source['name'].encode()).hexdigest()[:8]
+    leaf = 'seed_{}_{}'.format(config['seed'], identity)
+    selected = []
+    for kind, prefix in (('mixer_input_control', 'mixer_input'), ('slot_input_control', 'slot_input')):
+        for directory in sorted((results / kind).glob(config['name'] + '__*/' + leaf)):
+            if directory.is_symlink():
+                continue
+            records = sorted(directory.glob('step_*.json'))
+            if not records:
+                continue
+            data = json.loads(records[-1].read_text())
+            explicit = data.get('source_run_id')
+            if explicit and explicit != source['id']:
+                continue
+            if not explicit and source.get('attempts', 1) > 1:
+                raise ValueError('Multiple offline attempts; legacy snapshot has no source ID: ' + str(directory))
+            if data.get('source_run_name', source['name']) != source['name']:
+                raise ValueError('Snapshot/run name mismatch: ' + str(directory))
+            membership(data)
+            selected.append((directory, prefix))
+    if len(selected) > 1:
+        raise ValueError('Ambiguous old attempts: multiple snapshot directories for ' + source['name'])
+    return selected
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, allow_nan=False))
+
+
+def file_descriptor(path, root, kind):
+    raw = path.read_bytes()
+    result = dict(_type=kind, path=path.relative_to(root).as_posix(),
+                  sha256=sha256(raw).hexdigest(), size=len(raw))
+    if kind == 'image-file':
+        from PIL import Image
+        with Image.open(path) as image:
+            result.update(width=image.width, height=image.height, format='png')
+    return result
+
+
+def render_partition(path, names, matrix, title, steps=None):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(max(14, len(names) * .2), 6), constrained_layout=True)
+    try:
+        pixel = ax.imshow(matrix, interpolation='nearest', aspect='auto', vmin=0, vmax=1, cmap='Reds')
+        ax.set_xticks(range(len(names)), labels=names, rotation=90, fontsize=6)
+        if steps is None:
+            ax.set_yticks([0, 1], labels=['important', 'unimportant'])
+        else:
+            indices = sorted(set([0, len(steps) - 1] + list(range(0, len(steps), max(1, len(steps) // 8)))))
+            ax.set_yticks(indices, labels=[str(steps[i]) for i in indices])
+            ax.set_ylabel('Saved environment step (rows oldest to newest)')
+        ax.set_title(title)
+        fig.colorbar(pixel, ax=ax, label='binary membership')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=130)
+    finally:
+        plt.close(fig)
+
+
+def prepare_bundle(directory, prefix, source, output):
+    """Exact archived membership only; missing PNGs may be rendered from JSON."""
+    import shutil
+    root = output / source['id']
+    target = root / 'grouping_backfill' / prefix / directory.parent.name
+    records, files, previous_names = [], [], None
+    for path in sorted(directory.glob('step_*.json')):
+        data = json.loads(path.read_text())
+        names, selected = membership(data)
+        if previous_names is not None and names != previous_names:
+            raise ValueError('Slot order changed within one run: ' + str(path))
+        previous_names = names
+        if data.get('source_run_id') not in (None, source['id']):
+            raise ValueError('Mixed source run IDs: ' + str(path))
+        if data.get('source_run_name', source['name']) != source['name']:
+            raise ValueError('Mixed source run names: ' + str(path))
+        json_target, image_target = target / path.name, target / path.with_suffix('.png').name
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, json_target)
+        original_image = path.with_suffix('.png')
+        if original_image.is_file():
+            # Large PNGs need no second disk copy on the quota-limited /home.
+            if image_target.is_symlink():
+                if image_target.resolve() != original_image.resolve():
+                    raise ValueError('Unexpected staged media target: ' + str(image_target))
+            elif not image_target.exists():
+                image_target.symlink_to(original_image.resolve())
+            elif image_target.read_bytes() != original_image.read_bytes():
+                raise ValueError('Different existing staged media: ' + str(image_target))
+        else:
+            render_partition(image_target, names, data['masks_or_probability'],
+                             source['name'] + ' — recovered saved partition t_env=' + str(data['t_env']))
+        data['_selected'], data['_image'] = selected, file_descriptor(image_target, root, 'image-file')
+        records.append(data)
+        files.extend([json_target, image_target])
+    records.sort(key=lambda r: (r['t_env'], r['train_updates']))
+    if not records:
+        raise ValueError('No saved partitions: ' + str(directory))
+    last = records[-1]
+    # Repair original history image references as well, when their native
+    # offline media files still exist. Keep the SDK's original relative paths.
+    native_root = source.get('directory', Path('/nonexistent-SYNTHETIC-source')) / 'files'
+    native_prefixes = ('media/images/' + prefix + '/partition_probability_heatmap_',
+                       'media/images/' + prefix + '_partition_probability_heatmap_',
+                       'media/images/' + prefix + '/grouping_heatmap_',
+                       'media/images/' + prefix + '_grouping_heatmap_')
+    for native in sorted((native_root / 'media' / 'images').rglob('*.png')):
+        relative = native.relative_to(native_root)
+        if not relative.as_posix().startswith(native_prefixes) or not native.is_file():
+            continue
+        staged = root / relative
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        if not staged.exists() and not staged.is_symlink():
+            staged.symlink_to(native.resolve())
+        elif staged.resolve() != native.resolve():
+            raise ValueError('Unexpected native-media stage: ' + str(staged))
+        files.append(staged)
+    names = last.get('state_slot_names', last.get('slot_names'))
+    scores = last.get('ranking_ema', last.get('score', [None] * len(names)))
+    if len(scores) != len(names):
+        raise ValueError('Ranking/slot dimension mismatch')
+    tables = {
+        'grouping_history': dict(columns=['t_env', 'train_updates', 'important_count', 'heatmap_file'],
+            data=[[r['t_env'], r['train_updates'], sum(r['_selected']), r['_image']['path']] for r in records]),
+        'grouping_membership': dict(columns=['slot', 'group', 'ranking_score'],
+            data=[[name, 'important' if yes else 'unimportant', score]
+                  for name, yes, score in zip(names, last['_selected'], scores)]),
+    }
+    summary = {prefix + '/grouping_heatmap': last['_image'],
+               prefix + '/partition_probability_heatmap': last['_image'],
+               prefix + '/grouping_t_env': last['t_env'],
+               prefix + '/important_slot_names': [n for n, yes in zip(names, last['_selected']) if yes],
+               prefix + '/unimportant_slot_names': [n for n, yes in zip(names, last['_selected']) if not yes],
+               prefix + '/grouping_backfill_snapshot_count': len(records)}
+    for key, table in tables.items():
+        path = target / (key + '.table.json')
+        write_json(path, table)
+        descriptor = file_descriptor(path, root, 'table-file')
+        descriptor.update(ncols=len(table['columns']), nrows=len(table['data']))
+        summary[prefix + '/' + key] = descriptor
+        files.append(path)
+    evolution = target / 'grouping_evolution.png'
+    render_partition(evolution, names, [r['_selected'] for r in records],
+                     source['name'] + ' — important-group evolution', [r['t_env'] for r in records])
+    summary[prefix + '/grouping_evolution'] = file_descriptor(evolution, root, 'image-file')
+    files.append(evolution)
+    return root, files, summary
+
+
+def upload_bundle(api, project, source, bundle, ledger, state_path, workers=4):
+    run_path = project + '/' + source['id']
+    run = api.run(run_path)
+    if run.name != source['name']:
+        raise ValueError('Refuse to upload into different cloud run: ' + run_path)
+    root, files, summary = bundle
+    # Isolate the exact source ID and the selected project in the upload ledger.
+    done = ledger.setdefault(run_path, {})
+    pending = [(p, sha256(p.read_bytes()).hexdigest()) for p in files
+               if done.get(p.relative_to(root).as_posix()) != sha256(p.read_bytes()).hexdigest()]
+    print('UPLOAD {}: {} changed files ({} unchanged)'.format(
+        source['name'], len(pending), len(files) - len(pending)), flush=True)
+    uploaded = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(run.upload_file, str(p), root=str(root)): (p, digest)
+                   for p, digest in pending}
+        for future in as_completed(futures):
+            future.result()  # Failed uploads never advance their fingerprint.
+            path, digest = futures[future]
+            done[path.relative_to(root).as_posix()] = digest
+            temporary = state_path.with_suffix('.tmp')
+            write_json(temporary, ledger)
+            temporary.replace(state_path)
+            uploaded += 1
+            if uploaded % 10 == 0 or uploaded == len(pending):
+                print('  files acknowledged: {}/{}'.format(uploaded, len(pending)), flush=True)
+    # Refresh after uploads. Preserve unrelated summary/performance keys.
+    api.flush()
+    run = api.run(run_path)
+    if run.name != source['name']:
+        raise ValueError('Cloud run identity changed')
+    if run.state == 'running':
+        print('FILES UPLOADED; live run summary deferred: ' + source['name'], flush=True)
+        return False
+    # No SDK init/resume, no history log, no run-state/config mutation.
+    run.summary.update(summary)
+    print('BACKFILLED {} snapshots -> {}'.format(
+        summary[next(k for k in summary if k.endswith('/grouping_backfill_snapshot_count'))], run.url), flush=True)
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--runtime-root', type=Path, default=Path(os.environ.get('RUNTIME_ROOT',
+        '/home/kyang/gomarl-runtime/gomarl-dual-branch')))
+    parser.add_argument('--project', default='hjh331-sjtu/gomarl')
+    parser.add_argument('--upload', action='store_true')
+    parser.add_argument('--workers', type=int, default=4, choices=range(1, 9))
+    args = parser.parse_args()
+    runtime = args.runtime_root
+    plans = wanted_plans(Path(__file__).resolve().parents[1])
+    seen, failures, completed = set(), 0, 0
+    output = runtime / 'grouping_backfill'
+    output.mkdir(parents=True, exist_ok=True)
+    state_path = output / 'uploaded_files.json'
+    ledger = json.loads(state_path.read_text()) if state_path.exists() else {}
+    import wandb
+    api = wandb.Api(timeout=60) if args.upload else None
+    with (runtime / 'wandb' / '.gomarl-sync-once.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit('Upload/cleanup currently holds shared lock; retry shortly')
+        sources = list(source_runs(runtime / 'wandb', plans))
+        for source in sources:
+            source['attempts'] = sum(other['name'] == source['name'] for other in sources)
+            seen.add(source['name'])
+            try:
+                plan = plans[source['name']]
+                if (source['config'].get('seed') != plan['seed'] or
+                        source['config'].get('name') != plan['exports']['GROUP_NAME']):
+                    raise ValueError('Offline seed/cohort differs from expected submitted plan')
+                dirs = snapshot_directories(runtime / 'results', source)
+                if not dirs:
+                    print('MISSING saved partitions: ' + source['name'], flush=True)
+                    failures += 1
+                    continue
+                directory, prefix = dirs[0]
+                count = len(list(directory.glob('step_*.json')))
+                print('{}: {} snapshots -> original run {}'.format(source['name'], count, source['id']), flush=True)
+                if args.upload:
+                    bundle = prepare_bundle(directory, prefix, source, output)
+                    completed += int(upload_bundle(api, args.project, source, bundle, ledger, state_path, args.workers))
+            except Exception as exc:
+                failures += 1
+                print('FAILED {}: {}'.format(source['name'], exc), flush=True)
+        for name in sorted(set(plans) - seen):
+            print('NO LOCAL SOURCE (not run yet or removed): ' + name, flush=True)
+        print('Original runs updated={}; missing/failed={}; no local source={}; mode={}'.format(
+              completed, failures, len(set(plans) - seen), 'upload' if args.upload else 'dry-run'), flush=True)
+    if failures:
+        raise SystemExit(1)
+
+
+if __name__ == '__main__':
+    main()

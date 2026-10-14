@@ -191,12 +191,17 @@ def check_model(model, directory):
     assert trajectory is not None and trajectory["generated_parameter_vectors"].shape[0] == 4
     assert set(trajectory["branches"]) == ({"important", "unimportant"} if mac.agent.is_grouped else {"linear"})
     logger.use_wandb, logger.wandb_current_t, logger.wandb_current_data = True, 1000000, {}
+    logger.wandb = SimpleNamespace(id='SYNTHETIC_HEAD_GROUP_QA', summary={})
     logger.wandb_module = SimpleNamespace(Image=lambda path: path, save=lambda *a, **k: None)
     path = log_slot_snapshot(mac.agent, args, logger, 1000000, 2)
     assert path.with_suffix(".png").is_file()
     snapshot = json.loads(path.read_text())
     assert len(snapshot["slot_names"]) == 55 and len(snapshot["masks_or_probability"]) == 2
     assert "slot_input/partition_probability_heatmap" in logger.wandb_current_data
+    if mac.agent.is_grouped:
+        assert logger.wandb_current_data['slot_input/grouping_membership']['nrows'] == 55
+        assert logger.wandb.summary['slot_input/grouping_t_env'] == 1000000
+        assert snapshot['source_run_id'] == 'SYNTHETIC_HEAD_GROUP_QA'
     assert Logger._wandb_metric_allowed("slot_input/important_count")
     # Training schedule and partition must survive a checkpoint.
     checkpoint = Path(directory) / model

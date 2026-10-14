@@ -142,6 +142,8 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
                       masked_mc_mse=mixer.masked_mc_mse.cpu().tolist(),
                       ranking_definition="slot quality = sigmoid(-normalized_removal_gain); high gain means remove",
                       metric_definition="(MSE(Q,G)-MSE(Q_masked,G))/max(mean(G^2),1e-6); G = complete observed return")
+    from utils.grouping_diagnostics import enrich_snapshot, log_group_details
+    enrich_snapshot(result, args, logger)
     path = directory / (stem + ".json")
     path.write_text(json.dumps(result, indent=2, allow_nan=False))
     import matplotlib.pyplot as plt
@@ -164,8 +166,10 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
         image_path = directory / (stem + ".png")
         fig.savefig(image_path, dpi=130)
         if logger.use_wandb:
+            image = logger.wandb_module.Image(str(image_path))
             logger._update_wandb_buffer("mixer_input/partition_probability_heatmap",
-                                      logger.wandb_module.Image(str(image_path)), t_env)
+                                      image, t_env)
+            log_group_details(result, logger, "mixer_input", image, path)
             logger.wandb_module.save(str(path), base_path=str(directory))
     finally:
         plt.close(fig)

@@ -113,6 +113,8 @@ def log_slot_snapshot(agent, args, logger, t_env, train_steps, migration=None, i
                   score=agent.slot_score_ema.detach().cpu().tolist(),
                   flip_rate=agent.slot_flip_rate.detach().cpu().tolist(), migration=migration,
                   note="Hyper-input dependence only; hidden/action mask fixed; not win-rate importance")
+    from utils.grouping_diagnostics import enrich_snapshot, log_group_details
+    enrich_snapshot(result, args, logger)
     path = directory / (stem + ".json")
     path.write_text(json.dumps(result, indent=2, allow_nan=False))
     if not images:
@@ -136,8 +138,10 @@ def log_slot_snapshot(agent, args, logger, t_env, train_steps, migration=None, i
         image_path = directory / (stem + ".png")
         fig.savefig(image_path, dpi=130)
         if logger.use_wandb:
+            image = logger.wandb_module.Image(str(image_path))
             logger._update_wandb_buffer("slot_input/partition_probability_heatmap",
-                                      logger.wandb_module.Image(str(image_path)), t_env)
+                                      image, t_env)
+            log_group_details(result, logger, "slot_input", image, path)
             logger.wandb_module.save(str(path), base_path=str(directory))
         return path
     finally:

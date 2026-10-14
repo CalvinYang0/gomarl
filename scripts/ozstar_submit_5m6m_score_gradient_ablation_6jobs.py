@@ -14,6 +14,7 @@ SMOKE_SCRIPTS = ('scripts/smoke_test_mixer_input_controls.py',
                  'scripts/smoke_test_mixer_calibration.py',
                  'scripts/smoke_test_mixer_gradient_isolation.py',
                  'scripts/smoke_test_score_gradient_ablation.py',
+                 'scripts/smoke_test_grouping_heatmap_backfill.py',
                  'scripts/smoke_test_submit_score_gradient_ablation.py')
 
 
