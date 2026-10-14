@@ -125,6 +125,39 @@ mixer controls, and the new return-error gradient-isolated group; 8m9m fresh
 QMIX/VDN and static gate. Three planned seeds each. Shared-gradient and isolated
 group models are separately labelled; no historical VDN, hyper-generated action heads, or
 other-map substitutions. Missing local curves stay missing and seed coverage
-is explicit. Both maps' mean/std figures, individual-seed images and CSVs go
-to one W&B figure snapshot; `Uploaded figures:` prints its URL. Local output
+is explicit. Both maps' mean/std figures, per-model individual-seed images and CSVs go
+to one W&B figure snapshot; `Uploaded figures:` prints its run URL. Local output
 directory is runtime `figures/5m6m_8m9m_qmix_variants_3seeds`.
+
+### Readable W&B sections, instead of a long montage
+
+The two-map uploader now exports one 8-inch-wide image per model. The three
+seed curves stay together in each image; missing seeds and endpoints are still
+explicit. It creates a NEW named project workspace, filtered to the new figure
+snapshot run ID, with sibling sections:
+
+- `Media`: collapsed by default, contains the two mean/std comparison figures.
+- `5m6m`: open, one column, six ordered per-model three-seed images.
+- `8m9m`: open, one column, three ordered per-model three-seed images.
+
+No existing workspace is overwritten and no horizontal montage is uploaded.
+Use the printed `Model sections workspace:` link, not the old run's Media panel.
+
+Install the official layout-only library once (Python 3.9/W&B 0.18.7 compatible;
+`--no-deps` deliberately avoids upgrading the training environment):
+
+```bash
+/home/kyang/.conda/envs/marl_cpu/bin/python -m pip install --no-deps wandb-workspaces==0.4.5
+```
+
+Then use the same two-map plotting command above. If workspace saving fails
+AFTER image upload, `model_panel_upload.json` retains the run ID and image keys;
+the error prints a layout-only retry command that does not re-upload data.
+Official API: https://github.com/wandb/wandb-workspaces
+
+Offline checks:
+
+```bash
+python scripts/smoke_test_plot_two_map_qmix_variants.py
+python scripts/smoke_test_wandb_seed_sections.py
+```

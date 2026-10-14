@@ -19,6 +19,21 @@ SCENE_MODELS = {
     'smac_8m9m': ('qmix', 'vdn', 'qmix_state_static10'),
 }
 _CLOUD_QUERY = charts.cloud_run_index
+_RENDER = charts.render
+_PANELS = []
+
+
+def render(scene, entries, output_dir, plotter, window):
+    from wandb_seed_figure_sections import render_model_panels
+    paths = _RENDER(scene, entries, output_dir, plotter, window)
+    _PANELS.extend(render_model_panels(scene, entries, output_dir, plotter, window,
+                                      LABELS, SCENE_MODELS[scene], charts.TARGET_STEPS))
+    return paths
+
+
+def upload(project, output_dir, outputs, inventory, window):
+    from wandb_seed_figure_sections import upload_sectioned
+    upload_sectioned(project, output_dir, outputs, inventory, window, charts, _PANELS)
 
 
 def build_plans(repo):
@@ -39,6 +54,7 @@ def build_plans(repo):
 
 
 def configure():
+    _PANELS.clear()
     charts.GROUP = 'smac_5m6m_8m9m_qmix_mixer_variants_3seeds'
     charts.DEFAULT_OUTPUT_SUBDIR = '5m6m_8m9m_qmix_variants_3seeds'
     charts.RESULTS_TITLE = 'QMIX mixer-input variants and VDN'
@@ -52,6 +68,8 @@ def configure():
     charts.SCENE_MODELS = SCENE_MODELS
     charts.SCENE_FALLBACK_MODELS = {}
     charts.build_plans = build_plans
+    charts.render = render
+    charts.upload = upload
     charts.cloud_run_index = lambda project, wanted: _CLOUD_QUERY(project, wanted, allow_full_scan=False)
 
 

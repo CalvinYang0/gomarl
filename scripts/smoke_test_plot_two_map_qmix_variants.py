@@ -35,6 +35,12 @@ def main():
         with patch.object(sys, 'argv', ['plot', '--runtime-root', temp, '--local-only', '--no-upload']):
             study.main()
         output = root / 'figures' / c.DEFAULT_OUTPUT_SUBDIR
+        assert len(study._PANELS) == 9
+        assert [r['section'] for r in study._PANELS] == ['5m6m'] * 6 + ['8m9m'] * 3
+        from PIL import Image
+        for record in study._PANELS:
+            with Image.open(record['path']) as image:
+                assert image.width >= 1400 and image.width / image.height < 1.6
         with (output / 'seed_inventory.csv').open() as handle:
             inventory = list(csv.DictReader(handle))
         assert len(inventory) == 27
@@ -48,7 +54,7 @@ def main():
             for row in rows:
                 assert float(row['step']) <= 6000000
                 assert row['seed_count'] == ('2' if row['model'] == 'qmix_state_group_calibration_isolated' else '3')
-    print('PASS: two maps; 27 exact names; fresh VDN three seeds on each map; isolated groups; no map/cohort mixing; shared intervals; missing seeds explicit; no cloud/upload')
+    print('PASS: two maps; 27 exact names; nine independently readable model panels; VDN/isolated groups; shared intervals; missing seeds explicit; no cloud/upload')
 
 
 if __name__ == '__main__':
