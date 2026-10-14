@@ -91,3 +91,23 @@ Omit `SUBMIT=YES` for preview. Both installed map definitions/files are checked;
 minimum 2 GiB free /home quota is only a startup guard, not sufficient capacity
 for 18 video-enabled jobs. Manifest/job IDs go to runtime `ozstar_logs`. The
 local cleanup tool also preserves this new cohort after completion.
+
+## 8m9m QMIX and its actually submitted mixer variant
+
+Only ordinary QMIX and static-gate QMIX have been submitted on 8m9m in this
+cohort; group-calibration is 5m6m-only. The dedicated plot reads exactly these
+six fresh run names, not VDN or old cohorts. Default smoothing is ten test
+points, aggregation uses each model's shared available seed interval, and
+missing seeds/partial budgets are explicitly labelled.
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+git pull --ff-only origin codex/linear-id-baselines
+/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/plot_8m9m_qmix_variants_3seeds.py --local-only --no-upload --mean-window 10
+```
+
+Outputs under runtime `figures/8m9m_qmix_variants_3seeds`:
+`smac_8m9m_three_seed.png/.pdf`, `smac_8m9m_individual_seeds.png`,
+`seed_inventory.csv`, raw and aggregate curve CSVs. Remove `--no-upload` to
+upload the figure snapshot to W&B; `--local-only` still prevents cloud history
+queries. No scheduler-state filtering or synthetic data in production figures.
