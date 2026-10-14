@@ -56,14 +56,15 @@ def make_workspace(entity, project, run_id, records, summaries):
         layout_settings=ws.SectionLayoutSettings(columns=1, rows=2),
         panels=[wr.MediaBrowser(title=title, media_keys=[key], num_columns=1)
                 for title, key in summaries])]
-    for name in ('5m6m', '8m9m'):
+    names = [name for name in ('5m6m', '8m9m') if any(r['section'] == name for r in records)]
+    for name in names:
         panels = [wr.MediaBrowser(title=r['title'], media_keys=[r['key']], num_columns=1)
                   for r in records if r['section'] == name]
         sections.append(ws.Section(name=name, is_open=True,
             layout_settings=ws.SectionLayoutSettings(columns=1, rows=max(1, len(panels))),
             panels=panels))
     return ws.Workspace(entity=entity, project=project,
-        name='Three-seed models: 5m6m and 8m9m (' + run_id + ')', sections=sections,
+        name='Three-seed models: ' + ' and '.join(names) + ' (' + run_id + ')', sections=sections,
         auto_generate_panels=False,
         runset_settings=ws.RunsetSettings(filters=[expr.Metric('id') == run_id]))
 

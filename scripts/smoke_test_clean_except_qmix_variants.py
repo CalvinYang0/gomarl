@@ -105,6 +105,15 @@ class CleanupTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             c.snapshot(link / 'config.json', self.root)
 
+    def test_clean_three_ablation_cohort_is_preserved(self):
+        paths = []
+        for job, label in enumerate(('qchange_plainmask', 'variance'), 50):
+            paths.extend(self.run_data('smac_5m6m_qmix_state_group_{}_10m_s1_ablate20261015'.format(label),
+                '5m6m_qchange_three_ablation_10m_9jobs_20261015', job))
+        targets, kept = c.inventory(self.root, set(), lambda j: True)
+        self.assertEqual(targets, [])
+        self.assertTrue(set(paths) <= set(kept))
+
 
 if __name__ == '__main__':
     unittest.main()

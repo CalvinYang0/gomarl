@@ -8,7 +8,7 @@ from torch.optim import Adam, RMSprop
 from modules.mixers.state_input_control import StateInputControlMixer
 from utils.mixer_state_importance import (log_state_snapshot, score_state_slots,
                                           score_state_slot_calibration, complete_episode_returns,
-                                          state_slot_names)
+                                          score_state_slot_variance, state_slot_names)
 from utils.rl_utils import build_td_lambda_targets
 
 
@@ -98,6 +98,7 @@ class MixerInputLearner:
         regroup = self.mixer.grouped and self.train_steps % self.interval == 0
         image_due = t_env - self.last_image_t >= self.image_interval
         if regroup or image_due:
+            evaluated_partition = self.mixer.important_slots.detach().clone() if self.mixer.grouped else None
             # Reconstruct utilities AFTER the update so probes evaluate one
             # coherent current checkpoint. Freeze them and the original TD
             # targets for every perturbation; scoring never re-selects actions.
@@ -112,6 +113,7 @@ class MixerInputLearner:
                 self.mixer.tderror_scores.copy_(tderror)
                 self.logger.log_stat("mixer_input/probe_count", count, t_env)
                 removal_gain = None
+                variance_difference = None
                 if self.mixer.variant == "group_calibration":
                     returns, calibration_mask = complete_episode_returns(rewards, terminated, mask, self.args.gamma)
                     estimate = score_state_slot_calibration(self.mixer, probe_chosen, states,
@@ -127,15 +129,30 @@ class MixerInputLearner:
                         self.mixer.masked_mc_mse.copy_(masked_error)
                         self.logger.log_stat("mixer_input/calibration_probe_count", count, t_env)
                         self.logger.log_stat("mixer_input/normalized_removal_gain_mean", removal_gain.mean().item(), t_env)
+                if self.mixer.variant == "group_variance":
+                    estimate = score_state_slot_variance(self.mixer, probe_chosen, states, mask, self.budget)
+                    if estimate is None:
+                        self.mixer.variance_probe_count.zero_()
+                        self.logger.log_stat("mixer_input/no_valid_variance_probes", 1, t_env)
+                    else:
+                        variance_difference, count, original_var, masked_var = estimate
+                        self.mixer.variance_probe_count.fill_(count)
+                        self.mixer.variance_difference_scores.copy_(variance_difference)
+                        self.mixer.original_qtot_variance.copy_(original_var)
+                        self.mixer.masked_qtot_variance.copy_(masked_var)
+                        self.logger.log_stat("mixer_input/variance_probe_count", count, t_env)
+                        self.logger.log_stat("mixer_input/qtot_variance_difference_mean", variance_difference.mean().item(), t_env)
                 if regroup:
-                    if self.mixer.variant != "group_calibration" or removal_gain is not None:
-                        migration = self.mixer.apply_scores(qchange, tderror, removal_gain)
+                    ready = ((self.mixer.variant != "group_calibration" or removal_gain is not None) and
+                             (self.mixer.variant != "group_variance" or variance_difference is not None))
+                    if ready:
+                        migration = self.mixer.apply_scores(qchange, tderror, removal_gain, variance_difference)
                     # Partition ownership is structural, not lagged parameters.
                     self.target_mixer.sync_partition(self.mixer)
             else:
                 self.logger.log_stat("mixer_input/no_valid_probes", 1, t_env)
             log_state_snapshot(self.mixer, self.args, self.logger, t_env, self.train_steps,
-                               migration, images=image_due or regroup)
+                               migration, images=image_due or regroup, evaluated_partition=evaluated_partition)
             if image_due:
                 self.last_image_t = t_env
         if episode_num - self.last_target_update_episode >= self.args.target_update_interval:
@@ -170,18 +187,24 @@ class MixerInputLearner:
         if self.other_optimiser is not None:
             th.save(self.other_optimiser.state_dict(), str(Path(path) / "opt_unimportant.th"))
         th.save(dict(train_steps=self.train_steps, last_target_update_episode=self.last_target_update_episode,
-                     last_image_t=self.last_image_t, detach_unimportant=self.detach_unimportant),
+                     last_image_t=self.last_image_t, detach_unimportant=self.detach_unimportant,
+                     append_mask=self.mixer.append_mask, variant=self.mixer.variant),
                 str(Path(path) / "mixer_input_schedule.th"))
 
     def load_models(self, path):
         schedule = th.load(str(Path(path) / "mixer_input_schedule.th"), map_location="cpu")
         if bool(schedule.get("detach_unimportant", False)) != self.detach_unimportant:
             raise ValueError("Checkpoint gradient routing differs; use a fresh run")
+        if bool(schedule.get("append_mask", self.mixer.grouped)) != self.mixer.append_mask:
+            raise ValueError("Checkpoint state input encoding differs; use a fresh run")
+        if schedule.get("variant", self.mixer.variant) != self.mixer.variant:
+            raise ValueError("Checkpoint importance criterion differs; use a fresh run")
         self.mac.load_models(path)
         self.mixer.load_state_dict(th.load(str(Path(path) / "mixer.th"), map_location="cpu"))
         self.optimiser.load_state_dict(th.load(str(Path(path) / "opt.th"), map_location="cpu"))
         if self.other_optimiser is not None:
             self.other_optimiser.load_state_dict(th.load(str(Path(path) / "opt_unimportant.th"), map_location="cpu"))
         for key, value in schedule.items():
-            setattr(self, key, value)
+            if key not in {"append_mask", "variant"}:
+                setattr(self, key, value)
         self._update_targets()

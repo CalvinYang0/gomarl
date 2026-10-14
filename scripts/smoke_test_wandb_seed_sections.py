@@ -12,11 +12,13 @@ from wandb_seed_figure_sections import make_workspace, upload_sectioned
 def main():
     records = [dict(section=section, model='model_' + str(i), title='Model ' + str(i),
                     path='synthetic.png', key=section + '/' + str(i))
-               for section, count in [('5m6m', 8), ('8m9m', 3)] for i in range(count)]
+               for section, count in [('5m6m', 10), ('8m9m', 3)] for i in range(count)]
     summaries = [('5m6m mean', 'Media/5m6m_mean'), ('8m9m mean', 'Media/8m9m_mean')]
     workspace = make_workspace('synthetic', 'project', 'abc1234', records, summaries)
     assert [s.name for s in workspace.sections] == ['Media', '5m6m', '8m9m']
-    assert [len(s.panels) for s in workspace.sections] == [2, 8, 3]
+    assert [len(s.panels) for s in workspace.sections] == [2, 10, 3]
+    single_map = make_workspace('synthetic', 'project', 'abc1234', records[:4], summaries[:1])
+    assert [s.name for s in single_map.sections] == ['Media', '5m6m']
     assert all(s.layout_settings.columns == 1 for s in workspace.sections)
     assert workspace.auto_generate_panels is False
     for section in workspace.sections[1:]:
@@ -49,7 +51,7 @@ def main():
             assert set(r['key'] for r in records) <= set(logged)
             assert 'smac_5m6m_individual_seeds' not in logged  # No tiny composite upload.
             assert json.loads((Path(temp) / 'model_panel_upload.json').read_text())['workspace_url']
-    print('PASS: explicit Media/5m6m/8m9m sibling sections; 8+3 ordered image panels; single-column layout; exact run filter; upload payload; no network')
+    print('PASS: explicit Media/5m6m/8m9m sibling sections; 10+3 ordered panels; single-map ablation view; exact run filter; upload payload; no network')
 
 
 if __name__ == '__main__':

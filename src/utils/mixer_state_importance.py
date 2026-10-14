@@ -99,6 +99,43 @@ def score_state_slot_calibration(mixer, agent_qs, states, returns, valid, budget
 
 
 @th.no_grad()
+def score_state_slot_variance(mixer, agent_qs, states, valid, budget=256):
+    """Var(Q_tot)-Var(Q_tot without slot), population variance (unbiased=False).
+
+    Clean score-only ablation of score_state_slots: use the identical valid
+    samples, fixed executed-action agent Q, owning branch, and batch-mean slot
+    replacement. Membership bits stay fixed. No MC reference, normalization,
+    absolute value, clipping, or sigmoid. Negative differences are retained.
+    """
+    indices = valid.reshape(-1).bool().nonzero().flatten()
+    if budget < 2:
+        raise ValueError("Variance scoring requires a probe budget of at least two")
+    if indices.numel() < 2:
+        return None
+    selected = indices[th.linspace(0, len(indices) - 1, min(budget, len(indices)), device=indices.device).long()]
+    q = agent_qs.detach().reshape(-1, agent_qs.shape[-1])[selected].unsqueeze(1)
+    s = states.detach().reshape(-1, mixer.state_dim)[selected].unsqueeze(1)
+    reference = states.detach().reshape(-1, mixer.state_dim)[indices].mean(0)
+    difference = s.new_zeros(mixer.state_dim)
+    original, masked = difference.clone(), difference.clone()
+    for group, mask in enumerate(mixer.masks(s, "eval")):
+        base = mixer.conditioned_value(q, s, group, mask)
+        base_variance = base.reshape(-1).var(unbiased=False)
+        for j in range(mixer.state_dim):
+            if not mask[..., j].bool().any():
+                continue
+            altered = s.clone()
+            altered[..., j] = reference[j]
+            changed = mixer.conditioned_value(q, altered, group, mask)
+            original[j] = base_variance
+            masked[j] = changed.reshape(-1).var(unbiased=False)
+            difference[j] = original[j] - masked[j]
+    if not th.isfinite(difference).all():
+        raise RuntimeError("Non-finite Q_tot variance differences")
+    return difference, len(selected), original, masked
+
+
+@th.no_grad()
 def complete_episode_returns(rewards, terminated, valid, gamma):
     """No bootstrap: incomplete/time-limit-only episodes cannot define G."""
     returns = th.zeros_like(rewards)
@@ -110,7 +147,8 @@ def complete_episode_returns(rewards, terminated, valid, gamma):
     return returns, valid * complete.to(valid)
 
 
-def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, images=True):
+def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, images=True,
+                       evaluated_partition=None):
     names = state_slot_names(args, mixer.state_dim)
     if mixer.grouped:
         rows = th.stack((mixer.important_slots, ~mixer.important_slots)).float().cpu()
@@ -134,6 +172,8 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
                   state_slot_names=names, row_labels=labels, masks_or_probability=rows.tolist(),
                   qchange=mixer.qchange_scores.cpu().tolist(), tderror=mixer.tderror_scores.cpu().tolist(),
                   ranking_ema=mixer.score_ema.cpu().tolist(), migration=migration,
+                  append_membership_features=mixer.append_mask,
+                  mixer_condition_dim=mixer.mixers[0].state_dim,
                   note="Fixed agent Q and fixed own-branch TD target; not action flips or win-rate attribution")
     if mixer.variant == "group_calibration":
         result.update(normalized_removal_gain=mixer.removal_gain_scores.cpu().tolist(),
@@ -142,6 +182,16 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
                       masked_mc_mse=mixer.masked_mc_mse.cpu().tolist(),
                       ranking_definition="slot quality = sigmoid(-normalized_removal_gain); high gain means remove",
                       metric_definition="(MSE(Q,G)-MSE(Q_masked,G))/max(mean(G^2),1e-6); G = complete observed return")
+    if mixer.variant == "group_variance":
+        result.update(qtot_variance_difference=mixer.variance_difference_scores.cpu().tolist(),
+                      original_qtot_variance=mixer.original_qtot_variance.cpu().tolist(),
+                      masked_qtot_variance=mixer.masked_qtot_variance.cpu().tolist(),
+                      variance_probe_count=int(mixer.variance_probe_count.item()),
+                      ranking_definition="EMA of signed Var(Q_tot)-Var(Q_tot_slot_replaced); high means more variance removed",
+                      metric_definition="population variance, unbiased=False; fixed Q and samples; batch-mean replacement as Q-change baseline")
+    if evaluated_partition is not None:
+        result["score_important_membership"] = evaluated_partition.cpu().tolist()
+        result["score_partition_note"] = "Scores evaluated before migration; membership rows show partition after migration"
     from utils.grouping_diagnostics import enrich_snapshot, log_group_details
     enrich_snapshot(result, args, logger)
     path = directory / (stem + ".json")
@@ -152,11 +202,19 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
         pixel = axes[0].imshow(rows.numpy(), aspect="auto", vmin=0, vmax=1, cmap="Reds", interpolation="nearest")
         axes[0].set_yticks([0, 1], labels=labels)
         fig.colorbar(pixel, ax=axes[0])
-        axes[1].bar(range(len(names)), result["qchange"])
-        axes[1].set_ylabel("mean abs Q_tot change")
-        axes[2].bar(range(len(names)), result.get("normalized_removal_gain", result["tderror"]))
-        axes[2].set_ylabel("normalized masking benefit" if mixer.variant == "group_calibration"
-                           else "positive mean TD error increase")
+        if mixer.variant == "group_variance":
+            axes[1].bar(range(len(names)), result["ranking_ema"])
+            axes[1].set_ylabel("EMA variance-difference ranking")
+            axes[2].bar(range(len(names)), result["qtot_variance_difference"])
+            axes[2].set_ylabel("Var(Q_tot) - Var(Q_tot_replaced)")
+            axes[1].axhline(0, color="black", linewidth=.5)
+            axes[2].axhline(0, color="black", linewidth=.5)
+        else:
+            axes[1].bar(range(len(names)), result["qchange"])
+            axes[1].set_ylabel("mean abs Q_tot change")
+            axes[2].bar(range(len(names)), result.get("normalized_removal_gain", result["tderror"]))
+            axes[2].set_ylabel("normalized masking benefit" if mixer.variant == "group_calibration"
+                               else "positive mean TD error increase")
         for axis in axes:
             axis.set_xticks(range(len(names)), labels=names, rotation=90, fontsize=6)
         title = "{} / {} / seed={} / t_env={}".format(args.env_args.get("map_name"), mixer.variant, args.seed, t_env)

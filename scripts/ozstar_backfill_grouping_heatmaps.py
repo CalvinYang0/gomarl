@@ -27,7 +27,8 @@ def wanted_plans(repo):
     from ozstar_submit_5m6m_mixer_input_controls_9jobs import build_plans as mixers
     from ozstar_submit_qmix_vdn_calibration_gate_18jobs import build_plans as fresh
     from ozstar_submit_5m6m_score_gradient_ablation_6jobs import build_plans as ablation
-    return {p['job_name']: p for build in (heads, mixers, fresh, ablation)
+    from ozstar_submit_5m6m_qchange_three_ablation_9jobs import build_plans as three_ablation
+    return {p['job_name']: p for build in (heads, mixers, fresh, ablation, three_ablation)
             for p in build(repo) if '_group_' in p['job_name']}
 
 

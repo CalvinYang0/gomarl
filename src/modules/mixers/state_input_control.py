@@ -12,10 +12,13 @@ class StateInputControlMixer(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.variant = args.mixer_input_control
-        if self.variant not in {"static_gate", "group_qchange", "group_tderror", "group_calibration"}:
+        if self.variant not in {"static_gate", "group_qchange", "group_tderror", "group_calibration", "group_variance"}:
             raise ValueError("Unknown mixer state control: " + self.variant)
         self.state_dim = math.prod(args.state_shape) if isinstance(args.state_shape, (tuple, list)) else int(args.state_shape)
         self.grouped = self.variant != "static_gate"
+        # Explicit compatibility switch: historical groups concatenated their
+        # membership bits. The input-only ablation removes those extra features.
+        self.append_mask = self.grouped and bool(getattr(args, "mixer_input_append_mask", True))
         self.threshold = float(getattr(args, "mixer_input_gate_threshold", .1))
         self.temperature = float(getattr(args, "mixer_input_gate_temperature", .5))
         p = float(getattr(args, "mixer_input_initial_probability", .1))
@@ -30,6 +33,10 @@ class StateInputControlMixer(nn.Module):
             for name in ("removal_gain_scores", "original_mc_mse", "masked_mc_mse"):
                 self.register_buffer(name, th.zeros(self.state_dim))
             self.register_buffer("calibration_probe_count", th.zeros((), dtype=th.long))
+        if self.variant == "group_variance":
+            for name in ("variance_difference_scores", "original_qtot_variance", "masked_qtot_variance"):
+                self.register_buffer(name, th.zeros(self.state_dim))
+            self.register_buffer("variance_probe_count", th.zeros((), dtype=th.long))
         self.register_buffer("grouping_updates", th.zeros((), dtype=th.long))
         self.ema = float(getattr(args, "slot_importance_ema", .8))
         self.demote_ratio = float(getattr(args, "slot_demote_ratio", .5))
@@ -38,7 +45,7 @@ class StateInputControlMixer(nn.Module):
         self.gate_logits = nn.Parameter(th.full((self.state_dim,), math.log(p / (1 - p)))) if not self.grouped else None
         local = copy(args)
         # Partition bits distinguish excluded fields from observed zeros.
-        local.state_shape = self.state_dim * (2 if self.grouped else 1)
+        local.state_shape = self.state_dim * (2 if self.append_mask else 1)
         self.mixers = nn.ModuleList([QMixer(local) for _ in range(2 if self.grouped else 1)])
 
     def masks(self, states, mode="eval"):
@@ -59,7 +66,7 @@ class StateInputControlMixer(nn.Module):
 
     def controlled_input(self, states, mask):
         observed = states * mask
-        if self.grouped:
+        if self.append_mask:
             observed = th.cat((observed, mask.expand_as(states)), dim=-1)
         return observed
 
@@ -88,7 +95,7 @@ class StateInputControlMixer(nn.Module):
         return self.values(agent_qs, states, mode="eval")[..., :1]
 
     @th.no_grad()
-    def apply_scores(self, qchange, tderror, removal_gain=None):
+    def apply_scores(self, qchange, tderror, removal_gain=None, variance_difference=None):
         for scores in (qchange, tderror):
             if scores.shape != self.score_ema.shape or not th.isfinite(scores).all() or (scores < 0).any():
                 raise ValueError("Invalid mixer state attribution")
@@ -103,6 +110,14 @@ class StateInputControlMixer(nn.Module):
                 raise ValueError("Invalid signed calibration improvement scores")
             self.removal_gain_scores.copy_(removal_gain)
             scores = th.sigmoid(-removal_gain.clamp(-20, 20))
+        if self.variant == "group_variance":
+            if (variance_difference is None or variance_difference.shape != self.score_ema.shape or
+                    not th.isfinite(variance_difference).all()):
+                raise ValueError("Invalid signed Q_tot variance differences")
+            self.variance_difference_scores.copy_(variance_difference)
+            # No sigmoid offset or positive clipping: signed variance loss is
+            # the score. Larger means removal reduced Q_tot variation more.
+            scores = variance_difference
         before = self.important_slots.clone()
         self.score_ema.copy_(th.where(self.score_initialized,
                                      self.ema * self.score_ema + (1 - self.ema) * scores, scores))
@@ -134,4 +149,7 @@ class StateInputControlMixer(nn.Module):
             getattr(self, name).copy_(getattr(source, name))
         if self.variant == "group_calibration":
             for name in ("removal_gain_scores", "original_mc_mse", "masked_mc_mse", "calibration_probe_count"):
+                getattr(self, name).copy_(getattr(source, name))
+        if self.variant == "group_variance":
+            for name in ("variance_difference_scores", "original_qtot_variance", "masked_qtot_variance", "variance_probe_count"):
                 getattr(self, name).copy_(getattr(source, name))
