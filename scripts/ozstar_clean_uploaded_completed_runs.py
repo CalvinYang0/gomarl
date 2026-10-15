@@ -53,13 +53,16 @@ def job_finished(job_id, repo):
     return bool(found) and all(found)
 
 
-def job_index(log_root, wandb_root, repo, progress=False):
+def job_index(log_root, wandb_root, repo, progress=False, job_ids=None):
+    wanted = None if job_ids is None else set(job_ids)
     result = {}
     for number, path in enumerate(sorted(log_root.iterdir()), 1):
         if progress and number % 25 == 0:
             print("INDEX scanned {} log entries".format(number), flush=True)
         match = LOG_RE.fullmatch(path.name)
         if not match or path.is_symlink() or not path.is_file():
+            continue
+        if wanted is not None and match.group(1) not in wanted:
             continue
         with path.open(errors="replace") as handle:
             for line in handle:

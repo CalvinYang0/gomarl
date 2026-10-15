@@ -4,10 +4,103 @@ import json
 from contextlib import redirect_stdout
 from pathlib import Path
 import tempfile
+import shlex
 from unittest.mock import patch
 from types import SimpleNamespace
 
 import ozstar_calibration_suite_sync as c
+
+
+def running_scope_check():
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp).resolve()
+        logs, wandb = root / 'ozstar_logs', root / 'wandb'
+        logs.mkdir()
+        wandb.mkdir()
+        jobs = {str(i): 'synthetic_job_' + str(i) for i in range(1, 7)}
+        (logs / (c.GROUP + '_synthetic.json')).write_text(json.dumps(dict(
+            group=c.GROUP, plans=[dict(job_name=name) for name in jobs.values()],
+            submitted={name: job for job, name in jobs.items()})))
+        states = {}
+        for job, state in zip(jobs, ('RUNNING', 'COMPLETED', 'PENDING', 'FAILED', 'RUNNING', 'RUNNING')):
+            states[job] = dict(state=state, exit_code='0:0', elapsed='1:00')
+            run = wandb / ('offline-run-20261015_120000-synthetic' + job)
+            (run / 'files').mkdir(parents=True)
+            (run / ('run-synthetic' + job + '.wandb')).write_bytes(b'synthetic')
+            (run / 'files' / 'config.yaml').write_text('wandb_run_name:\n  value: ' + jobs[job])
+            (logs / (jobs[job] + '_' + job + '.out')).write_text(str(run) + '\n')
+        queue = '1|RUNNING\n2|COMPLETED\n3|PENDING\n4|FAILED\n6|RUNNING\n999|RUNNING\nbad row'
+        def queue_command(args):
+            if args == ['id', '-un']:
+                return 'synthetic_user'
+            assert args == ['squeue', '-u', 'synthetic_user', '-h', '-o', '%A|%T']
+            return queue
+        def known_accounting(selected, repo):
+            assert set(selected) == {'1', '6'}  # Never query old or stale RUNNING accounting.
+            return {'1': states['1']}  # Job 6 has no confirmed WorkDir/accounting.
+        def upload(args, **kwargs):
+            assert args[-1].endswith('synthetic1'), args
+            return SimpleNamespace(returncode=0)
+        with redirect_stdout(io.StringIO()) as output, \
+                patch.object(c, 'command', side_effect=queue_command), \
+                patch.object(c, 'accounting', side_effect=known_accounting), \
+                patch.object(c.subprocess, 'run', side_effect=upload) as uploads:
+            c.sync_once(root, root, 'synthetic_python', running_only=True)
+            assert uploads.call_count == 1
+            assert 'COMPLETED' not in output.getvalue() and 'PENDING' not in output.getvalue()
+            assert 'synthetic5' not in output.getvalue() and 'synthetic6' not in output.getvalue()
+            c.sync_once(root, root, 'synthetic_python', running_only=True)
+            assert uploads.call_count == 1  # Still skip unchanged active data.
+        # No active jobs: do not scan local historical runs or query accounting.
+        with redirect_stdout(io.StringIO()), patch.object(c, 'running_jobs', return_value={}), \
+                patch.object(c, 'accounting') as acct, patch.object(c, 'discover') as discover, \
+                patch.object(c.subprocess, 'run') as uploads:
+            c.sync_once(root, root, 'synthetic_python', running_only=True)
+            acct.assert_not_called()
+            discover.assert_not_called()
+            uploads.assert_not_called()
+        # A job can finish during discovery; re-check just before launching upload.
+        (wandb / 'offline-run-20261015_120000-synthetic1' / 'run-synthetic1.wandb').write_bytes(b'new data')
+        with redirect_stdout(io.StringIO()), \
+                patch.object(c, 'running_jobs', side_effect=[{'1': jobs['1']}, {}]), \
+                patch.object(c, 'accounting', return_value={'1': states['1']}), \
+                patch.object(c.subprocess, 'run') as uploads:
+            c.sync_once(root, root, 'synthetic_python', running_only=True)
+            uploads.assert_not_called()
+        # Index only the selected job's logs, not every historical .out/.err.
+        original_open = Path.open
+        def selected_log_only(path, *args, **kwargs):
+            assert path.name == jobs['1'] + '_1.out', path
+            return original_open(path, *args, **kwargs)
+        with patch.object(Path, 'open', autospec=True, side_effect=selected_log_only):
+            indexed = c.job_index(logs, wandb, root, job_ids={'1'})
+            assert indexed == {'offline-run-20261015_120000-synthetic1': {'1'}}
+    print('PASS: live queue intersection; no pending/ended/stale/unknown uploads; active-only log reads; empty round; pre-upload recheck')
+
+
+def launch_scope_check():
+    for flags, expected in (([], '--running-only'), (['--all-states'], '--all-states'),
+                            (['--ended-only'], '--ended-only')):
+        calls = []
+        def tmux(args, **kwargs):
+            calls.append(args)
+            return SimpleNamespace(returncode=1 if args[1] == 'has-session' else 0)
+        with redirect_stdout(io.StringIO()), patch.object(c.sys, 'argv', ['sync.py', 'start'] + flags), \
+                patch.object(c, 'manifest_jobs', return_value={'1': 'synthetic'}), \
+                patch.object(c.subprocess, 'run', side_effect=tmux), \
+                patch.object(c, 'command', return_value='0'), patch.object(c.time, 'sleep'):
+            c.main()
+        launched = next(args[-1] for args in calls if args[1] == 'respawn-pane')
+        parts = shlex.split(launched)
+        assert parts[parts.index('loop') + 1] == expected
+    # An existing live window is not silently restarted to change its scope.
+    with redirect_stdout(io.StringIO()), patch.object(c.sys, 'argv', ['sync.py', 'start']), \
+            patch.object(c, 'manifest_jobs', return_value={'1': 'synthetic'}), \
+            patch.object(c.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as tmux, \
+            patch.object(c, 'command', return_value='0'):
+        c.main()
+        assert tmux.call_count == 1
+    print('PASS: tmux defaults RUNNING-only; explicit mode forwarded; existing window not silently changed')
 
 
 def main():
@@ -78,6 +171,8 @@ def main():
             result = c.accounting({'123': name, '124': 'other'}, root)
             assert result['123']['state'] == 'FAILED' and '124' not in result
     print('PASS: exact cohort IDs; terminal states; ended backfill; live/final sync; unchanged skip; failure retry; no unrelated uploads')
+    running_scope_check()
+    launch_scope_check()
 
 
 if __name__ == '__main__':

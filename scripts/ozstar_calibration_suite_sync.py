@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Status/backfill/live-sync for the exact calibration 18-job cohort only.
+"""Manifest-scoped W&B sync; tmux defaults to currently RUNNING jobs only.
 
 No deletion, cancellation, resubmission or historical project-wide scan.
 Local ledger means successfully attempted upload, NOT cloud-history verification.
@@ -61,6 +61,33 @@ def accounting(jobs, repo):
     return result
 
 
+def running_jobs(jobs):
+    """Intersect exact manifest IDs with this user's live RUNNING queue rows."""
+    user = command(['id', '-un'])
+    rows = command(['squeue', '-u', user, '-h', '-o', '%A|%T'])
+    result = {}
+    for row in rows.splitlines():
+        fields = [field.strip() for field in row.split('|')]
+        if len(fields) == 2 and fields[0] in jobs and fields[1] == 'RUNNING':
+            result[fields[0]] = jobs[fields[0]]
+    return result
+
+
+def selected_jobs(logs, repo, running_only=False):
+    jobs = manifest_jobs(logs)
+    if running_only:
+        jobs = running_jobs(jobs)
+    if not jobs:
+        return {}, {}
+    states = accounting(jobs, repo)
+    if running_only:
+        # Keep the WorkDir/known-accounting safeguard as well as the live queue.
+        jobs = {job: name for job, name in jobs.items()
+                if states.get(job, {}).get('state') == 'RUNNING'}
+        states = {job: states[job] for job in jobs}
+    return jobs, states
+
+
 def fingerprint(run):
     """Detect new records/media; no content read and no directory-link traversal."""
     digest = hashlib.sha256()
@@ -84,7 +111,7 @@ def fingerprint(run):
 
 
 def discover(wandb, logs, repo, jobs):
-    index = job_index(logs, wandb, repo)
+    index = job_index(logs, wandb, repo, job_ids=jobs.keys())
     selected = []
     for run in sorted(wandb.glob('offline-run-*')):
         if run.is_symlink() or not run.is_dir() or not RUN_RE.fullmatch(run.name):
@@ -113,7 +140,9 @@ def report(jobs, states):
               row.get('exit_code', '?'), row.get('elapsed', '?'), name), flush=True)
 
 
-def sync_once(repo, runtime, python, ended_only=False):
+def sync_once(repo, runtime, python, ended_only=False, running_only=False):
+    if ended_only and running_only:
+        raise ValueError('ended_only and running_only are mutually exclusive')
     logs, wandb = runtime / 'ozstar_logs', runtime / 'wandb'
     with (wandb / '.gomarl-sync-once.lock').open('a') as lock:
         try:
@@ -121,8 +150,10 @@ def sync_once(repo, runtime, python, ended_only=False):
         except BlockingIOError:
             print('Another upload/cleanup holds the shared lock; retry next round', flush=True)
             return
-        jobs = manifest_jobs(logs)
-        states = accounting(jobs, repo)
+        jobs, states = selected_jobs(logs, repo, running_only=running_only)
+        if running_only and not jobs:
+            print('NO RUNNING JOBS in the configured manifests; nothing to upload', flush=True)
+            return
         report(jobs, states)
         ledger_path = logs / (GROUP + '_sync_ledger.json')
         ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {}
@@ -139,6 +170,9 @@ def sync_once(repo, runtime, python, ended_only=False):
             signature = dict(fingerprint=before, job_states={j: states[j]['state'] for j in sorted(associated)})
             if ledger.get(run.name) == signature:
                 print('UNCHANGED: ' + run.name, flush=True)
+                continue
+            if running_only and set(running_jobs({j: jobs[j] for j in associated})) != associated:
+                print('SKIP no longer RUNNING: ' + run.name, flush=True)
                 continue
             print('UPLOAD: {} jobs={}'.format(run.name, ','.join(sorted(associated))), flush=True)
             try:
@@ -167,18 +201,26 @@ def sync_once(repo, runtime, python, ended_only=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('status', 'once', 'start', 'restart', 'loop'))
-    parser.add_argument('--ended-only', action='store_true')
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument('--ended-only', action='store_true', help='Upload terminal jobs only')
+    scope.add_argument('--running-only', action='store_true', help='Upload only currently RUNNING jobs')
+    scope.add_argument('--all-states', action='store_true', help='Opt into historical/backfill and live sync')
     args = parser.parse_args()
+    running_only = args.running_only or (
+        args.action in ('start', 'restart', 'loop') and not (args.all_states or args.ended_only))
+    mode_flag = '--running-only' if running_only else ('--ended-only' if args.ended_only else '--all-states')
     repo = Path(os.environ.get('REPO_DIR', '/home/kyang/code/gomarl-dual-branch')).resolve()
     runtime = Path(os.environ.get('RUNTIME_ROOT', '/home/kyang/gomarl-runtime/gomarl-dual-branch')).resolve()
     python = os.environ.get('PYTHON_BIN', '/home/kyang/.conda/envs/marl_cpu/bin/python')
     script = repo / 'scripts' / Path(__file__).name
     logs = runtime / 'ozstar_logs'
     if args.action == 'status':
-        jobs = manifest_jobs(logs)
-        report(jobs, accounting(jobs, repo))
+        jobs, states = selected_jobs(logs, repo, running_only=running_only)
+        report(jobs, states)
+        if running_only and not jobs:
+            print('NO RUNNING JOBS in the configured manifests', flush=True)
     elif args.action == 'once':
-        sync_once(repo, runtime, python, args.ended_only)
+        sync_once(repo, runtime, python, ended_only=args.ended_only, running_only=running_only)
     elif args.action == 'loop':
         interval = int(os.environ.get('INTERVAL_SECONDS', '600'))
         if interval <= 0:
@@ -187,9 +229,9 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             while True:
                 started = time.monotonic()
-                print('\nSYNC ROUND ' + time.strftime('%Y-%m-%d %H:%M:%S'), flush=True)
+                print('\nSYNC ROUND {} mode={}'.format(time.strftime('%Y-%m-%d %H:%M:%S'), mode_flag), flush=True)
                 try:
-                    sync_once(repo, runtime, python)
+                    sync_once(repo, runtime, python, ended_only=args.ended_only, running_only=running_only)
                 except Exception:
                     traceback.print_exc()  # Keep loop alive after transient failures.
                 time.sleep(max(1, interval - (time.monotonic() - started)))
@@ -202,7 +244,7 @@ def main():
         if exists:
             dead = command(['tmux', 'display-message', '-p', '-t', SESSION + ':sync', '#{pane_dead}'])
             if dead == '0':
-                print('Sync window already alive: ' + SESSION)
+                print('Sync window already alive: {} (existing scope unchanged; use restart to change scope)'.format(SESSION))
                 return
         else:
             subprocess.run(['tmux', 'new-session', '-d', '-s', SESSION, '-n', 'sync'], check=True)
@@ -211,12 +253,13 @@ def main():
         environment = ['env', 'REPO_DIR=' + str(repo), 'RUNTIME_ROOT=' + str(runtime),
                        'PYTHON_BIN=' + python, 'INTERVAL_SECONDS=' + os.environ.get('INTERVAL_SECONDS', '600'),
                        'SYNC_TIMEOUT=' + os.environ.get('SYNC_TIMEOUT', '180')]
-        launched = 'exec ' + shlex.join(environment + [python, '-u', str(script), 'loop']) + ' >> ' + shlex.quote(str(log)) + ' 2>&1'
+        launched = 'exec ' + shlex.join(environment + [python, '-u', str(script), 'loop', mode_flag]) + ' >> ' + shlex.quote(str(log)) + ' 2>&1'
         subprocess.run(['tmux', 'respawn-pane', '-k', '-t', SESSION + ':sync', launched], check=True)
         time.sleep(1)
         if command(['tmux', 'display-message', '-p', '-t', SESSION + ':sync', '#{pane_dead}']) != '0':
             raise RuntimeError('Sync pane exited on startup; inspect ' + str(log))
-        print('Started {}: backfill + live/final sync, every 600s by default; log={}'.format(SESSION, log))
+        print('Started {}: mode={}, every {}s; log={}'.format(
+            SESSION, mode_flag, os.environ.get('INTERVAL_SECONDS', '600'), log))
         print('View log: tail -f ' + str(log))
 
 
