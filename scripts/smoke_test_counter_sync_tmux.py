@@ -124,6 +124,25 @@ bash "$REPO_DIR/scripts/ozstar_sync_running_counter_once.sh"
         assert 'matched=1 uploaded=1 failed=0' in active.stdout
         assert 'live1' in active.stdout and 'done1' not in active.stdout
         assert old.is_dir()  # Nothing is deleted, including completed data.
+        # The user's new full-name ablation job also works without a manifest:
+        # first via config fallback, then via authoritative Slurm stream paths.
+        ablation = 'smac_5m6m_qmix_state_group_qchange_isolated_10m_s1_ablate20261014'
+        (live / 'files/config.yaml').write_text('wandb_run_name: ' + ablation + '\n')
+        (repo / 'runtime/active.err').write_text('wandb: Run data is saved locally in ' + str(live) + '\n')
+        live_command = mocks + '''
+squeue() { printf '18594880|%s|2026-10-15T11:25:06\\n' "$MOCK_JOB_NAME"; }
+scontrol() { echo "JobId=18594880 WorkDir=$REPO_DIR StdOut=/missing StdErr=$MOCK_STDERR"; }
+stat() { echo 11; }
+timeout() { shift; echo "MOCK_WANDB_SYNC $*"; }
+export -f squeue scontrol stat timeout
+bash "$REPO_DIR/scripts/ozstar_sync_running_counter_once.sh"
+'''
+        for stderr in ('/missing', str(repo / 'runtime/active.err')):
+            matched = run(live_command, repo, MOCK_JOB_NAME=ablation, MOCK_STDERR=stderr)
+            assert matched.returncode == 0, matched.stderr
+            assert 'syncing job=18594880' in matched.stdout
+            assert 'matched=1 uploaded=1 failed=0' in matched.stdout
+            assert 'live1' in matched.stdout and 'done1' not in matched.stdout
         for filename in ("ozstar_wandb_sync_tmux.sh", "ozstar_recent_wandb_sync_tmux.sh"):
             content = (ROOT / "scripts" / filename).read_text()
             assert 'plot_5m6m' not in content

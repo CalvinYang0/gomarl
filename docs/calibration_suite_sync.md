@@ -1,88 +1,76 @@
-# Manifest-scoped status, RUNNING-only tmux updates and explicit backfill
+# Separate live sync from ended-job backfill
 
-## Current default: only jobs running now
+## Periodic tmux upload: RUNNING jobs only
 
-`start`, `restart` and `loop` now default to `--running-only`. Every round
-intersects exact manifest IDs with this user's live `squeue` RUNNING rows, then
-retains the accounting/WorkDir check. Pending, ended, unknown and unrelated jobs
-are not uploaded. Only the selected jobs' local logs are read for discovery.
-The live queue is checked again immediately before each upload; a CLI upload
-already in progress is not cancelled if training finishes during that upload.
-No RUNNING jobs means an idle round, without historical run discovery.
+Use the existing `ozstar_wandb_sync_tmux.sh` launcher and
+`ozstar_sync_running_counter_once.sh` uploader. Despite the historical Counter
+filename, it queries this user's RUNNING jobs across this repository, checks
+each Slurm WorkDir, and reads actual StdOut/StdErr paths from scontrol.
+The original exact-path discovery and run-name fallback are retained. No
+experiment manifest is required for this live path. It never calls ended-job
+backfill, plot generation or cleanup.
 
-On the node hosting the existing `gomarl-calibration-sync` session (currently
-farnarkle2), pull the updated code and explicitly switch the existing loop:
+On farnarkle2, where the user last confirmed the existing session, switch that
+session back to the original shell uploader (same session/log name):
 
 ```bash
 cd /home/kyang/code/gomarl-dual-branch &&
 git pull --ff-only origin codex/linear-id-baselines &&
-/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_calibration_suite_sync.py restart --running-only
+SESSION_NAME=gomarl-calibration-sync \
+SYNC_LOG=/home/kyang/gomarl-runtime/gomarl-dual-branch/ozstar_logs/gomarl-calibration-sync.log \
+bash scripts/ozstar_wandb_sync_tmux.sh restart
 ```
 
-The new log round says `mode=--running-only`. `start` alone leaves an already
-live process and its old scope unchanged. The default interval is still 600s.
-Do not start a second uploader on another login node or delete lock files to
-force this switch. If an old upload child retains the shared lock, inspect it
-and wait for it to exit rather than launching duplicate uploads.
-
-Strict RUNNING-only operation deliberately does **not** guarantee a final
-upload after a job exits. A new job entering RUNNING in a later round is picked
-up automatically, provided it belongs to the configured manifests.
+For normal starts use `start` instead of `restart`. The interval remains 600s;
+slow rounds do not overlap. This replaces only the named sync session, not
+training jobs. Do not start a second uploader on another login node or delete
+locks. If an old upload child retains the shared once lock, a new round skips
+and retries later; inspect that exact child if it persists.
 
 ```bash
-/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_calibration_suite_sync.py status --running-only
-/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_calibration_suite_sync.py once --running-only
+tail -n 30 -f /home/kyang/gomarl-runtime/gomarl-dual-branch/ozstar_logs/gomarl-calibration-sync.log
+tmux list-panes -t '=gomarl-calibration-sync' -F '#{pane_current_command} dead=#{pane_dead}'
 ```
 
-## Optional historical/final backfill (not the tmux default)
+Expected output contains `syncing job=...` and
+`running repository sync result: matched=... uploaded=... failed=...`.
+An empty RUNNING queue is a valid idle round. New RUNNING jobs are picked up
+later; ended jobs do not get automatic final uploads in this loop. Starting
+the window does not prove upload success or cloud completeness.
 
-RUNNING-only upload windows can lose a final upload when a job leaves squeue.
-The optional backfill mode reads actual submitted/retained
-IDs from `qmix_vdn_calibration_gate_10m_3seeds_fresh20261014` manifests, then queries
-Slurm accounting for State/ExitCode/Elapsed and checks the repository WorkDir.
-It also reads `5m6m_score_gradient_factorial_10m_6jobs_20261014` manifests for
-the missing score/gradient comparison cells. Use `restart` after pulling this
-update so an existing uploader process loads both cohorts.
-No inferred contiguous job-ID range is used. Missing accounting remains UNKNOWN.
-COMPLETED means Slurm success, not independently verified 10M training coverage.
+## Historical/final upload: explicit single pass
+
+When requested, separately run:
 
 ```bash
-cd /home/kyang/code/gomarl-dual-branch
-git pull --ff-only origin codex/linear-id-baselines
-/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_calibration_suite_sync.py status
-/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_calibration_suite_sync.py once --ended-only
-/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_calibration_suite_sync.py start --all-states
+cd /home/kyang/code/gomarl-dual-branch &&
+/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_sync_ended_once.py
 ```
 
-`start` creates/revives the dedicated `gomarl-calibration-sync:sync` tmux pane.
-With explicit `--all-states`, the first loop syncs backfill and live runs; subsequent
-rounds default to 600 seconds. A round never overlaps itself. Failed uploads
-retry without killing the loop. Each upload times out after 180 seconds by
-default (`SYNC_TIMEOUT` override). Other uploaders and cleanup share the existing
-W&B exclusive lock; a busy lock means skip/retry. Only this session's dead pane
-is revived; no unrelated tmux sessions or training jobs are stopped.
+This entry point makes one pass, then exits. It selects only known terminal
+jobs from the configured calibration/ablation manifests, validates accounting
+and repository WorkDir, and indexes only those jobs' logs. RUNNING, PENDING and
+unknown jobs are excluded. Failed/timeout jobs may have partial data; inclusion
+is not a claim that training completed its intended budget.
 
-View progress:
+It appends to original W&B IDs, retains local data and uses the shared upload
+lock. Unchanged successful attempts are skipped by the signature ledger, not
+independent cloud-history verification. A busy lock means no pass was performed;
+rerun separately when free, do not start another periodic loop. `NO LOCAL RUN`
+means no matching local source was found; deleted records cannot be recovered
+by uploading. The live script never calls this entry point.
 
-```bash
-tail -f /home/kyang/gomarl-runtime/gomarl-dual-branch/ozstar_logs/gomarl-calibration-sync.log
-tmux list-panes -t gomarl-calibration-sync -F '#{pane_current_command} dead=#{pane_dead}'
-```
+`ozstar_calibration_suite_sync.py` retains its older compatibility CLI, but is
+no longer the recommended tmux launcher. Do not use its `--all-states` loop
+for the user's normal live updates.
 
-Upload discovery requires exact manifest job IDs in local job logs and checks
-the W&B config identity if present. Explicit backfill includes ended/failed runs' available data,
-not just RUNNING ones. No data are deleted or marked synced. Upload appends to
-original W&B IDs; a local signature ledger avoids resending unchanged successful
-sources. Source changes or terminal-state changes force another upload. This
-ledger confirms CLI success, not remote-history completeness. Since the ledger
-is new, the first round conservatively uploads every matching ended source once,
-even if an old uploader previously uploaded it. Later rounds skip unchanged data.
-
-No source files means `NO LOCAL RUN`, not a claim that cloud data were updated.
-No manifest IDs means abort rather than guess the missing jobs.
-
-Offline tests (no Slurm/W&B writes):
+## Offline checks
 
 ```bash
+python scripts/smoke_test_counter_sync_tmux.py
 python scripts/smoke_test_calibration_suite_sync.py
+python scripts/smoke_test_sync_ended_once.py
 ```
+
+These use synthetic local data and mocked Slurm/W&B/tmux tools; they do not
+verify actual server paths or cloud history.

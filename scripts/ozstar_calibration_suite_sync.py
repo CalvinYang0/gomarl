@@ -73,7 +73,7 @@ def running_jobs(jobs):
     return result
 
 
-def selected_jobs(logs, repo, running_only=False):
+def selected_jobs(logs, repo, running_only=False, ended_only=False):
     jobs = manifest_jobs(logs)
     if running_only:
         jobs = running_jobs(jobs)
@@ -84,6 +84,10 @@ def selected_jobs(logs, repo, running_only=False):
         # Keep the WorkDir/known-accounting safeguard as well as the live queue.
         jobs = {job: name for job, name in jobs.items()
                 if states.get(job, {}).get('state') == 'RUNNING'}
+        states = {job: states[job] for job in jobs}
+    elif ended_only:
+        jobs = {job: name for job, name in jobs.items()
+                if states.get(job, {}).get('state') in TERMINAL}
         states = {job: states[job] for job in jobs}
     return jobs, states
 
@@ -150,9 +154,10 @@ def sync_once(repo, runtime, python, ended_only=False, running_only=False):
         except BlockingIOError:
             print('Another upload/cleanup holds the shared lock; retry next round', flush=True)
             return
-        jobs, states = selected_jobs(logs, repo, running_only=running_only)
-        if running_only and not jobs:
-            print('NO RUNNING JOBS in the configured manifests; nothing to upload', flush=True)
+        jobs, states = selected_jobs(logs, repo, running_only=running_only, ended_only=ended_only)
+        if not jobs:
+            scope = 'RUNNING' if running_only else 'ENDED'
+            print('NO {} JOBS in the configured manifests; nothing to upload'.format(scope), flush=True)
             return
         report(jobs, states)
         ledger_path = logs / (GROUP + '_sync_ledger.json')
@@ -215,7 +220,7 @@ def main():
     script = repo / 'scripts' / Path(__file__).name
     logs = runtime / 'ozstar_logs'
     if args.action == 'status':
-        jobs, states = selected_jobs(logs, repo, running_only=running_only)
+        jobs, states = selected_jobs(logs, repo, running_only=running_only, ended_only=args.ended_only)
         report(jobs, states)
         if running_only and not jobs:
             print('NO RUNNING JOBS in the configured manifests', flush=True)
