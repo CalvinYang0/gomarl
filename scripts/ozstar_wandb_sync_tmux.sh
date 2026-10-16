@@ -53,9 +53,10 @@ command -v tmux >/dev/null || { echo "tmux is not available on this host" >&2; e
 case "$ACTION" in
   start)
     if tmux has-session -t "=$SESSION_NAME" 2>/dev/null; then
-      pane_dead=$(tmux display-message -p \
-        -t "$SESSION_NAME:wandb-sync" '#{pane_dead}')
-      if [[ "$pane_dead" == "1" ]]; then
+      # Legacy launcher called its window "sync", not "wandb-sync".
+      # Replace an entirely dead session, but preserve ANY live pane.
+      pane_states=$(tmux list-panes -s -t "=$SESSION_NAME" -F '#{pane_dead}')
+      if [[ -n "$pane_states" ]] && ! grep -qv '^1$' <<< "$pane_states"; then
         tmux kill-session -t "=$SESSION_NAME"
       else
         echo "Session already exists; not starting a duplicate: $SESSION_NAME"

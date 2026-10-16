@@ -35,6 +35,7 @@ timeout() {
 squeue() { printf 'QUEUE_QUERY=<%s>\n' "$*" >&2; return 0; }
 scontrol() { return 0; }
 tmux() {
+  if [[ "$1" == list-panes ]]; then printf '%s\n' "${MOCK_PANES:-0}"; return 0; fi
   printf 'TMUX_ARG=<%s>\n' "$@"
   if [[ "$1" == has-session ]]; then return "${MOCK_EXISTS:-1}"; fi
 }
@@ -50,6 +51,12 @@ export -f flock timeout squeue scontrol tmux
         repeated = run(launch, repo, MOCK_EXISTS="0")
         assert repeated.returncode == 0 and 'duplicate' in repeated.stdout
         assert 'TMUX_ARG=<new-session>' not in repeated.stdout
+        legacy_dead = run(launch, repo, MOCK_EXISTS="0", MOCK_PANES="1")
+        assert legacy_dead.returncode == 0, legacy_dead.stderr
+        assert 'TMUX_ARG=<kill-session>' in legacy_dead.stdout
+        assert 'TMUX_ARG=<new-session>' in legacy_dead.stdout
+        mixed = run(launch, repo, MOCK_EXISTS="0", MOCK_PANES="1\n0")
+        assert mixed.returncode == 0 and 'TMUX_ARG=<kill-session>' not in mixed.stdout
         stop = run(mocks + 'bash "$REPO_DIR/scripts/ozstar_wandb_sync_tmux.sh" stop', repo)
         assert stop.returncode == 0 and 'TMUX_ARG=<kill-session>' in stop.stdout
         restart = run(mocks + 'bash "$REPO_DIR/scripts/ozstar_wandb_sync_tmux.sh" restart', repo)
@@ -114,7 +121,7 @@ scontrol() { echo "JobId=123 WorkDir=$REPO_DIR StdOut=/missing StdErr=/missing";
 stat() { echo 11; }
 timeout() {
   shift
-  [[ "$2" == '-m' && "$3" == 'wandb' ]] || return 1
+  [[ "$2" == *'/ozstar_wandb_sync_verified.py' ]] || return 1
   echo "MOCK_WANDB_SYNC $*"
 }
 export -f squeue scontrol stat timeout
@@ -124,6 +131,16 @@ bash "$REPO_DIR/scripts/ozstar_sync_running_counter_once.sh"
         assert 'matched=1 uploaded=1 failed=0' in active.stdout
         assert 'live1' in active.stdout and 'done1' not in active.stdout
         assert old.is_dir()  # Nothing is deleted, including completed data.
+        rejected = run(mocks + '''
+squeue() { echo '123|smac_3m_linear_obs_baseline_10m_s1_valuediag|2026-10-09T01:00:00'; }
+scontrol() { echo "JobId=123 WorkDir=$REPO_DIR StdOut=/missing StdErr=/missing"; }
+stat() { echo 11; }
+timeout() { echo 'UPLOAD NOT VERIFIED: mock cloud failure'; return 1; }
+export -f squeue scontrol stat timeout
+bash "$REPO_DIR/scripts/ozstar_sync_running_counter_once.sh"
+''', repo)
+        assert rejected.returncode == 1
+        assert 'matched=1 uploaded=0 failed=1' in rejected.stdout
         # The user's new full-name ablation job also works without a manifest:
         # first via config fallback, then via authoritative Slurm stream paths.
         ablation = 'smac_5m6m_qmix_state_group_qchange_isolated_10m_s1_ablate20261014'

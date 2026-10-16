@@ -2,8 +2,8 @@
 """One pass over ended manifest jobs; no tmux, polling, cleanup or training.
 
 Appends available local records to their original W&B run IDs. The existing
-signature ledger skips unchanged successful uploads, not independently verified
-cloud history. Missing local data are reported and cannot be reconstructed.
+signature ledger skips unchanged uploads verified visible through their original
+scalar snapshot, not full media completeness. Missing local data are reported.
 """
 import argparse
 import os

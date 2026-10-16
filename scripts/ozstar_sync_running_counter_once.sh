@@ -140,14 +140,9 @@ while IFS='|' read -r job_id job_name start_time; do
   fi
 
   echo "syncing job=$job_id name=$job_name run=$run_name bytes=$(stat -c '%s' "$run_file")"
-  if timeout "$SYNC_TIMEOUT" "$PYTHON_BIN" -m wandb sync \
+  if timeout "$SYNC_TIMEOUT" "$PYTHON_BIN" "$REPO_DIR/scripts/ozstar_wandb_sync_verified.py" \
       -e "$WANDB_ENTITY" \
       -p "$WANDB_PROJECT" \
-      --append \
-      --include-offline \
-      --include-synced \
-      --no-mark-synced \
-      --skip-console \
       "$run_dir"; then
     uploaded=$((uploaded + 1))
   else

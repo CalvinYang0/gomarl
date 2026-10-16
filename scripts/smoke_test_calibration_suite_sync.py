@@ -145,7 +145,7 @@ def main():
         calls = []
         def upload(args, **kwargs):
             assert args[-1] == str(run)
-            assert '--append' in args and '--no-mark-synced' in args
+            assert args[1].endswith('/ozstar_wandb_sync_verified.py')
             calls.append(args)
             return SimpleNamespace(returncode=0)
         with redirect_stdout(io.StringIO()), patch.object(c, 'accounting', return_value=state), \
@@ -156,17 +156,23 @@ def main():
             assert len(calls) == 1
             c.sync_once(root, root, 'synthetic_python')
             assert len(calls) == 1  # Unchanged successful runs skipped.
+            ledger_path = logs / (c.GROUP + '_sync_ledger.json')
+            ledger = json.loads(ledger_path.read_text())
+            del ledger[run.name]['verification_version']
+            ledger_path.write_text(json.dumps(ledger))
+            c.sync_once(root, root, 'synthetic_python')
+            assert len(calls) == 2  # Old exit-code-only success must be reverified.
             state['123']['state'] = 'COMPLETED'
             c.sync_once(root, root, 'synthetic_python', ended_only=True)
-            assert len(calls) == 2  # Final state forces final upload.
+            assert len(calls) == 3  # Final state forces final upload.
             (run / 'run-ab12.wandb').write_bytes(b'new tail')
             c.sync_once(root, root, 'synthetic_python')
-            assert len(calls) == 3
+            assert len(calls) == 4
             (run / 'run-ab12.wandb').write_bytes(b'failed upload tail')
             with patch.object(c.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
                 c.sync_once(root, root, 'synthetic_python')
             c.sync_once(root, root, 'synthetic_python')
-            assert len(calls) == 4  # Failure never advances ledger.
+            assert len(calls) == 5  # Failure never advances ledger.
         with patch.object(c, 'command', return_value='123|FAILED|1:0|00:20:00|{}|\n124|COMPLETED|0:0|01:00:00|/other|'.format(root)):
             result = c.accounting({'123': name, '124': 'other'}, root)
             assert result['123']['state'] == 'FAILED' and '124' not in result

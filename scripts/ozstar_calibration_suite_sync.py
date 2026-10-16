@@ -2,7 +2,8 @@
 """Manifest-scoped W&B sync; tmux defaults to currently RUNNING jobs only.
 
 No deletion, cancellation, resubmission or historical project-wide scan.
-Local ledger means successfully attempted upload, NOT cloud-history verification.
+Ledger v1 records uploads verified visible through their pre-upload history step,
+not a full per-metric/media audit or proof of completed training.
 """
 import argparse
 import fcntl
@@ -172,7 +173,8 @@ def sync_once(repo, runtime, python, ended_only=False, running_only=False):
             if ended_only and not all(states[j]['state'] in TERMINAL for j in associated):
                 continue
             before = fingerprint(run)
-            signature = dict(fingerprint=before, job_states={j: states[j]['state'] for j in sorted(associated)})
+            signature = dict(fingerprint=before, job_states={j: states[j]['state'] for j in sorted(associated)},
+                             verification_version=1)
             if ledger.get(run.name) == signature:
                 print('UNCHANGED: ' + run.name, flush=True)
                 continue
@@ -181,8 +183,8 @@ def sync_once(repo, runtime, python, ended_only=False, running_only=False):
                 continue
             print('UPLOAD: {} jobs={}'.format(run.name, ','.join(sorted(associated))), flush=True)
             try:
-                completed = subprocess.run([python, '-m', 'wandb', 'sync', '--append',
-                    '--include-offline', '--include-synced', '--no-mark-synced', '--skip-console', str(run)],
+                completed = subprocess.run([python, str(Path(__file__).with_name('ozstar_wandb_sync_verified.py')),
+                    str(run)],
                     timeout=int(os.environ.get('SYNC_TIMEOUT', '180')))
             except subprocess.TimeoutExpired:
                 print('TIMEOUT; retry next round: ' + run.name, flush=True)
