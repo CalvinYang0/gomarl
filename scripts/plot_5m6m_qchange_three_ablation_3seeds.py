@@ -27,7 +27,8 @@ def build_plans(repo):
 def render(scene, entries, output, plotter, window):
     from wandb_seed_figure_sections import render_model_panels
     paths = _RENDER(scene, entries, output, plotter, window)
-    _PANELS.extend(render_model_panels(scene, entries, output, plotter, window, LABELS, MODELS, charts.TARGET_STEPS))
+    models = tuple(model for model in MODELS if model in entries)
+    _PANELS.extend(render_model_panels(scene, entries, output, plotter, window, LABELS, models, charts.TARGET_STEPS))
     return paths
 
 

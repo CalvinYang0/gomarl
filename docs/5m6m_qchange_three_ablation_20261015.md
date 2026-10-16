@@ -80,3 +80,31 @@ cd /home/kyang/code/gomarl-dual-branch
 An already-running sync process needs to reload the updated code before it can
 discover the new suite manifest. Backfill uses the existing original run identity
 and native media, not new training runs.
+
+## Plot the retained control after raw-log cleanup
+
+The control's raw test-win points may still exist in an earlier plot directory,
+even when the original offline/Sacred files are gone. Read its `seed_curves.csv`
+with the sibling `seed_inventory.csv`, not a smoothed aggregate. Exact planned
+run names, map/model/seed, original run IDs and attempt start times must agree.
+Retained snapshots participate in latest-attempt selection; a newer empty run
+does not silently borrow an old successful curve. Snapshots are not concatenated.
+The source CSV path is recorded in the new inventory.
+
+This command reads the confirmed retained control and current local ablations,
+omits models with zero readable seeds, and writes to a separate directory. No
+cloud reads, uploads, training or sync changes are performed:
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/plot_5m6m_qchange_three_ablation_3seeds.py \
+  --local-only --no-upload --available-only --mean-window 10 \
+  --retained-curves /home/kyang/gomarl-runtime/gomarl-dual-branch/figures/5m6m_latest_gate_group_baselines_3seeds/seed_curves.csv \
+  --output-dir /home/kyang/gomarl-runtime/gomarl-dual-branch/figures/5m6m_qchange_local_with_control
+```
+
+Each seed retains its actual endpoint; 1/3 coverage is not labelled as three
+seeds. `--available-only` affects figures, not the expected-run inventory, which
+still records missing seeds. Omit only `--no-upload` when uploading is desired;
+keep `--local-only` to avoid cloud downloads. Synthetic regression QA:
+`python scripts/smoke_test_retained_seed_curves.py`.

@@ -96,7 +96,7 @@ def discover_sacred(root, wanted):
     return result
 
 
-def select_latest(plan, metric, local, cloud, sacred, wandb_root, plotter):
+def select_latest(plan, metric, local, cloud, sacred, wandb_root, plotter, retained=None):
     name = plan["job_name"]
     attempts = []
     for path in local.get(name, []):
@@ -108,6 +108,7 @@ def select_latest(plan, metric, local, cloud, sacred, wandb_root, plotter):
         attempts.append((timestamp(run.created_at), run.id, "cloud", run))
     for started, path in sacred.get(name, []):
         attempts.append((started, "sacred:" + str(path), "sacred", path))
+    attempts.extend((retained or {}).get(name, []))
     if not attempts:
         return None, {}, "No matching run found"
 
@@ -115,7 +116,8 @@ def select_latest(plan, metric, local, cloud, sacred, wandb_root, plotter):
     # attempt must not silently stand in for the restarted experiment.
     newest = max(attempts, key=lambda item: item[0])
     same_run = [item for item in attempts if item[1] == newest[1]]
-    same_run.sort(key=lambda item: {"local": 0, "cloud": 1, "sacred": 2}[item[2]])
+    same_run.sort(key=lambda item: {"local": 0, "cloud": 1, "sacred": 2,
+                                    "retained_csv": 3}[item[2]])
     details = {
         "run_id": newest[1], "source": newest[2],
         "attempt_start": datetime.fromtimestamp(newest[0], timezone.utc).isoformat(),
@@ -131,6 +133,8 @@ def select_latest(plan, metric, local, cloud, sacred, wandb_root, plotter):
                 x, y, _ = plotter.fetch_local_run_curve_by_paths(wandb_root, [payload], metric)
             elif source == "cloud":
                 x, y = cloud_curve(payload, metric, plotter)
+            elif source == "retained_csv":
+                x, y = payload["curve"]
             else:
                 import numpy as np
                 info = json.loads((payload / "info.json").read_text())
@@ -146,7 +150,9 @@ def select_latest(plan, metric, local, cloud, sacred, wandb_root, plotter):
             if np.any((y < 0) | (y > 1)):
                 raise ValueError("Expected test-win fractions in [0, 1]")
             details.update(source=source, run_id=run_id)
-            return (x, y), details, ""
+            note = ("Retained raw test-win CSV: " + payload["csv_path"]
+                    if source == "retained_csv" else "")
+            return (x, y), details, note
         except Exception as exc:
             errors.append(str(exc))
     return None, details, "; ".join(errors)
@@ -327,6 +333,10 @@ def main():
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--local-only", action="store_true")
     parser.add_argument("--no-upload", action="store_true")
+    parser.add_argument("--retained-curves", type=Path,
+                        help="Read a raw seed_curves.csv plus its sibling seed_inventory.csv")
+    parser.add_argument("--available-only", action="store_true",
+                        help="Omit models with no readable test-win history from figures")
     parser.add_argument("--mean-window", type=int, default=100)
     args = parser.parse_args()
     if args.mean_window < 1 or "/" not in args.project:
@@ -339,7 +349,14 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("PLOT_CACHE_DIR", str(output_dir / "curve_cache"))
     os.environ.setdefault("MPLCONFIGDIR", str(output_dir / "matplotlib"))
+    if args.retained_curves and args.retained_curves.resolve().parent == output_dir.resolve():
+        parser.error("Use a separate output directory; retained source CSVs must not be overwritten")
     import plot_wandb_seed_aggregate as plotter
+    from retained_seed_curves import load_retained_curves
+    retained = (load_retained_curves(args.retained_curves, plans, SCENES, timestamp)
+                if args.retained_curves else {})
+    if args.retained_curves:
+        print("Indexed retained CSV: {} exact experiment names".format(len(retained)), flush=True)
     wanted = {p["job_name"] for p in plans}
     wandb_root = args.runtime_root / "wandb"
     local = local_run_index(wandb_root, wanted) if wandb_root.is_dir() else {}
@@ -351,7 +368,7 @@ def main():
     for plan in plans:
         scene, model, seed = plan["scene"], plan["label"], plan["seed"]
         curve, details, note = select_latest(plan, SCENES[scene][1], local, cloud,
-                                             sacred, wandb_root, plotter)
+                                             sacred, wandb_root, plotter, retained)
         if plan.get("inventory_note"):
             note = "; ".join(filter(None, (plan["inventory_note"], note)))
         row = dict.fromkeys(FIELDS, "")
@@ -377,8 +394,11 @@ def main():
         writer = csv.writer(handle)
         writer.writerow(["scene", "model", "seed", "run_id", "step", "win_fraction"])
         writer.writerows(raw_rows)
-    outputs = {scene: render(scene, entries[scene], output_dir, plotter, args.mean_window)
-               for scene in SCENES}
+    if args.available_only:
+        entries = {scene: {model: seeds for model, seeds in models.items() if seeds}
+                   for scene, models in entries.items()}
+    outputs = {scene: render(scene, models, output_dir, plotter, args.mean_window)
+               for scene, models in entries.items() if models}
     print("Figures and seed inventory: " + str(output_dir))
     if not args.no_upload:
         upload(args.project, output_dir, outputs, inventory, args.mean_window)
