@@ -335,6 +335,8 @@ def main():
     parser.add_argument("--no-upload", action="store_true")
     parser.add_argument("--retained-curves", type=Path,
                         help="Read a raw seed_curves.csv plus its sibling seed_inventory.csv")
+    parser.add_argument("--retained-figure-root", type=Path,
+                        help="Read verified local seed CSV snapshots from immediate figure subdirectories")
     parser.add_argument("--available-only", action="store_true",
                         help="Omit models with no readable test-win history from figures")
     parser.add_argument("--mean-window", type=int, default=100)
@@ -352,9 +354,15 @@ def main():
     if args.retained_curves and args.retained_curves.resolve().parent == output_dir.resolve():
         parser.error("Use a separate output directory; retained source CSVs must not be overwritten")
     import plot_wandb_seed_aggregate as plotter
-    from retained_seed_curves import load_retained_curves
+    from retained_seed_curves import load_retained_curves, load_retained_directory
     retained = (load_retained_curves(args.retained_curves, plans, SCENES, timestamp)
                 if args.retained_curves else {})
+    if args.retained_figure_root:
+        if args.retained_curves:
+            parser.error("Choose --retained-curves or --retained-figure-root, not both")
+        retained = load_retained_directory(args.retained_figure_root, output_dir,
+                                           plans, SCENES, timestamp)
+        print("Local CSV index: {} exact experiment names".format(len(retained)), flush=True)
     if args.retained_curves:
         print("Indexed retained CSV: {} exact experiment names".format(len(retained)), flush=True)
     wanted = {p["job_name"] for p in plans}

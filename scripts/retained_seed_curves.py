@@ -61,3 +61,46 @@ def load_retained_curves(path, plans, scenes, timestamp):
         result.setdefault(row['run_name'], []).append(
             (timestamp(row['attempt_start']), row['run_id'], 'retained_csv', payload))
     return result
+
+
+def load_retained_directory(root, output, plans, scenes, timestamp):
+    """Index local snapshots; duplicate copies remain one original run, never extra seeds."""
+    import numpy as np
+
+    by_run = {}
+    for path in sorted(Path(root).glob('*/seed_curves.csv')):
+        if path.parent.resolve() == Path(output).resolve():
+            continue
+        if not path.with_name('seed_inventory.csv').is_file():
+            continue
+        try:
+            found = load_retained_curves(path, plans, scenes, timestamp)
+        except (OSError, ValueError, KeyError) as exc:
+            print('SKIP unverifiable local CSV {}: {}'.format(path, exc), flush=True)
+            continue
+        if not found:
+            continue
+        print('LOCAL CSV: {} ({} exact names)'.format(path, len(found)), flush=True)
+        for name, candidates in found.items():
+            for candidate in candidates:
+                key = (name, candidate[1])
+                previous = by_run.get(key)
+                if previous is not None:
+                    if previous[0] != candidate[0]:
+                        raise ValueError('Conflicting attempt times for retained run: ' + repr(key))
+                    old_x, old_y = previous[3]['curve']
+                    new_x, new_y = candidate[3]['curve']
+                    _, a, b = np.intersect1d(old_x, new_x, return_indices=True)
+                    if not np.array_equal(old_y[a], new_y[b]):
+                        raise ValueError('Conflicting local copies of retained run: ' + repr(key))
+                    # Select one intact snapshot, do not stitch their time ranges.
+                    quality = lambda item: (item[3]['curve'][0][-1]
+                                            if len(item[3]['curve'][0]) else -1,
+                                            len(item[3]['curve'][0]))
+                    if quality(candidate) <= quality(previous):
+                        continue
+                by_run[key] = candidate
+    result = {}
+    for (name, _), candidate in by_run.items():
+        result.setdefault(name, []).append(candidate)
+    return result

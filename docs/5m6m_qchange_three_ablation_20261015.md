@@ -108,3 +108,26 @@ seeds. `--available-only` affects figures, not the expected-run inventory, which
 still records missing seeds. Omit only `--no-upload` when uploading is desired;
 keep `--local-only` to avoid cloud downloads. Synthetic regression QA:
 `python scripts/smoke_test_retained_seed_curves.py`.
+
+## Upload all locally available 5m6m QMIX variants and VDN
+
+For the broader ten-model 5m6m comparison (fresh QMIX/VDN, static gate,
+Q-change/TD-error/return-error grouping controls and their ablations), use:
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/plot_5m6m_local_available_3seeds.py
+```
+
+This entry point always enables `--local-only --available-only`. It reads
+immediate `figures/*/seed_curves.csv` snapshots with matching inventories, in
+addition to current raw logs. It does not query cloud run metadata or histories.
+It uploads figures and saves the Media/5m6m layout by default; `--no-upload` is
+available for local QA. The new output directory is
+`figures/5m6m_local_available_qmix_variants_3seeds`, excluded from snapshot reads.
+Other saved CSVs are not overwritten. Duplicate copies of an original run ID
+are checked for agreement and the longest intact copy is selected, never joined
+or counted as extra seeds. Unknown schemas/provenance are reported and skipped;
+conflicting copies stop the operation. Missing models are omitted from figures
+but remain in the expected-run inventory. Synthetic test:
+`python scripts/smoke_test_plot_local_available.py` (upload mocked).

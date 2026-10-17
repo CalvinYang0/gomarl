@@ -36,8 +36,9 @@ _PANELS = []
 def render(scene, entries, output_dir, plotter, window):
     from wandb_seed_figure_sections import render_model_panels
     paths = _RENDER(scene, entries, output_dir, plotter, window)
+    models = tuple(model for model in SCENE_MODELS[scene] if model in entries)
     _PANELS.extend(render_model_panels(scene, entries, output_dir, plotter, window,
-                                      LABELS, SCENE_MODELS[scene], charts.TARGET_STEPS))
+                                      LABELS, models, charts.TARGET_STEPS))
     return paths
 
 
