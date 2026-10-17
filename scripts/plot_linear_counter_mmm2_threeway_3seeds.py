@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import textwrap
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -185,8 +186,17 @@ def render(scene, entries, output_dir, plotter, window):
     title, _ = SCENES[scene]
     scene_labels = {model: LABELS[model] for model in entries}
     many_models = len(scene_labels) > 7
-    fig, axis = plt.subplots(figsize=(9.0, 6.0) if many_models else (8.0, 4.8),
-                             constrained_layout=True)
+    legend_axis = None
+    if many_models:
+        # A separate, height-budgeted row keeps long two-column legends inside
+        # the canvas instead of squeezing the plot and cropping both edges.
+        legend_height = .6 * int(np.ceil(len(scene_labels) / 2)) + .3
+        fig, (axis, legend_axis) = plt.subplots(
+            2, 1, figsize=(12.0, 5.8 + legend_height),
+            gridspec_kw={"height_ratios": [4.8, legend_height]}, constrained_layout=True)
+        legend_axis.set_axis_off()
+    else:
+        fig, axis = plt.subplots(figsize=(8.0, 4.8), constrained_layout=True)
     rows = []
     for model, (label, color) in scene_labels.items():
         seeds = entries[model]
@@ -222,8 +232,16 @@ def render(scene, entries, output_dir, plotter, window):
     axis.grid(alpha=0.35, linestyle="--")
     if rows:
         if many_models:
-            axis.legend(frameon=False, fontsize=8, ncol=2,
-                        loc="upper center", bbox_to_anchor=(0.5, -0.17))
+            handles, labels = axis.get_legend_handles_labels()
+            wrapped = []
+            for label in labels:
+                model_name, coverage = label.rsplit(" (", 1)
+                wrapped.append(textwrap.fill(model_name, width=50,
+                                              break_long_words=False,
+                                              break_on_hyphens=False) + "\n(" + coverage)
+            legend_axis.legend(handles, wrapped, frameon=False, fontsize=9, ncol=2,
+                               loc="center", handlelength=2.5, columnspacing=2,
+                               labelspacing=1.0)
         else:
             axis.legend(frameon=False, fontsize=8)
     else:
@@ -239,7 +257,7 @@ def render(scene, entries, output_dir, plotter, window):
     paths = []
     for suffix in ("png", "pdf"):
         path = output_dir / (scene + "_three_seed." + suffix)
-        fig.savefig(path, dpi=250)
+        fig.savefig(path, dpi=250, bbox_inches="tight", pad_inches=.15)
         paths.append(path)
     plt.close(fig)
     with (output_dir / (scene + "_aggregate.csv")).open("w", newline="") as handle:
