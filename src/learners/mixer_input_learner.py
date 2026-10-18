@@ -12,6 +12,7 @@ from utils.mixer_state_importance import (log_state_snapshot, score_state_slots,
                                           score_state_slot_variance, state_slot_names)
 from utils.rl_utils import build_td_lambda_targets
 from utils.mixer_gate_regularization import gate_variance_coefficients, gate_penalties
+from utils.mixer_gate_supervision import gate_score_targets, gate_supervision_loss
 
 
 class MixerInputLearner:
@@ -27,14 +28,27 @@ class MixerInputLearner:
         self.target_mixer = copy.deepcopy(self.mixer)
         state_slot_names(args, self.mixer.state_dim)
         self.params = list(mac.parameters()) + list(self.mixer.parameters())
+        self.gate_aux_score = self.mixer.gate_aux_score
+        self.gate_aux_interval = int(getattr(args, "mixer_gate_aux_interval", 100))
+        self.gate_aux_coef = float(getattr(args, "mixer_gate_aux_coef", 1.0))
+        gate_lr = getattr(args, "mixer_gate_aux_lr", None)
+        self.gate_aux_lr = float(args.lr if gate_lr is None else gate_lr)
+        if self.gate_aux_score != "none" and (self.gate_aux_interval <= 0 or
+                not math.isfinite(self.gate_aux_coef) or self.gate_aux_coef <= 0 or
+                not math.isfinite(self.gate_aux_lr) or self.gate_aux_lr <= 0):
+            raise ValueError("Invalid gate supervision schedule/coefficient/learning rate")
+        self.gate_params = [self.mixer.gate_logits] if self.gate_aux_score != "none" else []
         self.detach_unimportant = bool(getattr(args, "mixer_input_detach_unimportant", False))
         if self.detach_unimportant and not self.mixer.grouped:
             raise ValueError("Unimportant gradient isolation requires two mixer groups")
         self.main_params = (list(mac.parameters()) + list(self.mixer.mixers[0].parameters())
                             if self.detach_unimportant else self.params)
+        if self.gate_params:
+            self.main_params = [p for p in self.main_params if p is not self.mixer.gate_logits]
         self.other_params = list(self.mixer.mixers[1].parameters()) if self.detach_unimportant else []
         self.optimiser = self._make_optimiser(self.main_params)
         self.other_optimiser = self._make_optimiser(self.other_params) if self.other_params else None
+        self.gate_optimiser = self._make_optimiser(self.gate_params, self.gate_aux_lr) if self.gate_params else None
         self.interval = int(getattr(args, "slot_group_interval", 1000))
         self.budget = int(getattr(args, "slot_importance_samples", 256))
         self.image_interval = int(getattr(args, "slot_heatmap_interval", 100000))
@@ -54,18 +68,61 @@ class MixerInputLearner:
         self.log_stats_t = -args.learner_log_interval - 1
         self.last_losses = self.last_double_actions = None
         self.last_gate_penalties = None
+        self.last_gate_aux_loss = None
 
-    def _make_optimiser(self, params):
+    def _make_optimiser(self, params, lr=None):
         args = self.args
+        lr = args.lr if lr is None else lr
         if args.optimizer == "adam":
-            return Adam(params, lr=args.lr)
+            return Adam(params, lr=lr)
         if args.optimizer == "rmsprop":
-            return RMSprop(params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
+            return RMSprop(params, lr=lr, alpha=args.optim_alpha, eps=args.optim_eps)
         raise ValueError("Unsupported optimizer")
 
     def _rollout(self, mac, batch):
         mac.init_hidden(batch.batch_size)
         return th.stack([mac.forward(batch, t) for t in range(batch.max_seq_length)], 1)
+
+    def _train_gate(self, batch, states, valid, rewards, terminated, t_env):
+        """Fresh detached teacher scores, then a completely separate gate step."""
+        if self.gate_optimiser is None or self.train_steps % self.gate_aux_interval:
+            return
+        with th.no_grad():
+            q = self._rollout(self.mac, batch)[:, :-1]
+            chosen = q.gather(-1, batch["actions"][:, :-1].long()).squeeze(-1)
+            returns, probes = (None, valid)
+            if self.gate_aux_score == "calibration":
+                returns, probes = complete_episode_returns(rewards, terminated, valid, self.args.gamma)
+            estimate = gate_score_targets(self.mixer, chosen, states, probes, self.budget,
+                criterion=self.gate_aux_score, returns=returns, reference_valid=valid)
+        self.mixer.gate_aux_probe_update.fill_(self.train_steps)
+        self.mixer.gate_aux_probe_count.zero_()
+        self.mixer.gate_aux_probability_at_probe.copy_(self.mixer.gate_logits.sigmoid().detach())
+        self.last_gate_aux_loss = None
+        if estimate is None:
+            # No optimizer.step: old momentum must not move gate on missing data.
+            self.gate_optimiser.zero_grad()
+            self.logger.log_stat("mixer_input/gate_aux_score_available", 0, t_env)
+            return
+        for key in ("raw_scores", "targets", "probability_at_probe", "original_mc_mse", "perturbed_mc_mse"):
+            getattr(self.mixer, "gate_aux_" + key).copy_(estimate[key])
+        self.mixer.gate_aux_probe_count.fill_(estimate["count"])
+        loss = self.gate_aux_coef * gate_supervision_loss(self.mixer.gate_logits, estimate["targets"])
+        if not th.isfinite(loss):
+            raise RuntimeError("Non-finite gate supervision loss")
+        self.gate_optimiser.zero_grad()
+        loss.backward()
+        norm = th.nn.utils.clip_grad_norm_(self.gate_params, self.args.grad_norm_clip)
+        if not th.isfinite(norm):
+            raise RuntimeError("Non-finite isolated gate gradient")
+        self.gate_optimiser.step()
+        self.mixer.gate_aux_updates.add_(1)
+        self.last_gate_aux_loss = loss.detach()
+        self.logger.log_stat("mixer_input/gate_aux_score_available", 1, t_env)
+        self.logger.log_stat("mixer_input/gate_aux_loss", loss.item(), t_env)
+        self.logger.log_stat("mixer_input/gate_aux_grad_norm", norm.item(), t_env)
+        self.logger.log_stat("mixer_input/gate_aux_probe_count", estimate["count"], t_env)
+        self.logger.log_stat("mixer_input/gate_aux_target_mean", estimate["targets"].mean().item(), t_env)
 
     def train(self, batch, t_env, episode_num):
         self.mac.agent.train()
@@ -112,6 +169,8 @@ class MixerInputLearner:
         if not th.isfinite(loss):
             raise RuntimeError("Non-finite mixer-input TD loss")
         self.optimiser.zero_grad()
+        if self.gate_optimiser is not None:
+            self.gate_optimiser.zero_grad()
         if self.other_optimiser is not None:
             self.other_optimiser.zero_grad()
         loss.backward()
@@ -123,6 +182,7 @@ class MixerInputLearner:
         self.optimiser.step()
         if self.other_optimiser is not None:
             self.other_optimiser.step()
+        self._train_gate(batch, states, mask, rewards, terminated, t_env)
         self.train_steps += 1
         self.last_losses = losses.detach().clone()
         regroup = self.mixer.grouped and self.train_steps % self.interval == 0
@@ -206,6 +266,10 @@ class MixerInputLearner:
             if len(losses) == 2:
                 self.logger.log_stat("loss_td_unimportant", losses[1].item(), t_env)
             self.logger.log_stat("grad_norm", norm.item(), t_env)
+            if self.gate_optimiser is not None:
+                p = self.mixer.gate_logits.sigmoid().detach()
+                self.logger.log_stat("mixer_input/gate_probability_mean", p.mean().item(), t_env)
+                self.logger.log_stat("mixer_input/gate_eval_open_count", (p > self.mixer.threshold).sum().item(), t_env)
             if self.detach_unimportant:
                 self.logger.log_stat("mixer_input/grad_norm_unimportant", other_norm.item(), t_env)
                 self.logger.log_stat("mixer_input/unimportant_agent_gradient_detached", 1, t_env)
@@ -228,10 +292,14 @@ class MixerInputLearner:
         th.save(self.optimiser.state_dict(), str(Path(path) / "opt.th"))
         if self.other_optimiser is not None:
             th.save(self.other_optimiser.state_dict(), str(Path(path) / "opt_unimportant.th"))
+        if self.gate_optimiser is not None:
+            th.save(self.gate_optimiser.state_dict(), str(Path(path) / "opt_gate.th"))
         th.save(dict(train_steps=self.train_steps, last_target_update_episode=self.last_target_update_episode,
                      last_image_t=self.last_image_t, detach_unimportant=self.detach_unimportant,
                      append_mask=self.mixer.append_mask, variant=self.mixer.variant,
                      calibration_perturbation=self.mixer.calibration_perturbation,
+                     gate_aux_score=self.gate_aux_score, gate_aux_interval=self.gate_aux_interval,
+                     gate_aux_coef=self.gate_aux_coef, gate_aux_lr=self.gate_aux_lr,
                      gate_l1_coef=self.gate_l1_coef, gate_variance_coef=self.gate_variance_coef),
                 str(Path(path) / "mixer_input_schedule.th"))
 
@@ -245,6 +313,12 @@ class MixerInputLearner:
             raise ValueError("Checkpoint importance criterion differs; use a fresh run")
         if schedule.get("calibration_perturbation", "mask_zero") != self.mixer.calibration_perturbation:
             raise ValueError("Checkpoint calibration perturbation differs; use a fresh run")
+        if schedule.get("gate_aux_score", "none") != self.gate_aux_score:
+            raise ValueError("Checkpoint gate supervision score differs; use a fresh run")
+        if self.gate_optimiser is not None:
+            for key in ("gate_aux_interval", "gate_aux_coef", "gate_aux_lr"):
+                if schedule.get(key) != getattr(self, key):
+                    raise ValueError("Checkpoint gate supervision settings differ; use a fresh run")
         for key in ("gate_l1_coef", "gate_variance_coef"):
             if float(schedule.get(key, 0)) != getattr(self, key):
                 raise ValueError("Checkpoint gate regularization differs; use a fresh run")
@@ -253,6 +327,8 @@ class MixerInputLearner:
         self.optimiser.load_state_dict(th.load(str(Path(path) / "opt.th"), map_location="cpu"))
         if self.other_optimiser is not None:
             self.other_optimiser.load_state_dict(th.load(str(Path(path) / "opt_unimportant.th"), map_location="cpu"))
+        if self.gate_optimiser is not None:
+            self.gate_optimiser.load_state_dict(th.load(str(Path(path) / "opt_gate.th"), map_location="cpu"))
         for key, value in schedule.items():
             if key not in {"append_mask", "variant", "calibration_perturbation"}:
                 setattr(self, key, value)

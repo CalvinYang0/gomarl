@@ -197,6 +197,25 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
                   note="Fixed agent Q and fixed own-branch TD target; not action flips or win-rate attribution")
     result.update(gate_l1_coef=float(getattr(args, "mixer_gate_l1_coef", 0)),
                   gate_variance_coef=float(getattr(args, "mixer_gate_variance_coef", 0)))
+    if mixer.gate_aux_score != "none":
+        result.update(gate_aux_score=mixer.gate_aux_score, main_td_gate_detached=True,
+                      gate_aux_probe_count=int(mixer.gate_aux_probe_count.item()),
+                      gate_aux_probe_update=int(mixer.gate_aux_probe_update.item()),
+                      gate_aux_updates=int(mixer.gate_aux_updates.item()),
+                      gate_aux_score_available=bool(mixer.gate_aux_probe_count.item()),
+                      gate_aux_raw_scores=mixer.gate_aux_raw_scores.cpu().tolist(),
+                      gate_aux_targets=mixer.gate_aux_targets.cpu().tolist(),
+                      gate_aux_probability_at_probe=mixer.gate_aux_probability_at_probe.cpu().tolist(),
+                      gate_aux_original_mc_mse=mixer.gate_aux_original_mc_mse.cpu().tolist(),
+                      gate_aux_perturbed_mc_mse=mixer.gate_aux_perturbed_mc_mse.cpu().tolist(),
+                      gate_aux_interval=int(getattr(args, "mixer_gate_aux_interval", 100)),
+                      gate_aux_coef=float(getattr(args, "mixer_gate_aux_coef", 1.0)),
+                      gate_aux_definition="BCE(logits, detached targets); Q-change/max(Q-change) or "
+                          "sigmoid(-normalized MC-MSE replacement benefit); fixed soft p, Q and mixer; "
+                          "batch-mean field replacement; high quality => high keep target",
+                      gate_aux_timing_note="Targets/probe probability precede gate update; top rows show current probability/hard evaluation mask",
+                      gate_aux_probe_scope=("complete observed episodes" if mixer.gate_aux_score == "calibration"
+                                            else "valid TD transitions"))
     if hasattr(mixer, "gate_variance_difference"):
         result.update(gate_variance_difference=mixer.gate_variance_difference.cpu().tolist(),
                       gate_variance_penalty_coefficients=mixer.gate_variance_difference.clamp(min=0).cpu().tolist(),
@@ -257,7 +276,23 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
         pixel = axes[0].imshow(rows.numpy(), aspect="auto", vmin=0, vmax=1, cmap="Reds", interpolation="nearest")
         axes[0].set_yticks([0, 1], labels=labels)
         fig.colorbar(pixel, ax=axes[0])
-        if mixer.variant == "group_variance":
+        if mixer.gate_aux_score != "none":
+            if result["gate_aux_score_available"]:
+                axes[1].bar(range(len(names)), result["gate_aux_raw_scores"])
+                axes[2].bar(range(len(names)), result["gate_aux_targets"], label="detached target", alpha=.65)
+                axes[2].plot(range(len(names)), rows[0].tolist(), color="tab:orange", linewidth=1,
+                             label="current keep probability")
+                axes[2].legend(loc="upper right", fontsize=7)
+            else:
+                for axis in axes[1:]:
+                    axis.text(.5, .5, "No valid supervision at last probe; gate update skipped",
+                              ha="center", va="center", transform=axis.transAxes)
+            axes[1].axhline(0, color="black", linewidth=.5)
+            axes[1].set_ylabel("mean abs Q_tot change" if mixer.gate_aux_score == "qchange"
+                               else "MC-MSE replacement benefit\npositive = lower quality")
+            axes[2].set_ylabel("gate supervision probability")
+            axes[2].set_ylim(0, 1)
+        elif mixer.variant == "group_variance":
             axes[1].bar(range(len(names)), result["ranking_ema"])
             axes[1].set_ylabel("EMA variance-difference ranking")
             axes[2].bar(range(len(names)), result["qtot_variance_difference"])
@@ -279,6 +314,10 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
         for axis in axes:
             axis.set_xticks(range(len(names)), labels=names, rotation=90, fontsize=6)
         title = "{} / {} / seed={} / t_env={}".format(args.env_args.get("map_name"), mixer.variant, args.seed, t_env)
+        if mixer.gate_aux_score != "none":
+            title += " / gate-only " + mixer.gate_aux_score + " BCE; main TD gate detached"
+            title += "\nAux scores measured at main update={}; current snapshot update={}".format(
+                result["gate_aux_probe_update"], updates)
         if run_name.startswith("SYNTHETIC"):
             title = "SYNTHETIC QA — NOT EXPERIMENT DATA\n" + title
         fig.suptitle(title)
@@ -288,6 +327,8 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
             image = logger.wandb_module.Image(str(image_path))
             logger._update_wandb_buffer("mixer_input/partition_probability_heatmap",
                                       image, t_env)
+            if mixer.gate_aux_score != "none":
+                logger._update_wandb_buffer("mixer_input/gate_aux_heatmap", image, t_env)
             log_group_details(result, logger, "mixer_input", image, path)
             logger.wandb_module.save(str(path), base_path=str(directory))
     finally:

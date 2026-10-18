@@ -43,6 +43,10 @@ mixer_calibration_perturbation: "mask_zero"  # legacy calibration; batch_mean pr
 mixer_gate_l1_coef: 0.0  # mean(sigmoid(gate_logits)); independent gate ablation
 mixer_gate_variance_coef: 0.0  # detached per-slot positive Q_tot variance-removal gain times keep probability
 mixer_gate_variance_interval: 100  # optimizer updates; cached coefficients between probes
+mixer_gate_aux_score: "none"  # none | qchange | calibration; excludes gate from main TD optimizer
+mixer_gate_aux_interval: 100  # main updates between fresh targets and one gate-only optimizer step
+mixer_gate_aux_coef: 1.0  # BCE against detached probability targets; no extra sparsity term
+mixer_gate_aux_lr: null  # null uses the main learning rate, with independent optimizer state
 
 # Clean model variants:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)

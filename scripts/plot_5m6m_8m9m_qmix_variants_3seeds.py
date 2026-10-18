@@ -11,6 +11,7 @@ from ozstar_submit_8m9m_ones_gate_regularization_9jobs import build_plans as gat
 from ozstar_submit_5m6m_ones_3seeds import build_plans as ones_5m6m_plans
 from ozstar_submit_5m6m_calibration_mean_shared_3seeds import build_plans as calibration_mean_plans
 from ozstar_submit_calibration_mean_ablation_12jobs import build_plans as calibration_ablation_plans, LABELS as CALIBRATION_ABLATION_LABELS
+from ozstar_submit_static_gate_score_supervision_12jobs import build_plans as gate_supervision_plans, LABELS as GATE_SUPERVISION_LABELS
 
 LABELS = {
     'qmix': ('QMIX ordinary fixed head (fresh 10M)', '#7f7f7f'),
@@ -29,10 +30,12 @@ LABELS = {
     'qmix_state_ones': ('QMIX all-ones mixer condition (10M)', '#393b79'),
     'qmix_state_static10_l1': ('QMIX static gate + probability L1 (10M)', '#e377c2'),
     'qmix_state_static10_variance': ('QMIX static gate + variance-weighted probability loss (10M)', '#8c564b'),
+    'qmix_state_static10_aux_qchange': ('QMIX static gate / isolated Q-change supervision / TD gate detached (10M)', '#6baed6'),
+    'qmix_state_static10_aux_calibration': ('QMIX static gate / isolated MC-quality supervision / TD gate detached (10M)', '#fd8d3c'),
 }
 SCENE_MODELS = {
     'smac_5m6m': tuple(k for k in LABELS if k not in GATE_LABELS or k == 'qmix_state_ones'),
-    'smac_8m9m': ('qmix', 'vdn', 'qmix_state_static10') + GATE_LABELS + CALIBRATION_ABLATION_LABELS,
+    'smac_8m9m': ('qmix', 'vdn', 'qmix_state_static10') + GATE_LABELS + CALIBRATION_ABLATION_LABELS + GATE_SUPERVISION_LABELS,
 }
 _CLOUD_QUERY = charts.cloud_run_index
 _RENDER = charts.render
@@ -61,11 +64,12 @@ def build_plans(repo):
     plans.extend(ones_5m6m_plans(repo))
     plans.extend(calibration_mean_plans(repo))
     plans.extend(calibration_ablation_plans(repo))
+    plans.extend(gate_supervision_plans(repo))
     plans.extend(p for p in fresh_plans(repo) if p['label'] in {'qmix', 'vdn'} or
                  p['label'] == 'qmix_state_group_calibration_isolated' or
                  (p['scene'] == 'smac_8m9m' and p['label'] == 'qmix_state_static10'))
-    if len(plans) != 66 or len({p['job_name'] for p in plans}) != 66:
-        raise RuntimeError('Expected 42 5m6m + 24 8m9m distinct experiment names')
+    if len(plans) != 78 or len({p['job_name'] for p in plans}) != 78:
+        raise RuntimeError('Expected 48 5m6m + 30 8m9m distinct experiment names')
     for scene, models in SCENE_MODELS.items():
         selected = [p for p in plans if p['scene'] == scene]
         if {p['label'] for p in selected} != set(models):

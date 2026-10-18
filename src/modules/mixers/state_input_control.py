@@ -19,6 +19,11 @@ class StateInputControlMixer(nn.Module):
         # Explicit compatibility switch: historical groups concatenated their
         # membership bits. The input-only ablation removes those extra features.
         self.append_mask = self.grouped and bool(getattr(args, "mixer_input_append_mask", True))
+        self.gate_aux_score = str(getattr(args, "mixer_gate_aux_score", "none"))
+        if self.gate_aux_score not in {"none", "qchange", "calibration"}:
+            raise ValueError("Unknown gate supervision score")
+        if self.gate_aux_score != "none" and self.variant != "static_gate":
+            raise ValueError("Gate score supervision requires static_gate")
         self.calibration_perturbation = str(getattr(args, "mixer_calibration_perturbation", "mask_zero"))
         if self.calibration_perturbation not in {"mask_zero", "batch_mean"}:
             raise ValueError("Unknown calibration perturbation")
@@ -48,6 +53,15 @@ class StateInputControlMixer(nn.Module):
         if not 0 <= self.ema < 1 or not 0 < self.demote_ratio < 1:
             raise ValueError("Invalid mixer grouping settings")
         self.gate_logits = nn.Parameter(th.full((self.state_dim,), math.log(p / (1 - p)))) if self.variant == "static_gate" else None
+        if self.gate_aux_score != "none":
+            if any(float(getattr(args, key, 0)) != 0 for key in ("mixer_gate_l1_coef", "mixer_gate_variance_coef")):
+                raise ValueError("Do not mix isolated gate supervision with legacy gate penalties")
+            for name in ("gate_aux_raw_scores", "gate_aux_targets", "gate_aux_probability_at_probe",
+                         "gate_aux_original_mc_mse", "gate_aux_perturbed_mc_mse"):
+                self.register_buffer(name, th.zeros(self.state_dim))
+            self.register_buffer("gate_aux_probe_count", th.zeros((), dtype=th.long))
+            self.register_buffer("gate_aux_probe_update", th.full((), -1, dtype=th.long))
+            self.register_buffer("gate_aux_updates", th.zeros((), dtype=th.long))
         if float(getattr(args, "mixer_gate_variance_coef", 0)) > 0:
             if self.variant != "static_gate":
                 raise ValueError("Gate variance penalty requires static_gate")
@@ -102,6 +116,10 @@ class StateInputControlMixer(nn.Module):
 
     def values(self, agent_qs, states, mode="eval", detach_unimportant=False):
         masks = self.masks(states, mode)
+        if self.gate_aux_score != "none":
+            # Same stochastic forward values as static gate, but main TD
+            # cannot train the gate. Its optimizer is separate as well.
+            masks = masks.detach()
         return th.cat([self.conditioned_value(agent_qs.detach() if detach_unimportant and g == 1 else agent_qs,
                                              states, g, masks[g])
                        for g in range(len(self.mixers))], dim=-1)
