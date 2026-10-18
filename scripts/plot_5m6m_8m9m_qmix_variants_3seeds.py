@@ -8,6 +8,7 @@ from ozstar_submit_qmix_vdn_calibration_gate_18jobs import build_plans as fresh_
 from ozstar_submit_5m6m_score_gradient_ablation_6jobs import build_plans as ablation_plans
 from ozstar_submit_5m6m_qchange_three_ablation_9jobs import build_plans as three_ablation_plans, NEW_LABELS
 from ozstar_submit_8m9m_ones_gate_regularization_9jobs import build_plans as gate_plans, LABELS as GATE_LABELS
+from ozstar_submit_5m6m_ones_3seeds import build_plans as ones_5m6m_plans
 
 LABELS = {
     'qmix': ('QMIX ordinary fixed head (fresh 10M)', '#7f7f7f'),
@@ -25,7 +26,7 @@ LABELS = {
     'qmix_state_static10_variance': ('QMIX static gate + variance-weighted probability loss (10M)', '#8c564b'),
 }
 SCENE_MODELS = {
-    'smac_5m6m': tuple(k for k in LABELS if k not in GATE_LABELS),
+    'smac_5m6m': tuple(k for k in LABELS if k not in GATE_LABELS or k == 'qmix_state_ones'),
     'smac_8m9m': ('qmix', 'vdn', 'qmix_state_static10') + GATE_LABELS,
 }
 _CLOUD_QUERY = charts.cloud_run_index
@@ -52,11 +53,12 @@ def build_plans(repo):
     plans.extend(ablation_plans(repo))
     plans.extend(p for p in three_ablation_plans(repo) if p['label'] in NEW_LABELS)
     plans.extend(gate_plans(repo))
+    plans.extend(ones_5m6m_plans(repo))
     plans.extend(p for p in fresh_plans(repo) if p['label'] in {'qmix', 'vdn'} or
                  p['label'] == 'qmix_state_group_calibration_isolated' or
                  (p['scene'] == 'smac_8m9m' and p['label'] == 'qmix_state_static10'))
-    if len(plans) != 48 or len({p['job_name'] for p in plans}) != 48:
-        raise RuntimeError('Expected 30 5m6m + 18 8m9m distinct experiment names')
+    if len(plans) != 51 or len({p['job_name'] for p in plans}) != 51:
+        raise RuntimeError('Expected 33 5m6m + 18 8m9m distinct experiment names')
     for scene, models in SCENE_MODELS.items():
         selected = [p for p in plans if p['scene'] == scene]
         if {p['label'] for p in selected} != set(models):
