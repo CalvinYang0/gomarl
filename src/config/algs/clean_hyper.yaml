@@ -39,6 +39,7 @@ mixer_input_initial_probability: 0.1
 mixer_input_gate_threshold: 0.1
 mixer_input_gate_temperature: 0.5
 mixer_input_detach_unimportant: False  # explicit opt-in; historical dual TD stays reproducible
+mixer_calibration_perturbation: "mask_zero"  # legacy calibration; batch_mean preserves Q-change perturbation
 mixer_gate_l1_coef: 0.0  # mean(sigmoid(gate_logits)); independent gate ablation
 mixer_gate_variance_coef: 0.0  # detached per-slot positive Q_tot variance-removal gain times keep probability
 mixer_gate_variance_interval: 100  # optimizer updates; cached coefficients between probes

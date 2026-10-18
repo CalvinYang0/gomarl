@@ -15,7 +15,7 @@ from smoke_test_retained_seed_curves import write_csv
 def main():
     c = local_study.configure()
     plans = c.build_plans(c.ROOT)
-    assert len(plans) == 33 and set(c.SCENES) == {'smac_5m6m'}
+    assert len(plans) == 36 and set(c.SCENES) == {'smac_5m6m'}
     live_models = {'qmix_state_group_qchange_isolated', 'qmix_state_group_qchange_plainmask',
                    'qmix_state_group_variance'}
     with tempfile.TemporaryDirectory(prefix='synthetic-local-5m6m-') as temp:
@@ -44,7 +44,7 @@ def main():
         write_csv(copy / 'seed_curves.csv', list(rows[0]), longer)
         output = root / 'new-output'
         cached = load_retained_directory(root / 'figures', output, plans, c.SCENES, c.timestamp)
-        assert len(cached) == 24 and all(len(value) == 1 for value in cached.values())
+        assert len(cached) == 27 and all(len(value) == 1 for value in cached.values())
         assert all(value[0][3]['curve'][0][-1] == 10000000 for value in cached.values())
         for p in plans:
             if p['label'] != 'qmix_state_group_qchange_isolated' and not (
@@ -62,20 +62,20 @@ def main():
                 patch.object(local_study.study, 'upload') as upload:
             local_study.main()
         assert upload.call_count == 1, 'Uploading must be enabled by default'
-        assert len(local_study.study._PANELS) == 10
+        assert len(local_study.study._PANELS) == 11
         assert {row['section'] for row in local_study.study._PANELS} == {'5m6m'}
         assert all(row['model'] != 'qmix_state_group_variance' for row in local_study.study._PANELS)
         with (output / 'seed_inventory.csv').open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 33
-        assert sum(row['source'] == 'retained_csv' for row in inventory) == 24
+        assert len(inventory) == 36
+        assert sum(row['source'] == 'retained_csv' for row in inventory) == 27
         assert sum(row['coverage'] == 'missing' for row in inventory) == 5
         with (output / 'smac_5m6m_aggregate.csv').open() as handle:
             aggregate = list(csv.DictReader(handle))
-        assert len({row['model'] for row in aggregate}) == 10
+        assert len({row['model'] for row in aggregate}) == 11
         assert max(int(row['seed_count']) for row in aggregate) == 3
         assert (source / 'seed_curves.csv').is_file()
-    print('PASS: ten available models including ones from logs+deduplicated CSVs; 5m6m only; upload enabled (mocked); no cloud history')
+    print('PASS: eleven available models including MC-error mean/shared from logs+deduplicated CSVs; 5m6m only; upload enabled (mocked); no cloud history')
 
 
 if __name__ == '__main__':

@@ -14,7 +14,7 @@ def main():
     study.configure()
     c = study.charts
     plans = study.build_plans(c.ROOT)
-    assert len(plans) == 51
+    assert len(plans) == 54
     for scene in study.SCENE_MODELS:
         vdn = [p for p in plans if p['scene'] == scene and p['label'] == 'vdn']
         assert {p['seed'] for p in vdn} == {1, 2, 3}
@@ -35,15 +35,15 @@ def main():
         with patch.object(sys, 'argv', ['plot', '--runtime-root', temp, '--local-only', '--no-upload']):
             study.main()
         output = root / 'figures' / c.DEFAULT_OUTPUT_SUBDIR
-        assert len(study._PANELS) == 17
-        assert [r['section'] for r in study._PANELS] == ['5m6m'] * 11 + ['8m9m'] * 6
+        assert len(study._PANELS) == 18
+        assert [r['section'] for r in study._PANELS] == ['5m6m'] * 12 + ['8m9m'] * 6
         from PIL import Image
         for record in study._PANELS:
             with Image.open(record['path']) as image:
                 assert image.width >= 1400 and image.width / image.height < 1.6
         with (output / 'seed_inventory.csv').open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 51
+        assert len(inventory) == 54
         assert sum(row['coverage'] == 'missing' for row in inventory) == 1
         for scene, models in study.SCENE_MODELS.items():
             for suffix in ('three_seed.png', 'three_seed.pdf', 'individual_seeds.png'):
@@ -54,7 +54,7 @@ def main():
             for row in rows:
                 assert float(row['step']) <= 6000000
                 assert row['seed_count'] == ('2' if row['model'] == 'qmix_state_group_calibration_isolated' else '3')
-    print('PASS: two maps; 51 exact names; seventeen independent panels; 5m6m ones included; missing seeds explicit; no cloud/upload')
+    print('PASS: two maps; 54 exact names; eighteen independent panels; MC-error mean/shared included; missing seeds explicit; no cloud/upload')
 
 
 if __name__ == '__main__':

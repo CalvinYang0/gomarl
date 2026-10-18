@@ -147,7 +147,8 @@ class MixerInputLearner:
                 if self.mixer.variant == "group_calibration":
                     returns, calibration_mask = complete_episode_returns(rewards, terminated, mask, self.args.gamma)
                     estimate = score_state_slot_calibration(self.mixer, probe_chosen, states,
-                                                           returns, calibration_mask, self.budget)
+                        returns, calibration_mask, self.budget,
+                        perturbation=self.mixer.calibration_perturbation, reference_valid=mask)
                     if estimate is None:
                         self.mixer.calibration_probe_count.zero_()
                         self.logger.log_stat("mixer_input/no_complete_calibration_probes", 1, t_env)
@@ -230,6 +231,7 @@ class MixerInputLearner:
         th.save(dict(train_steps=self.train_steps, last_target_update_episode=self.last_target_update_episode,
                      last_image_t=self.last_image_t, detach_unimportant=self.detach_unimportant,
                      append_mask=self.mixer.append_mask, variant=self.mixer.variant,
+                     calibration_perturbation=self.mixer.calibration_perturbation,
                      gate_l1_coef=self.gate_l1_coef, gate_variance_coef=self.gate_variance_coef),
                 str(Path(path) / "mixer_input_schedule.th"))
 
@@ -241,6 +243,8 @@ class MixerInputLearner:
             raise ValueError("Checkpoint state input encoding differs; use a fresh run")
         if schedule.get("variant", self.mixer.variant) != self.mixer.variant:
             raise ValueError("Checkpoint importance criterion differs; use a fresh run")
+        if schedule.get("calibration_perturbation", "mask_zero") != self.mixer.calibration_perturbation:
+            raise ValueError("Checkpoint calibration perturbation differs; use a fresh run")
         for key in ("gate_l1_coef", "gate_variance_coef"):
             if float(schedule.get(key, 0)) != getattr(self, key):
                 raise ValueError("Checkpoint gate regularization differs; use a fresh run")
@@ -250,6 +254,6 @@ class MixerInputLearner:
         if self.other_optimiser is not None:
             self.other_optimiser.load_state_dict(th.load(str(Path(path) / "opt_unimportant.th"), map_location="cpu"))
         for key, value in schedule.items():
-            if key not in {"append_mask", "variant"}:
+            if key not in {"append_mask", "variant", "calibration_perturbation"}:
                 setattr(self, key, value)
         self._update_targets()

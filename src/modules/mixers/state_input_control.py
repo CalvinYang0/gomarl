@@ -19,6 +19,11 @@ class StateInputControlMixer(nn.Module):
         # Explicit compatibility switch: historical groups concatenated their
         # membership bits. The input-only ablation removes those extra features.
         self.append_mask = self.grouped and bool(getattr(args, "mixer_input_append_mask", True))
+        self.calibration_perturbation = str(getattr(args, "mixer_calibration_perturbation", "mask_zero"))
+        if self.calibration_perturbation not in {"mask_zero", "batch_mean"}:
+            raise ValueError("Unknown calibration perturbation")
+        if self.calibration_perturbation != "mask_zero" and self.variant != "group_calibration":
+            raise ValueError("Calibration perturbation override requires group_calibration")
         self.threshold = float(getattr(args, "mixer_input_gate_threshold", .1))
         self.temperature = float(getattr(args, "mixer_input_gate_temperature", .5))
         p = float(getattr(args, "mixer_input_initial_probability", .1))

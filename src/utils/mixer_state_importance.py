@@ -59,14 +59,19 @@ def score_state_slots(mixer, agent_qs, states, targets, valid, budget=256):
 
 
 @th.no_grad()
-def score_state_slot_calibration(mixer, agent_qs, states, returns, valid, budget=256):
+def score_state_slot_calibration(mixer, agent_qs, states, returns, valid, budget=256,
+                                 perturbation="mask_zero", reference_valid=None):
     """Masking benefit = (MSE(Q,G)-MSE(Q_masked,G))/max(E[G^2],1e-6).
 
     G is an observed complete-episode discounted return, not true optimal Q.
-    Agent Q/actions/checkpoint and G remain fixed. Remove both slot value and
-    membership bit; probe its current owning branch. Positive means removal
-    improves calibration: the ORIGINAL slot is less desirable, not important.
+    Agent Q/actions/checkpoint and G remain fixed; probe the owning branch.
+    Legacy mask_zero removes both slot value and membership bit. batch_mean
+    replaces only the field value, keeping membership fixed like Q-change;
+    reference_valid selects the original Q-change reference population.
+    Positive means replacement/removal improves calibration: lower quality.
     """
+    if perturbation not in {"mask_zero", "batch_mean"}:
+        raise ValueError("Unknown calibration perturbation")
     indices = valid.reshape(-1).bool().nonzero().flatten()
     if not indices.numel():
         return None
@@ -77,6 +82,13 @@ def score_state_slot_calibration(mixer, agent_qs, states, returns, valid, budget
     q = agent_qs.detach().reshape(-1, agent_qs.shape[-1])[selected].unsqueeze(1)
     s = states.detach().reshape(-1, mixer.state_dim)[selected].unsqueeze(1)
     g = returns.detach().reshape(-1, 1)[selected].unsqueeze(1)
+    reference = None
+    if perturbation == "batch_mean":
+        reference_valid = valid if reference_valid is None else reference_valid
+        if reference_valid.shape != valid.shape or (valid.bool() & ~reference_valid.bool()).any():
+            raise ValueError("Calibration probes must be a subset of valid reference transitions")
+        reference_indices = reference_valid.reshape(-1).bool().nonzero().flatten()
+        reference = states.detach().reshape(-1, mixer.state_dim)[reference_indices].mean(0)
     scale = g.square().mean().clamp(min=1e-6)
     result = s.new_zeros(mixer.state_dim)
     original_error, masked_error = result.clone(), result.clone()
@@ -87,9 +99,14 @@ def score_state_slot_calibration(mixer, agent_qs, states, returns, valid, budget
         for j in range(mixer.state_dim):
             if not mask[..., j].bool().any():
                 continue
-            removed = mask.clone()
-            removed[..., j] = 0
-            changed = mixer.conditioned_value(q, s, group, removed)
+            if perturbation == "mask_zero":
+                removed = mask.clone()
+                removed[..., j] = 0
+                changed = mixer.conditioned_value(q, s, group, removed)
+            else:
+                altered = s.clone()
+                altered[..., j] = reference[j]
+                changed = mixer.conditioned_value(q, altered, group, mask)
             original_error[j] = base_error
             masked_error[j] = (changed - g).square().mean()
             result[j] = (original_error[j] - masked_error[j]) / scale
@@ -191,12 +208,19 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
                       gate_variance_interval=int(getattr(args, "mixer_gate_variance_interval", 100)),
                       gate_variance_definition="Var(Q_tot(p*state))-Var(Q_tot(p*state with field j zero)); population variance; detached positive part weights p_j")
     if mixer.variant == "group_calibration":
+        perturbation = mixer.calibration_perturbation
         result.update(normalized_removal_gain=mixer.removal_gain_scores.cpu().tolist(),
                       calibration_probe_count=int(mixer.calibration_probe_count.item()),
+                      calibration_score_available=bool(mixer.calibration_probe_count.item()),
                       original_mc_mse=mixer.original_mc_mse.cpu().tolist(),
                       masked_mc_mse=mixer.masked_mc_mse.cpu().tolist(),
                       ranking_definition="slot quality = sigmoid(-normalized_removal_gain); high gain means remove",
-                      metric_definition="(MSE(Q,G)-MSE(Q_masked,G))/max(mean(G^2),1e-6); G = complete observed return")
+                      calibration_perturbation=perturbation,
+                      calibration_probe_scope="complete observed episodes only; padding excluded",
+                      calibration_reference_scope=("all valid TD transitions; same reference as Q-change"
+                                                   if perturbation == "batch_mean" else "not applicable"),
+                      metric_definition="(MSE(Q,G)-MSE(Q_perturbed,G))/max(mean(G^2),1e-6); "
+                          "G = complete observed return; perturbation=" + perturbation)
     if mixer.variant == "group_variance":
         result.update(qtot_variance_difference=mixer.variance_difference_scores.cpu().tolist(),
                       original_qtot_variance=mixer.original_qtot_variance.cpu().tolist(),

@@ -63,7 +63,9 @@ def group_score_panels(snapshot):
                    ("qtot_variance_difference", "Var(Q_tot) - Var(Q_tot_replaced)")]
     else:
         metrics = [("qchange", "mean abs Q_tot change")]
-        metrics.append(("normalized_removal_gain", "normalized masking benefit")
+        calibration_label = ("normalized replacement benefit"
+            if snapshot.get("calibration_perturbation") == "batch_mean" else "normalized masking benefit")
+        metrics.append(("normalized_removal_gain", calibration_label)
                        if snapshot["variant"] == "group_calibration" else
                        ("tderror", "positive mean TD error increase"))
     return [(group, key, label, grouped[key][group])
@@ -88,7 +90,11 @@ def render_group_score_snapshot(snapshot, path, title=None):
             for j, keep in enumerate(mask):
                 if not keep:
                     axis.axvspan(j - .5, j + .5, color="0.94", zorder=0)
-            axis.bar(range(len(names)), values, color=("tab:blue", "tab:orange")[group])
+            if key == "normalized_removal_gain" and result.get("calibration_probe_count", 1) == 0:
+                axis.text(.5, .5, "No complete-return probes; MC score unavailable at this update",
+                          ha="center", va="center", transform=axis.transAxes, fontsize=10)
+            else:
+                axis.bar(range(len(names)), values, color=("tab:blue", "tab:orange")[group])
             axis.axhline(0, color="black", linewidth=.5)
             axis.set_ylabel(("important" if group == 0 else "unimportant") + " group\n" + label,
                             fontsize=8)

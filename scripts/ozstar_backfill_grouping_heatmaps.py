@@ -28,7 +28,8 @@ def wanted_plans(repo):
     from ozstar_submit_qmix_vdn_calibration_gate_18jobs import build_plans as fresh
     from ozstar_submit_5m6m_score_gradient_ablation_6jobs import build_plans as ablation
     from ozstar_submit_5m6m_qchange_three_ablation_9jobs import build_plans as three_ablation
-    return {p['job_name']: p for build in (heads, mixers, fresh, ablation, three_ablation)
+    from ozstar_submit_5m6m_calibration_mean_shared_3seeds import build_plans as calibration_mean
+    return {p['job_name']: p for build in (heads, mixers, fresh, ablation, three_ablation, calibration_mean)
             for p in build(repo) if '_group_' in p['job_name']}
 
 

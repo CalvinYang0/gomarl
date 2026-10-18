@@ -9,6 +9,7 @@ from ozstar_submit_5m6m_score_gradient_ablation_6jobs import build_plans as abla
 from ozstar_submit_5m6m_qchange_three_ablation_9jobs import build_plans as three_ablation_plans, NEW_LABELS
 from ozstar_submit_8m9m_ones_gate_regularization_9jobs import build_plans as gate_plans, LABELS as GATE_LABELS
 from ozstar_submit_5m6m_ones_3seeds import build_plans as ones_5m6m_plans
+from ozstar_submit_5m6m_calibration_mean_shared_3seeds import build_plans as calibration_mean_plans
 
 LABELS = {
     'qmix': ('QMIX ordinary fixed head (fresh 10M)', '#7f7f7f'),
@@ -19,6 +20,7 @@ LABELS = {
     'qmix_state_group_calibration_isolated': ('QMIX return-error groups / isolated auxiliary TD (10M)', '#2ca02c'),
     'qmix_state_group_qchange_isolated': ('QMIX Q-change groups / isolated auxiliary TD (10M)', '#17becf'),
     'qmix_state_group_calibration_shared': ('QMIX return-error groups / shared-gradient dual TD (10M)', '#9467bd'),
+    'qmix_state_group_calibration_mean_shared': ('QMIX MC-error ranking / batch-mean replacement / shared TD (10M)', '#e6550d'),
     'qmix_state_group_qchange_plainmask': ('QMIX Q-change groups / state-only mask / shared TD (10M)', '#e377c2'),
     'qmix_state_group_variance': ('QMIX variance-difference groups / shared TD (10M)', '#8c564b'),
     'qmix_state_ones': ('QMIX all-ones mixer condition (10M)', '#393b79'),
@@ -54,11 +56,12 @@ def build_plans(repo):
     plans.extend(p for p in three_ablation_plans(repo) if p['label'] in NEW_LABELS)
     plans.extend(gate_plans(repo))
     plans.extend(ones_5m6m_plans(repo))
+    plans.extend(calibration_mean_plans(repo))
     plans.extend(p for p in fresh_plans(repo) if p['label'] in {'qmix', 'vdn'} or
                  p['label'] == 'qmix_state_group_calibration_isolated' or
                  (p['scene'] == 'smac_8m9m' and p['label'] == 'qmix_state_static10'))
-    if len(plans) != 51 or len({p['job_name'] for p in plans}) != 51:
-        raise RuntimeError('Expected 33 5m6m + 18 8m9m distinct experiment names')
+    if len(plans) != 54 or len({p['job_name'] for p in plans}) != 54:
+        raise RuntimeError('Expected 36 5m6m + 18 8m9m distinct experiment names')
     for scene, models in SCENE_MODELS.items():
         selected = [p for p in plans if p['scene'] == scene]
         if {p['label'] for p in selected} != set(models):
