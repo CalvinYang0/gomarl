@@ -28,7 +28,8 @@ GROUPS = (GROUP, '5m6m_score_gradient_factorial_10m_6jobs_20261014',
           'qchange_gate_ablation_10m_18jobs_20261015',
           '5m6m_qmix_mixer_input_controls_10m_9jobs',
           '5m6m_ones_10m_3seeds_20261018',
-          '5m6m_calibration_mean_shared_10m_3seeds_20261018')
+          '5m6m_calibration_mean_shared_10m_3seeds_20261018',
+          'calibration_mean_two_map_ablation_10m_12jobs_20261018')
 SESSION = 'gomarl-calibration-sync'
 
 

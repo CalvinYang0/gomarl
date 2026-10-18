@@ -16,7 +16,7 @@ from utils.grouping_diagnostics import membership
 
 
 def main():
-    assert len(study.wanted_plans(Path(__file__).resolve().parents[1])) == 33
+    assert len(study.wanted_plans(Path(__file__).resolve().parents[1])) == 45
     with tempfile.TemporaryDirectory(prefix='gomarl-group-backfill-QA-') as temp:
         root = Path(temp)
         sdk_image_path = root / 'SYNTHETIC_SDK_IMAGE.png'
