@@ -231,6 +231,44 @@ def prepare_bundle(directory, prefix, source, output):
     return root, files, summary
 
 
+def prepare_score_repair_bundle(directory, prefix, source, output):
+    """Re-render only the latest saved mixer scores; preserve every source file.
+
+    New media paths avoid overwriting old offline-history image references.
+    Only summary images change on upload, not historical training records.
+    """
+    from utils.mixer_group_visualization import render_group_score_snapshot
+    if prefix != 'mixer_input':
+        raise ValueError('Score repair supports state mixer snapshots only')
+    paths = sorted(directory.glob('step_*.json'))
+    if not paths:
+        raise ValueError('No saved mixer snapshots')
+    path = paths[-1]
+    data = json.loads(path.read_text())
+    if data.get('source_run_id') not in (None, source['id']):
+        raise ValueError('Snapshot/run ID mismatch')
+    if data.get('source_run_name', source['name']) != source['name']:
+        raise ValueError('Snapshot/run name mismatch')
+    root = output / source['id']
+    target = root / 'grouping_score_repair_v3' / directory.parent.name
+    image = target / (path.stem + '_by_group.png')
+    title = source['name'] + '\nt_env=' + str(data['t_env'])
+    repaired = render_group_score_snapshot(data, image, title=title)
+    record = image.with_suffix('.json')
+    repaired['original_snapshot_file'] = str(path)
+    repaired['original_snapshot_sha256'] = sha256(path.read_bytes()).hexdigest()
+    write_json(record, repaired)
+    descriptor = file_descriptor(image, root, 'image-file')
+    summary = {prefix + '/grouping_heatmap': descriptor,
+               prefix + '/partition_probability_heatmap': descriptor,
+               prefix + '/grouping_scores_by_group': descriptor,
+               prefix + '/grouping_score_snapshot': record.relative_to(root).as_posix(),
+               prefix + '/grouping_score_partition_note': repaired['score_partition_note'],
+               prefix + '/grouping_score_t_env': data['t_env'],
+               prefix + '/grouping_backfill_snapshot_count': 1}
+    return root, [image, record], summary
+
+
 def cloud_inventory(run, files, root):
     """One paginated metadata query, no downloads or training-history scan."""
     return {f.name: dict(md5=f.md5, size=f.size) for f in
@@ -268,14 +306,15 @@ def reuse_images(bundle, remote):
     for descriptor in summary.values():
         if isinstance(descriptor, dict) and descriptor.get('_type') == 'image-file':
             descriptor['path'] = aliases.get(descriptor['path'], descriptor['path'])
-    history_key = next(k for k in summary if k.endswith('/grouping_history'))
-    descriptor = summary[history_key]
-    path = root / descriptor['path']
-    table = json.loads(path.read_text())
-    for row in table['data']:
-        row[-1] = aliases.get(row[-1], row[-1])
-    write_json(path, table)
-    descriptor.update(file_descriptor(path, root, 'table-file'))
+    history_key = next((k for k in summary if k.endswith('/grouping_history')), None)
+    if history_key is not None:
+        descriptor = summary[history_key]
+        path = root / descriptor['path']
+        table = json.loads(path.read_text())
+        for row in table['data']:
+            row[-1] = aliases.get(row[-1], row[-1])
+        write_json(path, table)
+        descriptor.update(file_descriptor(path, root, 'table-file'))
     filtered = [p for p in files if p.relative_to(root).as_posix() not in aliases]
     return (root, filtered, summary), len(aliases)
 
@@ -402,10 +441,21 @@ def main():
         '/home/kyang/gomarl-runtime/gomarl-dual-branch')))
     parser.add_argument('--project', default='hjh331-sjtu/gomarl')
     parser.add_argument('--upload', action='store_true')
+    parser.add_argument('--refresh-mixer-score-plots', action='store_true',
+                        help='Repair latest mixer score image from saved JSON; no history rewrites')
+    parser.add_argument('--run-name', action='append',
+                        help='Exact submitted run name; repeat to select multiple runs')
     parser.add_argument('--workers', type=int, default=8, choices=range(1, 9))
     args = parser.parse_args()
     runtime = args.runtime_root
     plans = wanted_plans(Path(__file__).resolve().parents[1])
+    if args.run_name:
+        unknown = set(args.run_name) - set(plans)
+        if unknown:
+            parser.error('Unknown submitted run names: ' + ', '.join(sorted(unknown)))
+        plans = {name: plans[name] for name in args.run_name}
+    if args.refresh_mixer_score_plots:
+        plans = {name: plan for name, plan in plans.items() if '_qmix_state_group_' in name}
     seen, failures, completed = set(), 0, 0
     output = runtime / 'grouping_backfill'
     output.mkdir(parents=True, exist_ok=True)
@@ -435,7 +485,12 @@ def main():
                 directory, prefix = dirs[0]
                 count = len(list(directory.glob('step_*.json')))
                 print('{}: {} snapshots -> original run {}'.format(source['name'], count, source['id']), flush=True)
-                if args.upload:
+                if args.refresh_mixer_score_plots:
+                    bundle = prepare_score_repair_bundle(directory, prefix, source, output)
+                    print('RENDERED corrected latest score plot: ' + str(bundle[1][0]), flush=True)
+                    if args.upload:
+                        completed += int(upload_bundle(api, args.project, source, bundle, ledger, state_path, args.workers))
+                elif args.upload:
                     bundle = prepare_bundle(directory, prefix, source, output)
                     completed += int(upload_bundle(api, args.project, source, bundle, ledger, state_path, args.workers))
             except Exception as exc:

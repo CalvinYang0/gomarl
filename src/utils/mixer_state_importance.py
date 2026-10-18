@@ -209,8 +209,24 @@ def log_state_snapshot(mixer, args, logger, t_env, updates, migration=None, imag
         result["score_partition_note"] = "Scores evaluated before migration; membership rows show partition after migration"
     from utils.grouping_diagnostics import enrich_snapshot, log_group_details
     enrich_snapshot(result, args, logger)
+    if mixer.grouped:
+        from utils.mixer_group_visualization import prepare_group_score_snapshot
+        result = prepare_group_score_snapshot(result)
     path = directory / (stem + ".json")
     path.write_text(json.dumps(result, indent=2, allow_nan=False))
+    image_path = directory / (stem + ".png")
+    if mixer.grouped:
+        from utils.mixer_group_visualization import render_group_score_snapshot
+        render_group_score_snapshot(result, image_path)
+        if logger.use_wandb:
+            image = logger.wandb_module.Image(str(image_path))
+            logger._update_wandb_buffer("mixer_input/partition_probability_heatmap", image, t_env)
+            logger._update_wandb_buffer("mixer_input/grouping_scores_by_group", image, t_env)
+            log_group_details(result, logger, "mixer_input", image, path)
+            logger.wandb.summary.update({"mixer_input/grouping_score_t_env": t_env,
+                "mixer_input/grouping_score_partition_note": result["score_partition_note"]})
+            logger.wandb_module.save(str(path), base_path=str(directory))
+        return path
     import matplotlib.pyplot as plt
     fig, axes = plt.subplots(3, 1, figsize=(max(14, len(names) * .20), 7), constrained_layout=True)
     try:

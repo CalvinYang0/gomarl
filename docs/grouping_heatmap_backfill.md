@@ -8,9 +8,53 @@ each) retain the original heatmap/regroup intervals. Both now log these keys:
 - `mixer_input/important_slot_names`, `unimportant_slot_names`: latest names in
   the run summary, with `grouping_t_env` indicating the snapshot step.
 
-The original `mixer_input/partition_probability_heatmap` remains unchanged.
+The original `mixer_input/partition_probability_heatmap` key is retained.
 JSON snapshots also include the actual W&B run ID/name, seed and map. Existing
 head-group experiments use the corresponding `slot_input/` prefix.
+
+## Branch-separated mixer scores (2026-10-18)
+
+Mixer grouping images now contain five panels: the two masks **at scoring**,
+Q-change for the important branch, Q-change for the unimportant branch, then
+the TD score for each branch. Calibration and variance variants retain their
+own metric labels and signed values. Excluded fields are shaded gray and have
+exactly zero displayed score in that branch. An included field may also have
+zero measured sensitivity; inclusion does not guarantee positive importance.
+Matched metric panels share a y-axis scale.
+
+Previously one flat score vector combined scores from both owning branches.
+It was not an attribution vector for the important mixer alone. Moreover,
+regroup snapshots displayed post-migration masks beside pre-migration scores.
+The new plots use `score_important_membership` (or archived
+`migration.important_before`) for both masks and score ownership. Original
+`masks_or_probability`, membership tables, and slot-name summaries still describe
+the **post-migration** partition. EMA ranking is historical, not a new probe.
+The JSON adds `score_masks`, `group_scores`, and provenance notes, while preserving
+the flat score fields for compatibility. No training, masks, gradients,
+importance formulas, ranking, or checkpoint state changes.
+
+Repair the latest already-saved image of the run discussed, without retraining:
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch
+/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_backfill_grouping_heatmaps.py \
+  --refresh-mixer-score-plots \
+  --run-name smac_5m6m_qmix_state_group_qchange_plainmask_10m_s3_ablate20261015 \
+  --upload
+```
+
+Omit `--run-name` to repair all locally available state-mixer grouping runs in
+the existing cohort allowlist, or repeat it for specific runs. Omit `--upload`
+to render locally without contacting W&B. This path stages just the latest
+corrected PNG and derived JSON per run, at new `grouping_score_repair_v3/`
+paths; it never overwrites original snapshots/media. It updates original-run
+summary images (`grouping_heatmap`, `partition_probability_heatmap`, and new
+`grouping_scores_by_group`), not old history image rows. Thus select the latest
+summary image to see the repair; historical frames remain original. Saved JSON
+must include scoring-partition provenance; ambiguous legacy scores are rejected,
+not masked using a guessed partition. Missing local source data cannot be
+recovered by this rendering-only repair. Already-running training processes need
+a restart to load native logging changes, but archived JSON repair does not.
 
 ## Backfill previously saved partitions
 
