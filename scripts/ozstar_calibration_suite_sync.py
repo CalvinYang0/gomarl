@@ -25,7 +25,8 @@ GROUP = 'qmix_vdn_calibration_gate_10m_3seeds_fresh20261014'
 GROUPS = (GROUP, '5m6m_score_gradient_factorial_10m_6jobs_20261014',
           '5m6m_qchange_three_ablation_10m_9jobs_20261015',
           '8m9m_ones_gate_regularization_10m_9jobs_20261015',
-          'qchange_gate_ablation_10m_18jobs_20261015')
+          'qchange_gate_ablation_10m_18jobs_20261015',
+          '5m6m_qmix_mixer_input_controls_10m_9jobs')
 SESSION = 'gomarl-calibration-sync'
 
 
@@ -145,21 +146,36 @@ def report(jobs, states):
               row.get('exit_code', '?'), row.get('elapsed', '?'), name), flush=True)
 
 
-def sync_once(repo, runtime, python, ended_only=False, running_only=False):
+def check_cloud_current(run):
+    """Only exact original IDs; verify scalar progress, not full media completeness."""
+    from ozstar_wandb_sync_verified import read_snapshot, verify_cloud
+    snapshot = read_snapshot(run)
+    if not snapshot.entity or not snapshot.project:
+        raise RuntimeError('Original run destination unknown')
+    verify_cloud(snapshot, snapshot.entity, snapshot.project, attempts=1, delay=0)
+
+
+def sync_once(repo, runtime, python, ended_only=False, running_only=False,
+              verify_existing=False, wanted_names=None):
     if ended_only and running_only:
         raise ValueError('ended_only and running_only are mutually exclusive')
     logs, wandb = runtime / 'ozstar_logs', runtime / 'wandb'
+    result = dict(checked=0, current=0, uploaded=0, failed=0, missing_local=[], busy=False)
     with (wandb / '.gomarl-sync-once.lock').open('a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             print('Another upload/cleanup holds the shared lock; retry next round', flush=True)
-            return
+            result['busy'] = True
+            return result
         jobs, states = selected_jobs(logs, repo, running_only=running_only, ended_only=ended_only)
+        if wanted_names is not None:
+            jobs = {job: name for job, name in jobs.items() if name in wanted_names}
+            states = {job: states[job] for job in jobs if job in states}
         if not jobs:
             scope = 'RUNNING' if running_only else 'ENDED'
             print('NO {} JOBS in the configured manifests; nothing to upload'.format(scope), flush=True)
-            return
+            return result
         report(jobs, states)
         ledger_path = logs / (GROUP + '_sync_ledger.json')
         ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {}
@@ -175,7 +191,19 @@ def sync_once(repo, runtime, python, ended_only=False, running_only=False):
             before = fingerprint(run)
             signature = dict(fingerprint=before, job_states={j: states[j]['state'] for j in sorted(associated)},
                              verification_version=1)
-            if ledger.get(run.name) == signature:
+            if verify_existing:
+                result['checked'] += 1
+                print('CHECK ORIGINAL CLOUD RUN: ' + run.name, flush=True)
+                try:
+                    check_cloud_current(run)
+                except Exception as exc:
+                    print('CLOUD NOT VERIFIED CURRENT: {} ({}); append original local records'.format(
+                        run.name, type(exc).__name__), flush=True)
+                else:
+                    result['current'] += 1
+                    print('CLOUD CURRENT (scalar progress only): ' + run.name, flush=True)
+                    continue
+            elif ledger.get(run.name) == signature:
                 print('UNCHANGED: ' + run.name, flush=True)
                 continue
             if running_only and set(running_jobs({j: jobs[j] for j in associated})) != associated:
@@ -188,10 +216,13 @@ def sync_once(repo, runtime, python, ended_only=False, running_only=False):
                     timeout=int(os.environ.get('SYNC_TIMEOUT', '180')))
             except subprocess.TimeoutExpired:
                 print('TIMEOUT; retry next round: ' + run.name, flush=True)
+                result['failed'] += 1
                 continue
             if completed.returncode:
                 print('UPLOAD FAILED; retry next round: ' + run.name, flush=True)
+                result['failed'] += 1
                 continue
+            result['uploaded'] += 1
             # Save PRE-upload signature. Changes written during upload force
             # another round rather than wrongly declaring new data synchronized.
             ledger[run.name] = signature
@@ -203,6 +234,9 @@ def sync_once(repo, runtime, python, ended_only=False, running_only=False):
             temporary.replace(ledger_path)
         for job in sorted(jobs.keys() - seen):
             print('NO LOCAL RUN: {} {}'.format(job, jobs[job]), flush=True)
+            result['missing_local'].append(dict(job=job, name=jobs[job]))
+        print('Ended/backfill result: ' + json.dumps(result, sort_keys=True), flush=True)
+    return result
 
 
 def main():
