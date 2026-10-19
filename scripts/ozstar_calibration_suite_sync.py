@@ -30,7 +30,8 @@ GROUPS = (GROUP, '5m6m_score_gradient_factorial_10m_6jobs_20261014',
           '5m6m_ones_10m_3seeds_20261018',
           '5m6m_calibration_mean_shared_10m_3seeds_20261018',
           'calibration_mean_two_map_ablation_10m_12jobs_20261018',
-          'static_gate_score_supervision_10m_12jobs_20261018')
+          'static_gate_score_supervision_10m_12jobs_20261018',
+          '5m6m_onefill_gate_10m_15jobs_20261019')
 SESSION = 'gomarl-calibration-sync'
 
 

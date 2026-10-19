@@ -48,6 +48,14 @@ mixer_gate_aux_interval: 100  # main updates between fresh targets and one gate-
 mixer_gate_aux_coef: 1.0  # BCE against detached probability targets; no extra sparsity term
 mixer_gate_aux_lr: null  # null uses the main learning rate, with independent optimizer state
 
+# New opt-in learner only; historical mixer_input_learner remains ZERO-fill.
+# Binary forward mask, Binary-Concrete straight-through gradients; no threshold.
+mixer_onefill_objective: "td"  # td | kl | mc (direct gate-only return MSE each batch)
+mixer_onefill_kl_prior: 0.1  # KEEP probability, not a coefficient or drop probability
+mixer_onefill_mc_coef: 1.0
+mixer_onefill_residual: False  # all-ones base + centered raw W1/W2 residual, then abs
+mixer_onefill_residual_scale: 0.1  # fixed; residual output heads start at zero
+
 # Clean model variants:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)
 # - hypermarl_id: id-conditioned dynamic-head baseline; learned e_i only provides

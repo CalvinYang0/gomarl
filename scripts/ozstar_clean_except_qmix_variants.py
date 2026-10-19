@@ -28,7 +28,8 @@ KEEP_GROUPS = {KEEP_GROUP, 'qmix_vdn_calibration_gate_10m_3seeds_fresh20261014',
                '5m6m_ones_10m_3seeds_20261018',
                '5m6m_calibration_mean_shared_10m_3seeds_20261018',
                'calibration_mean_two_map_ablation_10m_12jobs_20261018',
-               'static_gate_score_supervision_10m_12jobs_20261018'}
+               'static_gate_score_supervision_10m_12jobs_20261018',
+               '5m6m_onefill_gate_10m_15jobs_20261019'}
 KEEP = re.compile(r'^smac_5m6m_qmix_state_(?:static10|group_qchange|group_tderror|group_variance)_')
 LOG = re.compile(r'(.+)_([0-9]+)\.(?:out|err)$')
 CATEGORIES = ('models', 'tb_logs', 'battle_traces', 'test_battle_videos',

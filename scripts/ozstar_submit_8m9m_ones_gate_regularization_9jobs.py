@@ -43,11 +43,11 @@ def build_plans(repo):
     return plans
 
 
-def submit_suite(group, suite_file, build, scripts):
+def submit_suite(group, suite_file, build, scripts, map_validator=None):
     if os.environ.get('SUBMIT') == 'YES':
         if submitter.home_quota_free_gib() < 2:
             raise RuntimeError('Require at least 2 GiB free; no jobs submitted')
-        validate_maps()
+        (validate_maps if map_validator is None else map_validator)()
         print('Existing exact jobs retained; 2 GiB is only a startup guard, not a batch capacity guarantee.', flush=True)
     replacement = dict(GROUP=group, SUITE_FILE=Path(suite_file), SMOKE_SCRIPTS=scripts, build_plans=build)
     original = {key: getattr(submitter, key) for key in replacement}

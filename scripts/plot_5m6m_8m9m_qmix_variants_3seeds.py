@@ -12,6 +12,7 @@ from ozstar_submit_5m6m_ones_3seeds import build_plans as ones_5m6m_plans
 from ozstar_submit_5m6m_calibration_mean_shared_3seeds import build_plans as calibration_mean_plans
 from ozstar_submit_calibration_mean_ablation_12jobs import build_plans as calibration_ablation_plans, LABELS as CALIBRATION_ABLATION_LABELS
 from ozstar_submit_static_gate_score_supervision_12jobs import build_plans as gate_supervision_plans, LABELS as GATE_SUPERVISION_LABELS
+from ozstar_submit_5m6m_onefill_gate_15jobs import build_plans as onefill_plans
 
 LABELS = {
     'qmix': ('QMIX ordinary fixed head (fresh 10M)', '#7f7f7f'),
@@ -32,6 +33,11 @@ LABELS = {
     'qmix_state_static10_variance': ('QMIX static gate + variance-weighted probability loss (10M)', '#8c564b'),
     'qmix_state_static10_aux_qchange': ('QMIX static gate / isolated Q-change supervision / TD gate detached (10M)', '#6baed6'),
     'qmix_state_static10_aux_calibration': ('QMIX static gate / isolated MC-quality supervision / TD gate detached (10M)', '#fd8d3c'),
+    'qmix_onefill_p10': ('QMIX one-fill hard-ST gate / p0=0.1 / TD (10M)', '#006d2c'),
+    'qmix_onefill_p20': ('QMIX one-fill hard-ST gate / p0=0.2 / TD (10M)', '#74c476'),
+    'qmix_onefill_p10_kl10': ('QMIX one-fill gate / p0=0.1 / KL keep prior=0.1 (10M)', '#9e9ac8'),
+    'qmix_onefill_p10_mc': ('QMIX one-fill gate / direct gate-only return MSE (10M)', '#d95f0e'),
+    'qmix_onefill_p10_residual': ('QMIX all-ones base + one-fill weight residual (10M)', '#3182bd'),
 }
 SCENE_MODELS = {
     'smac_5m6m': tuple(k for k in LABELS if k not in GATE_LABELS or k == 'qmix_state_ones'),
@@ -65,11 +71,12 @@ def build_plans(repo):
     plans.extend(calibration_mean_plans(repo))
     plans.extend(calibration_ablation_plans(repo))
     plans.extend(gate_supervision_plans(repo))
+    plans.extend(onefill_plans(repo))
     plans.extend(p for p in fresh_plans(repo) if p['label'] in {'qmix', 'vdn'} or
                  p['label'] == 'qmix_state_group_calibration_isolated' or
                  (p['scene'] == 'smac_8m9m' and p['label'] == 'qmix_state_static10'))
-    if len(plans) != 78 or len({p['job_name'] for p in plans}) != 78:
-        raise RuntimeError('Expected 48 5m6m + 30 8m9m distinct experiment names')
+    if len(plans) != 93 or len({p['job_name'] for p in plans}) != 93:
+        raise RuntimeError('Expected 63 5m6m + 30 8m9m distinct experiment names')
     for scene, models in SCENE_MODELS.items():
         selected = [p for p in plans if p['scene'] == scene]
         if {p['label'] for p in selected} != set(models):
