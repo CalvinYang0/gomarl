@@ -116,6 +116,31 @@ are included in running-only sync and separate ended-run backfill selection;
 no new sync loop is launched here. Local three-seed plots and mean3 inventories
 include all five labels on 5m6m only; older rows keep their original cohort.
 
+## Upload this finished cohort
+
+After the jobs finish, upload **only this cohort**, preserving original run IDs
+and separately creating five readable seed panels and five selectable mean3
+analysis runs:
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch &&
+git pull --ff-only origin codex/linear-id-baselines &&
+/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_upload_5m6m_onefill_results.py
+```
+
+This is a one-shot, not a tmux loop. Output/report:
+`figures/5m6m_onefill_20261019_3seeds/upload_report.json`. It refuses to guess job
+IDs when manifests/accounting do not confirm the fifteen ended jobs. Original
+cloud checks verify scalar progress only, not every remote media object. Local
+curve reads never query cloud histories; original-run checks use exact IDs.
+`--no-upload` makes local-only figures/inventory with no scheduler/cloud calls.
+`--skip-original-sync` is for retrying figures/scalars after raw backfill is
+confirmed; it must not be mistaken for uploading original training records.
+Missing seeds, short histories and partial uploads return a nonzero status with
+details. A layout failure does not prevent trying mean3; retry layout using
+`model_panel_upload.json`, not another full image upload. No training, cleanup,
+tmux change or 8m9m upload is performed.
+
 ## Local verification
 
 Verified with Python 3.12 / PyTorch 2.8.0 on CPU and simulator-free production
