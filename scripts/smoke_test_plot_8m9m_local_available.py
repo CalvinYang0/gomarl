@@ -17,8 +17,8 @@ def main():
     expected = {'qmix', 'vdn', 'qmix_state_static10', 'qmix_state_ones',
                 'qmix_state_static10_l1', 'qmix_state_static10_variance',
                 'qmix_state_group_calibration_mean_isolated', 'qmix_state_group_calibration_mean_plainmask',
-                'qmix_state_static10_aux_qchange', 'qmix_state_static10_aux_calibration'}
-    assert len(plans) == 30 and {p['label'] for p in plans} == expected
+                'qmix_state_static10_aux_qchange', 'qmix_state_static10_aux_calibration', 'qmix_weight_bounded_p10'}
+    assert len(plans) == 33 and {p['label'] for p in plans} == expected
     assert set(c.SCENES) == {'smac_8m9m'}
     with tempfile.TemporaryDirectory(prefix='synthetic-local-8m9m-') as temp:
         root = Path(temp)
@@ -59,12 +59,12 @@ def main():
         assert upload.call_count == 1
         assert set(upload.call_args.args[2]) == {'smac_8m9m'}
         panels = local_study.study._PANELS
-        assert len(panels) == 10 and {p['section'] for p in panels} == {'8m9m'}
+        assert len(panels) == 11 and {p['section'] for p in panels} == {'8m9m'}
         assert {p['model'] for p in panels} == expected
         assert next(p for p in panels if p['model'] == 'qmix_state_static10_variance')['seeds'] == [1, 2]
         with (output / 'seed_inventory.csv').open() as handle:
             inventory = list(csv.DictReader(handle))
-        assert len(inventory) == 30
+        assert len(inventory) == 33
         assert sum(row['coverage'] == 'missing' for row in inventory) == 1
         assert sum(row['source'] == 'retained_csv' for row in inventory) == 9
         assert all(row['scene'] == 'smac_8m9m' for row in inventory)
@@ -77,7 +77,7 @@ def main():
         if os.environ.get('PLOT_8M9M_QA_OUTPUT'):
             import shutil
             shutil.copytree(output, os.environ['PLOT_8M9M_QA_OUTPUT'], dirs_exist_ok=True)
-    print('PASS: ten 8m9m models/30 exact names; local CSV baselines + live variants; honest missing/partial seeds; upload mocked; no cloud history or 5m6m')
+    print('PASS: eleven 8m9m models/33 exact names; local CSV baselines + live variants; honest missing/partial seeds; upload mocked; no cloud history or 5m6m')
 
 
 if __name__ == '__main__':

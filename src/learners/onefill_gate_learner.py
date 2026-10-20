@@ -1,4 +1,4 @@
-"""Five new one-fill experiments, independent of legacy zero-fill controls."""
+"""Opt-in stochastic state gates and two-branch mixer weight ablations."""
 import copy
 import json
 import math
@@ -52,7 +52,7 @@ class OneFillGateLearner(MixerInputLearner):
         self.last_image_t, self.log_stats_t = -self.image_interval, -args.learner_log_interval - 1
         self.ema_td = self.ema_kl = None
         self.last_gate_aux_loss = self.last_double_actions = self.last_losses = None
-        self.contract = dict(version=1, fill_value=1, sampling="hard_binary_concrete_st",
+        self.contract = dict(version=1, fill_value=self.mixer.fill_value, sampling="hard_binary_concrete_st",
             target="soft_probability", evaluation="probability_diagnostic_only", objective=self.objective,
             residual=self.mixer.residual, residual_scale=self.mixer.residual_scale,
             initial_probability=float(args.mixer_input_initial_probability), temperature=self.mixer.temperature,
@@ -63,6 +63,12 @@ class OneFillGateLearner(MixerInputLearner):
             gamma=args.gamma, td_lambda=args.td_lambda, target_update_interval=args.target_update_interval,
             optimizer=args.optimizer, lr=args.lr, optim_alpha=args.optim_alpha, optim_eps=args.optim_eps,
             grad_norm_clip=args.grad_norm_clip)
+        # Historical default contracts/state_dicts remain loadable. New
+        # architectures cannot silently load a centered-residual checkpoint.
+        if self.mixer.combination != "centered" or self.mixer.secondary_ones:
+            self.contract.update(version=2, combination=self.mixer.combination,
+                secondary_ones=self.mixer.secondary_ones,
+                alpha_initial=float(args.mixer_residual_alpha_initial))
 
     def _kl_coefficient(self, td, kl):
         # Same loss-value EMA scaling as direct KL80, not gradient norm matching.
@@ -160,9 +166,13 @@ class OneFillGateLearner(MixerInputLearner):
             metrics = dict(loss_td=td.item(), grad_norm=norm.item(),
                 td_error_abs=selected_error.abs().mean().item())
             p = self.mixer.gate_logits.sigmoid().detach()
-            metrics.update({"mixer_input/gate_probability_mean": p.mean().item(),
-                "mixer_input/expected_open_slots": p.sum().item(),
-                "mixer_input/loss_total": loss.item(), "mixer_input/train_updates": self.train_steps})
+            metrics.update({"mixer_input/loss_total": loss.item(), "mixer_input/train_updates": self.train_steps})
+            if not self.mixer.secondary_ones:
+                metrics.update({"mixer_input/gate_probability_mean": p.mean().item(),
+                    "mixer_input/expected_open_slots": p.sum().item()})
+            if self.mixer.alpha_logit is not None:
+                metrics["mixer_branches/alpha_main"] = self.mixer.alpha().detach().item()
+                metrics["mixer_branches/alpha_secondary"] = 1 - metrics["mixer_branches/alpha_main"]
             if self.objective == "kl":
                 metrics.update({"mixer_input/kl": kl.item(), "mixer_input/kl_coefficient": coefficient,
                     "mixer_input/kl_weighted": coefficient * kl.item(),
@@ -177,27 +187,39 @@ class OneFillGateLearner(MixerInputLearner):
                 self.logger.log_stat(name, value, t_env)
             self.log_stats_t = t_env
         if t_env - self.last_image_t >= self.image_interval:
-            self._snapshot(t_env)
+            self._snapshot(t_env, states.detach(), valid.detach())
             self.last_image_t = t_env
 
-    def _snapshot(self, t_env):
+    def _snapshot(self, t_env, states=None, valid=None):
         import matplotlib.pyplot as plt
         p = self.mixer.gate_logits.sigmoid().detach().cpu()
         directory = Path(self.args.local_results_path) / "mixer_onefill_gate" / self.args.unique_token
         directory.mkdir(parents=True, exist_ok=True)
         stem = "step_{:09d}_update_{:07d}".format(int(t_env), self.train_steps)
         path, image_path = directory / (stem + ".json"), directory / (stem + ".png")
-        path.write_text(json.dumps(dict(t_env=int(t_env), train_updates=self.train_steps,
-            run_name=self.args.wandb_run_name, state_slot_names=self.names, keep_probability=p.tolist(),
-            contract=self.contract, note="Probability only; no field importance, hard threshold or grouping"),
-            indent=2, allow_nan=False))
+        record = dict(t_env=int(t_env), train_updates=self.train_steps,
+            run_name=self.args.wandb_run_name, state_slot_names=self.names,
+            keep_probability=None if self.mixer.secondary_ones else p.tolist(),
+            contract=self.contract, combination=self.mixer.combination,
+            alpha_main=None if self.mixer.alpha_logit is None else self.mixer.alpha().detach().item(),
+            note="No operative gate: both branches all ones" if self.mixer.secondary_ones else
+                 "Probability only; no field importance, hard threshold or grouping")
+        if self.mixer.residual and states is not None:
+            record["weights"] = self._weight_snapshot(t_env, directory, stem, states, valid)
+        path.write_text(json.dumps(record, indent=2, allow_nan=False))
+        if self.mixer.secondary_ones:
+            if self.logger.use_wandb:
+                self.logger.wandb_module.save(str(path), base_path=str(directory))
+            return
         fig, ax = plt.subplots(figsize=(max(14, len(self.names) * .15), 3), constrained_layout=True)
         try:
             pixel = ax.imshow(p.unsqueeze(0).numpy(), aspect="auto", vmin=0, vmax=1, cmap="Reds")
             ax.set_yticks([0], labels=["keep probability"])
             ax.set_xticks(range(len(self.names)), labels=self.names, rotation=90, fontsize=6)
-            title = "{} / {} / seed={} / step={} / closed fills 1; no threshold".format(
-                self.args.env_args.get("map_name"), self.objective, self.args.seed, t_env)
+            title = "{} / {} / seed={} / step={} / closed fills {:g}; no threshold".format(
+                self.args.env_args.get("map_name"), self.objective, self.args.seed, t_env, self.mixer.fill_value)
+            if self.mixer.residual:
+                title += " / all-ones base / " + self.mixer.combination
             if self.args.wandb_run_name.startswith("SYNTHETIC"):
                 title = "SYNTHETIC QA — NOT EXPERIMENT DATA\n" + title
             ax.set_title(title)
@@ -209,6 +231,65 @@ class OneFillGateLearner(MixerInputLearner):
             self.logger._update_wandb_buffer("mixer_input/onefill_probability_heatmap",
                 self.logger.wandb_module.Image(str(image_path)), t_env)
             self.logger.wandb_module.save(str(path), base_path=str(directory))
+
+    def _weight_snapshot(self, t_env, directory, stem, states, valid):
+        """Small, labeled parameter diagnostics; no perturbation or update."""
+        import matplotlib.pyplot as plt
+        with th.no_grad():
+            selected = states[valid.squeeze(-1).bool()] if valid is not None else states.reshape(-1, self.mixer.state_dim)
+            selected = selected[:256].unsqueeze(0)
+            if not selected.shape[1]:
+                return dict(sample_count=0)
+            parts = self.mixer.diagnostic_components(selected)
+        columns = ("raw_main", "raw_secondary", "main_contribution", "secondary_contribution", "combined", "effective")
+        names = ("Main raw", "Secondary raw", "Main contribution", "Secondary contribution", "Combined pre-abs", "Effective W >= 0")
+        fig, axes = plt.subplots(2, len(columns), figsize=(21, 7), constrained_layout=True)
+        record = dict(sample_count=selected.shape[1], input_mode="soft_probability_diagnostic",
+            selection="first up to 256 valid replay transitions; not importance or training-mask expectation",
+            alpha_main=None if self.mixer.alpha_logit is None else self.mixer.alpha().detach().item(), layers={})
+        try:
+            for row, layer in enumerate(("w1", "w_final")):
+                shape = (self.args.n_agents, self.args.mixing_embed_dim) if layer == "w1" else (self.args.mixing_embed_dim, 1)
+                record["layers"][layer] = {}
+                means = {key: parts[layer][key].flatten(0, 1).detach().cpu().mean(0).reshape(shape) for key in columns}
+                raw_limit = max(means[key].abs().max().item() for key in columns[:2])
+                contribution_limit = max(means[key].abs().max().item() for key in columns[2:5])
+                for col, (key, name) in enumerate(zip(columns, names)):
+                    values = parts[layer][key].flatten(0, 1).detach().cpu()
+                    mean, std = means[key], values.std(0, unbiased=False).reshape(shape)
+                    norm = values.norm(dim=-1).mean().item()
+                    record["layers"][layer][key] = dict(mean=mean.tolist(), std=std.tolist(),
+                        mean_frobenius_norm=norm)
+                    ax = axes[row, col]
+                    # Raw heads share a scale; weighted contributions share a
+                    # second scale. A tiny contribution must LOOK tiny.
+                    limit = max(raw_limit if col < 2 else contribution_limit if col < 5 else mean.abs().max().item(), 1e-8)
+                    im = ax.imshow(mean.numpy(), aspect="auto", cmap="viridis" if key == "effective" else "RdBu_r",
+                        vmin=0 if key == "effective" else -limit, vmax=limit)
+                    ax.set_title(layer + " / " + name + "\nmean norm={:.3g}".format(norm), fontsize=10)
+                    ax.set_xlabel("hidden" if layer == "w1" else "output")
+                    ax.set_ylabel("agent" if layer == "w1" else "hidden")
+                    ax.set_xticks(sorted(set(range(0, shape[1], max(1, shape[1] // 4))) | {shape[1] - 1}))
+                    ax.set_yticks(list(range(shape[0])) if layer == "w1" else
+                        sorted(set(range(0, shape[0], max(1, shape[0] // 4))) | {shape[0] - 1}))
+                    fig.colorbar(im, ax=ax, shrink=.7)
+            alpha = record["alpha_main"]
+            title = "{} / {} / seed={} / step={} / {} / soft-p replay diagnostics".format(
+                self.args.env_args.get("map_name"), self.mixer.combination, self.args.seed, t_env,
+                "both inputs ones; gate N/A" if self.mixer.secondary_ones else "closed fills {:g}".format(self.mixer.fill_value))
+            if alpha is not None:
+                title += " / main alpha={:.4f}, secondary={:.4f}".format(alpha, 1 - alpha)
+            if self.args.wandb_run_name.startswith("SYNTHETIC"):
+                title = "SYNTHETIC QA — NOT EXPERIMENT DATA\n" + title
+            fig.suptitle(title, fontsize=12)
+            image_path = directory / (stem + "_weights.png")
+            fig.savefig(image_path, dpi=110)
+        finally:
+            plt.close(fig)
+        if self.logger.use_wandb:
+            self.logger._update_wandb_buffer("mixer_branches/weight_components_heatmap",
+                self.logger.wandb_module.Image(str(image_path)), t_env)
+        return record
 
     def save_models(self, path):
         path = Path(path)

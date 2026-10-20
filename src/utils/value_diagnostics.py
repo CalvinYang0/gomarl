@@ -19,6 +19,13 @@ CORE_VALUE_METRICS = frozenset("test_value/" + key for key in (
     "mixer_dqtot_dqi_unimportant_mean",
     "mixer_w1_unimportant_mean", "mixer_w_final_unimportant_mean",
 ))
+BRANCH_VALUE_METRICS = frozenset(
+    "test_value/mixer_{}_{}_{}".format(layer, part, statistic)
+    for layer in ("w1", "w_final")
+    for part in ("raw_main", "raw_secondary", "main_contribution", "secondary_contribution", "combined", "effective")
+    for statistic in ("mean", "std", "norm_mean")
+) | frozenset("test_value/mixer_{}_secondary_to_main_norm_ratio_mean".format(layer)
+              for layer in ("w1", "w_final")) | {"test_value/mixer_branch_alpha_mean"}
 
 
 class ValueDiagnosticSummary:
@@ -45,7 +52,7 @@ class ValueDiagnosticSummary:
             values = {"_mean": mean, "_std": max(0., squared / count - mean ** 2) ** .5,
                       "_count": count}
             for suffix, value in values.items():
-                if prefix + suffix in CORE_VALUE_METRICS:
+                if prefix + suffix in CORE_VALUE_METRICS or prefix + suffix in BRANCH_VALUE_METRICS:
                     logger.log_stat(prefix + suffix, value, t_env)
 
 
@@ -82,6 +89,19 @@ def episode_value_samples(agent_q, mixer, batch, gamma, summary,
             sensitivity = th.autograd.grad(joint.sum(), inputs)[0][:, :, 0]
     joint = joint.detach()
     summary.add("q_tot", joint.squeeze(-1)[mask])
+    if hasattr(mixer, "diagnostic_components"):
+        with th.no_grad():
+            components = mixer.diagnostic_components(states)
+            for layer, parts in components.items():
+                for key, weights in parts.items():
+                    samples = weights[mask]
+                    summary.add("mixer_{}_{}".format(layer, key), samples)
+                    summary.add("mixer_{}_{}_norm".format(layer, key), samples.norm(dim=-1))
+                main_norm = parts["main_contribution"][mask].norm(dim=-1).clamp_min(1e-8)
+                ratio = parts["secondary_contribution"][mask].norm(dim=-1) / main_norm
+                summary.add("mixer_{}_secondary_to_main_norm_ratio".format(layer), ratio)
+            if components and mixer.alpha_logit is not None:
+                summary.add("mixer_branch_alpha", mixer.alpha())
     summary.add("mixer_dqtot_dqi", sensitivity[mask.unsqueeze(-1).expand_as(sensitivity)])
     for agent in range(utilities.shape[-1]):
         summary.add("agent_{}_dqtot_dqi".format(agent), sensitivity[:, :, agent][mask])

@@ -13,6 +13,8 @@ from ozstar_submit_5m6m_calibration_mean_shared_3seeds import build_plans as cal
 from ozstar_submit_calibration_mean_ablation_12jobs import build_plans as calibration_ablation_plans, LABELS as CALIBRATION_ABLATION_LABELS
 from ozstar_submit_static_gate_score_supervision_12jobs import build_plans as gate_supervision_plans, LABELS as GATE_SUPERVISION_LABELS
 from ozstar_submit_5m6m_onefill_gate_15jobs import build_plans as onefill_plans
+from ozstar_submit_5m6m_residual_zerofill_3jobs import build_plans as residual_zero_plans
+from ozstar_submit_weight_composition_15jobs import build_plans as weight_plans
 
 LABELS = {
     'qmix': ('QMIX ordinary fixed head (fresh 10M)', '#7f7f7f'),
@@ -38,10 +40,15 @@ LABELS = {
     'qmix_onefill_p10_kl10': ('QMIX one-fill gate / p0=0.1 / KL keep prior=0.1 (10M)', '#9e9ac8'),
     'qmix_onefill_p10_mc': ('QMIX one-fill gate / direct gate-only return MSE (10M)', '#d95f0e'),
     'qmix_onefill_p10_residual': ('QMIX all-ones base + one-fill weight residual (10M)', '#3182bd'),
+    'qmix_residual_zerofill_p10': ('QMIX all-ones base + zero-fill weight residual / p0=0.1 (10M)', '#e7298a'),
+    'qmix_weight_bounded_p10': ('QMIX all-ones base / bounded multiplicative weights / p0=0.1 (10M)', '#1b9e77'),
+    'qmix_weight_sum_p10': ('QMIX direct raw weight sum / one-fill secondary (10M)', '#d95f02'),
+    'qmix_weight_alpha10_p10': ('QMIX alpha-weighted raw sum / alpha0=0.1 / one-fill (10M)', '#7570b3'),
+    'qmix_weight_sum_bothones': ('QMIX direct weight sum / both branches all ones (10M)', '#66a61e'),
 }
 SCENE_MODELS = {
-    'smac_5m6m': tuple(k for k in LABELS if k not in GATE_LABELS or k == 'qmix_state_ones'),
-    'smac_8m9m': ('qmix', 'vdn', 'qmix_state_static10') + GATE_LABELS + CALIBRATION_ABLATION_LABELS + GATE_SUPERVISION_LABELS,
+    'smac_5m6m': tuple(k for k in LABELS if (k not in GATE_LABELS or k == 'qmix_state_ones') and k != 'qmix_weight_bounded_p10'),
+    'smac_8m9m': ('qmix', 'vdn', 'qmix_state_static10') + GATE_LABELS + CALIBRATION_ABLATION_LABELS + GATE_SUPERVISION_LABELS + ('qmix_weight_bounded_p10',),
 }
 _CLOUD_QUERY = charts.cloud_run_index
 _RENDER = charts.render
@@ -72,11 +79,13 @@ def build_plans(repo):
     plans.extend(calibration_ablation_plans(repo))
     plans.extend(gate_supervision_plans(repo))
     plans.extend(onefill_plans(repo))
+    plans.extend(residual_zero_plans(repo))
+    plans.extend(p for p in weight_plans(repo) if p['label'] != 'qmix_residual_zerofill_p10')
     plans.extend(p for p in fresh_plans(repo) if p['label'] in {'qmix', 'vdn'} or
                  p['label'] == 'qmix_state_group_calibration_isolated' or
                  (p['scene'] == 'smac_8m9m' and p['label'] == 'qmix_state_static10'))
-    if len(plans) != 93 or len({p['job_name'] for p in plans}) != 93:
-        raise RuntimeError('Expected 63 5m6m + 30 8m9m distinct experiment names')
+    if len(plans) != 108 or len({p['job_name'] for p in plans}) != 108:
+        raise RuntimeError('Expected 75 5m6m + 33 8m9m distinct experiment names')
     for scene, models in SCENE_MODELS.items():
         selected = [p for p in plans if p['scene'] == scene]
         if {p['label'] for p in selected} != set(models):

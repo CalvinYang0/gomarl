@@ -55,6 +55,10 @@ mixer_onefill_kl_prior: 0.1  # KEEP probability, not a coefficient or drop proba
 mixer_onefill_mc_coef: 1.0
 mixer_onefill_residual: False  # all-ones base + centered raw W1/W2 residual, then abs
 mixer_onefill_residual_scale: 0.1  # fixed; residual output heads start at zero
+mixer_residual_fill_value: 1  # residual branch only: 0 => mask*state centered at R(0); base always all ones
+mixer_residual_combination: "centered"  # centered | bounded | sum | alpha_sum; opt-in two-branch weight composition
+mixer_residual_secondary_ones: False  # direct-sum control only; no operative field gate
+mixer_residual_alpha_initial: 0.1  # alpha_sum: main coefficient alpha, secondary coefficient 1-alpha
 
 # Clean model variants:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)

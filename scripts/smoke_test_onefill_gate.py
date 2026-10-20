@@ -106,13 +106,13 @@ def residual():
         assert th.allclose(mixer.conditioned_value(q, s, th.ones_like(s)), before, atol=1e-5)
 
 
-def case(map_name, objective, residual_flag, optimizer, root, mc_coef=1., probability=.1):
+def case(map_name, objective, residual_flag, optimizer, root, mc_coef=1., probability=.1, **overrides):
     th.manual_seed(97)
     mac, _, batch, logger = make_case('baseline', map_name, production_shapes=True,
         config_overrides=dict(clean_model_type='qmix_minimal', learner='onefill_gate_learner',
             mixer_onefill_objective=objective, mixer_onefill_residual=residual_flag,
             mixer_input_initial_probability=probability, mixer_onefill_mc_coef=mc_coef,
-            optimizer=optimizer, grad_norm_clip=.01))
+            optimizer=optimizer, grad_norm_clip=.01, **overrides))
     args = mac.args
     args.local_results_path, args.unique_token = str(root), 'SYNTHETIC_ONEFILL'
     args.wandb_run_name, args.seed = 'SYNTHETIC_QA_NOT_EXPERIMENT', 1
@@ -298,7 +298,7 @@ def submission(root):
     import ozstar_calibration_suite_sync as sync
     import ozstar_clean_except_qmix_variants as cleanup
     assert study.GROUP in sync.GROUPS and study.GROUP in cleanup.KEEP_GROUPS
-    assert len(charts.build_plans(repo)) == 93
+    assert len(charts.build_plans(repo)) == 108
     assert set(study.LABELS).issubset(charts.SCENE_MODELS['smac_5m6m'])
     assert set(study.LABELS).isdisjoint(charts.SCENE_MODELS['smac_8m9m'])
     print('PASS: 15 exact 5m6m jobs; no 8m9m jobs/thresholds; plotting/sync inventories; mock preflight/idempotence; no real submission')
