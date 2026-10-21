@@ -3,6 +3,7 @@ from .group_learner import GROUPLearner
 from .slot_group_learner import SlotGroupLearner
 from .mixer_input_learner import MixerInputLearner
 from .onefill_gate_learner import OneFillGateLearner
+from .official_qmix_learner import OfficialQMIXLearner
 
 REGISTRY = {}
 
@@ -11,3 +12,4 @@ REGISTRY["group_learner"] = GROUPLearner
 REGISTRY["slot_group_learner"] = SlotGroupLearner
 REGISTRY["mixer_input_learner"] = MixerInputLearner
 REGISTRY["onefill_gate_learner"] = OneFillGateLearner
+REGISTRY["official_pymarl2_qmix"] = OfficialQMIXLearner

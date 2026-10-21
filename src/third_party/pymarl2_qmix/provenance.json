@@ -1,0 +1,149 @@
+{
+  "repository": "https://github.com/hijkzzz/pymarl2",
+  "commit": "8ccac7c5aa134422a2e3009be735d23cdf8ce2f8",
+  "files": {
+    "agent.py": {
+      "upstream_path": "src/modules/agents/n_rnn_agent.py",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/src/modules/agents/n_rnn_agent.py",
+      "upstream_sha256": "6387c16475d32ce06e2d04ec8d3943ddd0a1e916b3396cadd0e17b077c34d7bc",
+      "import_changes": [
+        {
+          "from": "from utils.th_utils import orthogonal_init_",
+          "to": "from .th_utils import orthogonal_init_"
+        }
+      ],
+      "adapted_sha256": "2c6b76d51cc4eb39e67321ceea84056c885a6cc67babd370615d2721e90f965c",
+      "algorithm_ast_sha256": "6b4a8a1a4afa108778711efbaee5049699743a77144c45fc019809a6d77558c3"
+    },
+    "mixer.py": {
+      "upstream_path": "src/modules/mixers/nmix.py",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/src/modules/mixers/nmix.py",
+      "upstream_sha256": "62f90fef1a44fb2b00bf73d4d0db496e063f341b18c357a61d8661bdb11596e6",
+      "import_changes": [
+        {
+          "from": "from utils.th_utils import orthogonal_init_",
+          "to": "from .th_utils import orthogonal_init_"
+        }
+      ],
+      "adapted_sha256": "0a999a877d6fd448e128648e2fb5d3750df38e65c6c8e8dd4c5d87fa3210ee5e",
+      "algorithm_ast_sha256": "b73bed583e6c7f36d1d8d5ca03a3ac97fa337e2ebff83119c80f08ef711aea1a"
+    },
+    "vdn.py": {
+      "upstream_path": "src/modules/mixers/vdn.py",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/src/modules/mixers/vdn.py",
+      "upstream_sha256": "1681c32585cda8065fc82e66cb0670282334067eeb4f2162f28f39d7876b813a",
+      "import_changes": [],
+      "adapted_sha256": "3f9a32f1d7842435710917d2611515e4515d987b0159f62396811c3549ea4082",
+      "algorithm_ast_sha256": "a016f76160b5be89ba5a07f79bde5758df2c4bcdd6381dd6c7bfbab4e0e20d38"
+    },
+    "controller_base.py": {
+      "upstream_path": "src/controllers/basic_controller.py",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/src/controllers/basic_controller.py",
+      "upstream_sha256": "020225e849f537dd3cf6c27ca94d96f9e8cf77be0259d6773e3790fa171df992",
+      "import_changes": [
+        {
+          "from": "from components.action_selectors import REGISTRY as action_REGISTRY",
+          "to": "from .action_selectors import REGISTRY as action_REGISTRY"
+        }
+      ],
+      "adapted_sha256": "9405b2922b77b1f0b02bbf683cad61a560e7da643d330305905e8b0a6bbcce48",
+      "algorithm_ast_sha256": "222652f694ee3732ea60870ba6df3a641c6e13a76831180f4a3b1fef6a3ba625"
+    },
+    "controller.py": {
+      "upstream_path": "src/controllers/n_controller.py",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/src/controllers/n_controller.py",
+      "upstream_sha256": "7340ce8811da8ed45a072d5ef36695bbe1b912afc5ebc5ed028c75fd7e4283ec",
+      "import_changes": [
+        {
+          "from": "from .basic_controller import BasicMAC",
+          "to": "from .controller_base import BasicMAC"
+        },
+        {
+          "from": "from utils.rl_utils import RunningMeanStd",
+          "to": "from .rl_utils import RunningMeanStd"
+        }
+      ],
+      "adapted_sha256": "cb4ca7222ce561728a408f46ebe956b9f50a642d1656e6271aff5703d2bfc0f9",
+      "algorithm_ast_sha256": "1a03afac76b3ee559d96c079f01a2df4880c2160668ec9dd0739b79a1c9d2117"
+    },
+    "learner.py": {
+      "upstream_path": "src/learners/nq_learner.py",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/src/learners/nq_learner.py",
+      "upstream_sha256": "1cd829148699ea6dc20fde94fb6a55fdc154528217e82133e2033b0f46c376a4",
+      "import_changes": [
+        {
+          "from": "from modules.mixers.nmix import Mixer",
+          "to": "from .mixer import Mixer"
+        },
+        {
+          "from": "from modules.mixers.vdn import VDNMixer",
+          "to": "from .vdn import VDNMixer"
+        },
+        {
+          "from": "from modules.mixers.qatten import QattenMixer\n",
+          "to": ""
+        },
+        {
+          "from": "from envs.matrix_game import print_matrix_status\n",
+          "to": ""
+        },
+        {
+          "from": "from utils.rl_utils import build_td_lambda_targets, build_q_lambda_targets",
+          "to": "from .rl_utils import build_td_lambda_targets, build_q_lambda_targets"
+        },
+        {
+          "from": "from utils.th_utils import get_parameters_num",
+          "to": "from .th_utils import get_parameters_num"
+        }
+      ],
+      "adapted_sha256": "98939e168bdf7afff547f1de95cb093d3fc219f4a8dd8b3b352d9db7f2018dfc",
+      "algorithm_ast_sha256": "802daf851b69d273973f1ebf3cbf9fbbd15cc954906389a266fbaa6daf437712"
+    },
+    "rl_utils.py": {
+      "upstream_path": "src/utils/rl_utils.py",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/src/utils/rl_utils.py",
+      "upstream_sha256": "70537033fb1ed6c99cadaf4413d9d5bf530d0ff5deacc3c66524cf1aa6fd88ba",
+      "import_changes": [],
+      "adapted_sha256": "51a4509972b5928849c1fa16944850fdce7805dfc756f8ea59a4a4b3faad15b7",
+      "algorithm_ast_sha256": "6c22f05f6bde62f414e25e561fcc43d390cedcb1709984a308ff0c1e4bace873"
+    },
+    "th_utils.py": {
+      "upstream_path": "src/utils/th_utils.py",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/src/utils/th_utils.py",
+      "upstream_sha256": "aedd65d2fb12d581f49e4e35673022df3f8d00e1ae4828f6d047f00328229f80",
+      "import_changes": [],
+      "adapted_sha256": "2ab914b7275e08a020d2d19f464f1332448e361857502fb578db72831911a8d6",
+      "algorithm_ast_sha256": "57796d8c5a729167ce05dec07e0bf099fa1ee1ccf352f3ae2e0adf38045d6155"
+    },
+    "action_selectors.py": {
+      "upstream_path": "src/components/action_selectors.py",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/src/components/action_selectors.py",
+      "upstream_sha256": "9f9532ca2abce5f6b79d8e4ce27dfef02bc614577b5a26906ac1a84aa2ce85cc",
+      "import_changes": [],
+      "adapted_sha256": "e6c39cd0b6b8145931873a6088655dc6973c6a4f243c21d7771a0305b017e9e9",
+      "algorithm_ast_sha256": "2c33b7116f34730c23a6db671adabb0550005824310cbc58a7bf44e674018a66"
+    },
+    "epsilon_schedules.py": {
+      "upstream_path": "src/components/epsilon_schedules.py",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/src/components/epsilon_schedules.py",
+      "upstream_sha256": "5a9d9c5cac1cdc5ba78a4e1d3baf2082cafb88d1cc1293504b45024af7cad1a1",
+      "import_changes": [],
+      "adapted_sha256": "aee56caa5db3dcf1e50a2f3a78a7603a818c2d6126b9c0b90e6688d7a9ec1d7d",
+      "algorithm_ast_sha256": "f638e2e900d68f80baf85fcd951e33bf93320d6ec8c6a12db6ef95b668e75608"
+    },
+    "upstream_qmix.yaml": {
+      "upstream_path": "src/config/algs/qmix.yaml",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/src/config/algs/qmix.yaml",
+      "upstream_sha256": "38c05b077261aee8b4549fb0e0d11e0f8019ca94c6b1bacd39c84d03886db27a",
+      "import_changes": [],
+      "adapted_sha256": "004ff65ab054d5f37377bd44f8336350782813570a95cd757f08d54f9c8c48a1"
+    },
+    "LICENSE.upstream": {
+      "upstream_path": "LICENSE",
+      "upstream_url": "https://raw.githubusercontent.com/hijkzzz/pymarl2/8ccac7c5aa134422a2e3009be735d23cdf8ce2f8/LICENSE",
+      "upstream_sha256": "a1e4522979cd422b42d0b464072eb7d0d218651659f56bf09f8c147384e3f105",
+      "import_changes": [],
+      "adapted_sha256": "a8d49e3e147ea0cb2da6ea273b08736367f62e893acc53f6cf9666fec4c415ae"
+    }
+  }
+}
