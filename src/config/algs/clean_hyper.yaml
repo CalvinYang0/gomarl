@@ -49,7 +49,9 @@ mixer_gate_aux_coef: 1.0  # BCE against detached probability targets; no extra s
 mixer_gate_aux_lr: null  # null uses the main learning rate, with independent optimizer state
 
 # New opt-in learner only; historical mixer_input_learner remains ZERO-fill.
-# Binary forward mask, Binary-Concrete straight-through gradients; no threshold.
+# onefill_gate_learner: binary forward mask, Binary-Concrete ST; no threshold.
+# soft_onefill_gate_learner: single QMIX, deterministic p=sigmoid(logit),
+# x=p*state+(1-p) in ALL modes; joint TD only; temperature/threshold unused.
 mixer_onefill_objective: "td"  # td | kl | mc (direct gate-only return MSE each batch)
 mixer_onefill_kl_prior: 0.1  # KEEP probability, not a coefficient or drop probability
 mixer_onefill_mc_coef: 1.0

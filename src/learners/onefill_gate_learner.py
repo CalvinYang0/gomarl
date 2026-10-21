@@ -83,6 +83,10 @@ class OneFillGateLearner(MixerInputLearner):
             self.ema_kl = self.kl_decay * self.ema_kl + (1 - self.kl_decay) * kl
         return min(self.kl_max, self.kl_ratio * self.ema_td / max(self.ema_kl, self.kl_eps))
 
+    def _gate_metrics(self, probability):
+        return {"mixer_input/gate_probability_mean": probability.mean().item(),
+                "mixer_input/expected_open_slots": probability.sum().item()}
+
     def _mc_gate_loss(self, chosen, states, rewards, terminated, valid):
         returns, complete = complete_episode_returns(rewards, terminated, valid, self.args.gamma)
         indices = complete.reshape(-1).bool()
@@ -169,8 +173,7 @@ class OneFillGateLearner(MixerInputLearner):
             p = self.mixer.gate_logits.sigmoid().detach()
             metrics.update({"mixer_input/loss_total": loss.item(), "mixer_input/train_updates": self.train_steps})
             if not self.mixer.secondary_ones:
-                metrics.update({"mixer_input/gate_probability_mean": p.mean().item(),
-                    "mixer_input/expected_open_slots": p.sum().item()})
+                metrics.update(self._gate_metrics(p))
             if self.mixer.alpha_logit is not None:
                 metrics["mixer_branches/alpha_main"] = self.mixer.alpha().detach().item()
                 metrics["mixer_branches/alpha_secondary"] = 1 - metrics["mixer_branches/alpha_main"]

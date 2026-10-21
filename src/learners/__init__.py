@@ -5,6 +5,7 @@ from .mixer_input_learner import MixerInputLearner
 from .onefill_gate_learner import OneFillGateLearner
 from .official_qmix_learner import OfficialQMIXLearner
 from .qtot_composition_learner import QTotCompositionLearner
+from .soft_onefill_gate_learner import SoftOneFillGateLearner
 
 REGISTRY = {}
 
@@ -15,3 +16,4 @@ REGISTRY["mixer_input_learner"] = MixerInputLearner
 REGISTRY["onefill_gate_learner"] = OneFillGateLearner
 REGISTRY["official_pymarl2_qmix"] = OfficialQMIXLearner
 REGISTRY["qtot_composition_learner"] = QTotCompositionLearner
+REGISTRY["soft_onefill_gate_learner"] = SoftOneFillGateLearner
