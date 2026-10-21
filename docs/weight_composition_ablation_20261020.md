@@ -115,3 +115,40 @@ native heatmap/JSON/W&B buffers, matched submission differences, inventory and
 mocked idempotent Slurm preflight. No simulator training, real scheduler calls
 or cloud uploads are made by smoke tests. Python 3.9 syntax compatibility is
 checked separately from local Python 3.12/Torch 2.8 CPU execution.
+
+## Upload the completed cohort
+
+The user supplied Slurm accounting for IDs **18904502–18904516** on October 21:
+all 15 are `COMPLETED`, exit `0:0`. This establishes scheduler completion, not
+10M test-history coverage or cloud upload completion.
+
+On the server, upload ONLY this cohort's original runs, two-map overviews,
+four 5m6m model panels plus one 8m9m panel, and five selectable mean3 runs:
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch &&
+git pull --ff-only origin codex/linear-id-baselines &&
+/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_upload_weight_composition_results.py
+```
+
+The uploader reuses verified original IDs, requires terminal manifest/accounting
+matches, checks exact original cloud scalar progress and backfills incomplete
+originals with bounded per-run timeouts. It never scans all cloud histories or
+launches training/tmux/cleanup. Scalar-current checks do not certify every media
+object. Local figures use raw local Sacred/offline data and retained CSVs;
+latest attempts are not stitched. Missing/partial seeds are explicit errors,
+not fabricated 10M curves. Mean3 uses unsmoothed data, seeds 1/2/3 on each
+model's shared interval; figure smoothing remains window=10 test points.
+
+Report: `figures/weight_composition_20261020_3seeds/upload_report.json` under
+the runtime. It includes original audit, inventories/endpoints, image/workspace
+IDs and mean3 URLs/errors. If layout fails after image upload, retry only layout
+using `model_panel_upload.json`; do not confuse partial success with completion.
+`--no-upload` produces local plots/inventory only, without cloud or scheduler
+calls. `--skip-original-sync` intentionally skips original backfill and is only
+for retrying analysis after original records have been verified.
+
+`smoke_test_upload_weight_results.py` validates both maps, exact 15-run scope,
+5 model panels and 5 unsmoothed mean3 runs using synthetic logs and mocked
+cloud/scheduler calls. `smoke_test_upload_onefill_results.py` preserves the old
+October 19 single-map upload contract. Neither test uploads experiment data.

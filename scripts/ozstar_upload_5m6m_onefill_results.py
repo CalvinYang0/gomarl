@@ -13,12 +13,13 @@ from ozstar_calibration_suite_sync import sync_once, manifest_jobs, accounting, 
 from wandb_three_seed_scalar_runs import aggregate_models, upload_model
 
 SUBDIR = '5m6m_onefill_20261019_3seeds'
+RESULTS_TITLE = 'One-fill gate ablations (October 19 cohort only)'
 
 
 def original_scope(repo, runtime, expected):
     jobs = {job: name for job, name in manifest_jobs(runtime / 'ozstar_logs').items() if name in expected}
-    if len(jobs) != 15 or set(jobs.values()) != expected:
-        raise RuntimeError('Submission manifests do not identify exactly these fifteen jobs; refusing to guess IDs')
+    if len(jobs) != len(expected) or set(jobs.values()) != expected:
+        raise RuntimeError('Submission manifests do not identify exactly these {} jobs; refusing to guess IDs'.format(len(expected)))
     states = accounting(jobs, repo)
     if set(states) != set(jobs) or any(row['state'] not in TERMINAL for row in states.values()):
         raise RuntimeError('Some requested jobs lack confirmed terminal accounting in this checkout')
@@ -30,10 +31,14 @@ def local_figures(runtime, project, output):
     c = study.charts
     plans = cohort.build_plans(c.ROOT)
     c.build_plans = lambda root: plans
-    c.SCENES = {'smac_5m6m': c.SCENES['smac_5m6m']}
-    c.SCENE_MODELS = {'smac_5m6m': cohort.LABELS}
+    selected = {p['scene'] for p in plans}
+    c.SCENES = {scene: settings for scene, settings in c.SCENES.items() if scene in selected}
+    c.SCENE_MODELS = {scene: tuple(label for label in cohort.LABELS
+        if any(p['scene'] == scene and p['label'] == label for p in plans)) for scene in c.SCENES}
+    if set(c.SCENES) != selected:
+        raise RuntimeError('Cohort contains an unsupported scene')
     c.GROUP = cohort.GROUP + '_results'
-    c.RESULTS_TITLE = 'One-fill gate ablations (October 19 cohort only)'
+    c.RESULTS_TITLE = RESULTS_TITLE
     previous = sys.argv
     try:
         sys.argv = [__file__, '--runtime-root', str(runtime), '--project', project,
@@ -45,14 +50,14 @@ def local_figures(runtime, project, output):
     with (output / 'seed_inventory.csv').open() as handle:
         inventory = list(csv.DictReader(handle))
     if {row['run_name'] for row in inventory} != {p['job_name'] for p in plans}:
-        raise RuntimeError('Figure inventory does not exactly match the fifteen requested jobs')
-    outputs = {'smac_5m6m': [output / ('smac_5m6m_' + suffix) for suffix in
-        ('three_seed.png', 'three_seed.pdf', 'individual_seeds.png')]}
+        raise RuntimeError('Figure inventory does not exactly match the requested cohort')
+    outputs = {scene: [output / (scene + '_' + suffix) for suffix in
+        ('three_seed.png', 'three_seed.pdf', 'individual_seeds.png')] for scene in c.SCENES}
     return plans, inventory, outputs
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=RESULTS_TITLE + ': original runs, figures and unsmoothed mean3')
     parser.add_argument('--runtime-root', type=Path, default=Path(os.environ.get(
         'RUNTIME_ROOT', '/home/kyang/gomarl-runtime/gomarl-dual-branch')))
     parser.add_argument('--project', default='hjh331-sjtu/gomarl')
@@ -69,7 +74,7 @@ def main(argv=None):
     if not args.no_upload and not args.skip_original_sync:
         os.environ.setdefault('SYNC_TIMEOUT', '600')
         report['original_scope'] = original_scope(repo, runtime, expected)
-        print('STAGE 1/3: audit/backfill original W&B IDs for ONLY these fifteen ended jobs', flush=True)
+        print('STAGE 1/3: audit/backfill original W&B IDs for ONLY these {} ended jobs'.format(len(expected)), flush=True)
         audit = sync_once(repo, runtime, sys.executable, ended_only=True,
                           verify_existing=True, wanted_names=expected)
         report['original_sync'] = audit
@@ -79,8 +84,8 @@ def main(argv=None):
         if audit['failed'] or audit['missing_local']:
             report['errors'].append('Some original-run uploads failed or have no local source; see original_sync')
         if audit['checked'] < len(expected):
-            report['errors'].append('Fewer than fifteen original local runs audited; do not assume every job was uploaded')
-    print('STAGE 2/3: local-only single-seed panels and three-seed figures for FIVE models', flush=True)
+            report['errors'].append('Fewer than {} original local runs audited; do not assume every job was uploaded'.format(len(expected)))
+    print('STAGE 2/3: local-only single-seed panels and three-seed figures for {} models'.format(len(cohort.LABELS)), flush=True)
     plans, inventory, outputs = local_figures(runtime, args.project, output)
     report['inventory'] = inventory
     incomplete = [row['run_name'] for row in inventory if row['coverage'] != 'complete']
@@ -98,11 +103,11 @@ def main(argv=None):
             if metadata.exists():
                 report['figures'] = json.loads(metadata.read_text())
             print('Figure/layout stage incomplete; still attempting mean3: ' + str(exc), flush=True)
-    print('STAGE 3/3: selectable UNSMOOTHED mean3 runs (five models, seeds 1/2/3)', flush=True)
+    print('STAGE 3/3: selectable UNSMOOTHED mean3 runs ({} models, seeds 1/2/3)'.format(len(cohort.LABELS)), flush=True)
     records, skipped = aggregate_models(output / 'seed_curves.csv', plans, study.charts.SCENES)
     report['skipped'] = skipped
     if len(records) != len(cohort.LABELS):
-        report['errors'].append('Not all five models have readable seeds 1/2/3; missing mean3 models are not fabricated')
+        report['errors'].append('Not all {} models have readable seeds 1/2/3; missing mean3 models are not fabricated'.format(len(cohort.LABELS)))
     for record in records:
         if not args.no_upload:
             try:
@@ -110,7 +115,7 @@ def main(argv=None):
                 report['mean3'].append(upload_model(record, args.project, output / 'mean3', wandb))
             except Exception as exc:
                 report['errors'].append('Mean3 {}: {}'.format(record['model'], exc))
-    report['mean3_plan'] = [dict(model=r['model'], seeds=[s['seed'] for s in r['sources']],
+    report['mean3_plan'] = [dict(scene=r['scene'], model=r['model'], seeds=[s['seed'] for s in r['sources']],
                                end_step=r['rows'][-1]['env_steps']) for r in records]
     path = output / 'upload_report.json'
     path.write_text(json.dumps(report, indent=2))
