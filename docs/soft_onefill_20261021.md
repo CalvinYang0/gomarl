@@ -45,6 +45,11 @@ old-checkpoint rejection, exact continued training after checkpoint reload,
 diagnostics and three-seed plan identity. It uses synthetic episodes and never
 launches StarCraft, uploads W&B data or submits cluster jobs.
 
+2026-10-22 preflight fix: training also saves an earlier gate snapshot. The QA
+now selects the requested step/update filename and checks its metadata instead
+of taking the first filesystem-dependent glob result. Numeric comparison uses
+explicit float32 tolerances. This changes only QA, not training or its losses.
+
 ## Optional 5m6m three-seed run
 
 The launcher is plan-only by default. It preserves the old p10 recipe and changes

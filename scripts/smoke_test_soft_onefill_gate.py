@@ -124,8 +124,17 @@ def training(root):
             assert "mixer_input/expected_open_slots" not in logger.stats
             rng = th.get_rng_state().clone()
             learner._snapshot(12)
-            record = next((root / "mixer_soft_onefill_gate" / args.unique_token).glob("*.json"))
-            assert json.loads(record.read_text())["gate_value"] == learner.mixer.gate_logits.sigmoid().detach().tolist()
+            directory = root / "mixer_soft_onefill_gate" / args.unique_token
+            # train(10) already wrote an earlier snapshot. Directory/glob order
+            # is filesystem-dependent: never compare that old gate to this one.
+            assert (directory / "step_000000010_update_0000001.json").is_file()
+            record = directory / "step_{:09d}_update_{:07d}.json".format(12, learner.train_steps)
+            snapshot = json.loads(record.read_text())
+            assert snapshot["t_env"] == 12 and snapshot["train_updates"] == learner.train_steps
+            assert snapshot["run_name"] == args.wandb_run_name and snapshot["contract"] == learner.contract
+            expected = learner.mixer.gate_logits.sigmoid().detach().cpu()
+            actual = th.tensor(snapshot["gate_value"], dtype=expected.dtype)
+            th.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-8)
             summary = ValueDiagnosticSummary()
             collect_value_diagnostics(learner.mac, learner.mixer, batch, args.gamma, summary)
             assert th.equal(rng, th.get_rng_state())
