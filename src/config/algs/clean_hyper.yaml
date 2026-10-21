@@ -59,6 +59,9 @@ mixer_residual_fill_value: 1  # residual branch only: 0 => mask*state centered a
 mixer_residual_combination: "centered"  # centered | bounded | sum | alpha_sum; opt-in two-branch weight composition
 mixer_residual_secondary_ones: False  # direct-sum control only; no operative field gate
 mixer_residual_alpha_initial: 0.1  # alpha_sum: main coefficient alpha, secondary coefficient 1-alpha
+mixer_qtot_combination: "sum"  # opt-in qtot_composition_learner only: sum | alpha_sum
+mixer_qtot_secondary_ones: False  # opt-in complete-QMIX output composition only
+mixer_qtot_alpha_initial: 0.1
 
 # Clean model variants:
 # - baseline: local hypernetwork condition from obs + prev_action + h (CTDE)

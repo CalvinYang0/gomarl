@@ -60,9 +60,11 @@ def main():
     paths = guard_and_route(plans, runtime)
     validate_config_keys(repo, plans)
     for plan in plans:
-        print("{}: map={} seed={} t_max={} time=2 days memory={} model={}".format(
+        time_limit = next((arg.split("=", 1)[1] for arg in plan["sbatch_args"]
+                           if arg.startswith("--time=")), "unspecified")
+        print("{}: map={} seed={} t_max={} time={} memory={} model={}".format(
             plan["job_name"], plan["map_name"], plan["seed"],
-            plan["exports"]["T_MAX"], plan["memory"], plan["exports"]["MODEL_TYPE"],
+            plan["exports"]["T_MAX"], time_limit, plan["memory"], plan["exports"]["MODEL_TYPE"],
         ))
     if os.environ.get("SUBMIT") != "YES":
         print("Plan only: {} fresh runs; set SUBMIT=YES to submit.".format(len(plans)))

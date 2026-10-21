@@ -13,6 +13,7 @@ from utils.rl_utils import build_td_lambda_targets
 
 
 class OneFillGateLearner(MixerInputLearner):
+    mixer_class = OneFillGateMixer
     # Reuse only optimizer construction, MAC rollout, device and target-copy
     # helpers. The old learner's probing, losses and checkpoint API are bypassed.
     def __init__(self, mac, scheme, logger, args):
@@ -28,7 +29,7 @@ class OneFillGateLearner(MixerInputLearner):
             raise ValueError("Unknown one-fill objective")
         if args.mixer_onefill_residual and self.objective != "td":
             raise ValueError("Residual ablation must not silently add KL/MC")
-        self.mixer = OneFillGateMixer(args)
+        self.mixer = self.mixer_class(args)
         self.target_mac, self.target_mixer = copy.deepcopy(mac), copy.deepcopy(self.mixer)
         self.names = state_slot_names(args, self.mixer.state_dim)
         self.params = list(mac.parameters()) + list(self.mixer.parameters())

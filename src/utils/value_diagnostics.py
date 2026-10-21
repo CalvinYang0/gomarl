@@ -25,7 +25,10 @@ BRANCH_VALUE_METRICS = frozenset(
     for part in ("raw_main", "raw_secondary", "main_contribution", "secondary_contribution", "combined", "effective")
     for statistic in ("mean", "std", "norm_mean")
 ) | frozenset("test_value/mixer_{}_secondary_to_main_norm_ratio_mean".format(layer)
-              for layer in ("w1", "w_final")) | {"test_value/mixer_branch_alpha_mean"}
+              for layer in ("w1", "w_final")) | {"test_value/mixer_branch_alpha_mean"} | frozenset(
+    "test_value/qtot_{}_{}".format(part, statistic)
+    for part in ("main", "secondary", "main_contribution", "secondary_contribution", "combined")
+    for statistic in ("mean", "std"))
 
 
 class ValueDiagnosticSummary:
@@ -89,6 +92,12 @@ def episode_value_samples(agent_q, mixer, batch, gamma, summary,
             sensitivity = th.autograd.grad(joint.sum(), inputs)[0][:, :, 0]
     joint = joint.detach()
     summary.add("q_tot", joint.squeeze(-1)[mask])
+    if hasattr(mixer, "diagnostic_output_components"):
+        with th.no_grad():
+            for key, value in mixer.diagnostic_output_components(utilities, states).items():
+                summary.add("qtot_" + key, value.squeeze(-1)[mask])
+            if mixer.alpha_logit is not None:
+                summary.add("mixer_branch_alpha", mixer.alpha())
     if hasattr(mixer, "diagnostic_components"):
         with th.no_grad():
             components = mixer.diagnostic_components(states)
