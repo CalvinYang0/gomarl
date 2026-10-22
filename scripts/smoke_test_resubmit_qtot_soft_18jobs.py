@@ -2,6 +2,7 @@
 """Offline rerun-plan and quota safety checks; no Slurm/cloud/simulator calls."""
 import copy
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import ozstar_resubmit_qtot_soft_18jobs_20261022 as rerun
@@ -40,16 +41,32 @@ def main():
                 '/home 19171099 0 20969520 199488 0 200000 -',
                 '/home 19171099* 0 20969520 7days 199488 0 200000 -'):
         assert rerun.parse_home_quota(row) == q
+    # Exact OzSTAR output reported on October 22: explanatory text must not
+    # become extra quota columns, nor replace the authoritative raw integers.
+    ozstar = '''Disk quotas for usr kyang (uid 12945):
+     Filesystem  kbytes   quota   limit   grace   files   quota   limit   grace
+          /home 15845771       0 20969520       -  169467       0  200000       - (Disk usage is at 75%, 15.1 GiB of 20.0 GiB, Inode usage is at 84%)
+Disk quotas for grp oz501 (gid 10855):
+     Filesystem  kbytes   quota   limit   grace   files   quota   limit   grace
+          /fred 1112183737       0 10737418240       -  821663       0 1000000       - (Disk usage is at 10%, 1060.7 GiB of 10.0 TiB, Inode usage is at 82%)
+'''
+    current = rerun.parse_home_quota(ozstar)
+    assert current['free_inodes'] == 30533
+    assert current['free_gib'] == (20969520-15845771)/1024**2
+    assert 4.88 < current['free_gib'] < 4.89
+    assert current['used_kib'] == 15845771 and current['hard_inodes'] == 200000
     for bad in ('', '/home 1 0 2 -', '/home 1M 0 20G - 10 0 200000 -',
                 '/home 1 0 0 - 10 0 200000 -', '/home 1 0 20000000 - 10 0 0 -',
-                '/home 1 0 20000000 - 10 0 200000 -\n/home 1 0 20000000 - 10 0 200000 -'):
+                '/home 1 0 20000000 - 10 0 200000 -\n/home 1 0 20000000 - 10 0 200000 -',
+                '/home 1 0 20000000 - 10 0 200000 - unexpected extra columns',
+                '/home 1 0 20000000 - 10 0 200000 - (Unrecognized summary)'):
         try:
             rerun.parse_home_quota(bad)
         except RuntimeError:
             pass
         else:
             raise AssertionError('Unreadable quota was accepted: ' + bad)
-    for low in (q, dict(free_gib=20, free_inodes=49999), dict(free_gib=4.99, free_inodes=100000)):
+    for low in (q, current, dict(free_gib=20, free_inodes=49999), dict(free_gib=4.99, free_inodes=100000)):
         try:
             rerun.require_capacity(low)
         except RuntimeError:
@@ -57,6 +74,19 @@ def main():
         else:
             raise AssertionError('Low byte/inode headroom accepted')
     rerun.require_capacity(dict(free_gib=5, free_inodes=50000))
+    # The actual failed submission path must still stop before submit_suite,
+    # now because headroom is insufficient, not because parsing failed.
+    with patch.dict(rerun.os.environ, SUBMIT='YES', REPO_DIR=str(repo)), \
+            patch.object(rerun, 'validate_sources'), \
+            patch.object(rerun.subprocess, 'run', return_value=SimpleNamespace(stdout=ozstar)), \
+            patch.object(rerun, 'submit_suite') as submit:
+        try:
+            rerun.main()
+        except RuntimeError as exc:
+            assert 'Insufficient /home byte/inode headroom' in str(exc)
+        else:
+            raise AssertionError('Real insufficient quota reached submission')
+        submit.assert_not_called()
     import ozstar_calibration_suite_sync as sync
     expected = {str(job): p['job_name'] for job, p in zip(rerun.SOURCE_JOBS, sources)}
     previous = sync.GROUPS

@@ -27,8 +27,15 @@ The dedicated launcher requires at least **5 GiB AND 50,000 free inodes** from
 the user's raw `/home` quota (`quota -v`), rejecting missing/ambiguous quota data.
 These conservative startup floors are NOT a measured full-batch budget or a
 guarantee against subsequent exhaustion. All 18 full-length runs retain videos
-and diagnostics; other jobs and uploads share the same quota. Current free
-capacity after the requested cleanup has not been confirmed by the local agent.
+and diagnostics; other jobs and uploads share the same quota.
+
+The supplied October 22 server output reports 15,845,771 / 20,969,520 KiB and
+169,467 / 200,000 inodes: about 4.886 GiB and 30,533 free inodes. This is below
+BOTH startup floors, so fixing the parser does not authorize submission. The
+parser now accepts OzSTAR's appended `(Disk usage is at ... Inode usage is at
+...)` explanation, but still derives all quotas from the raw integer columns.
+This exact server output is a regression fixture; unrelated trailing columns
+and ambiguous quota rows remain rejected.
 Do not bypass the guard if blocked. The launcher does not clean or relocate data.
 
 ## Server command

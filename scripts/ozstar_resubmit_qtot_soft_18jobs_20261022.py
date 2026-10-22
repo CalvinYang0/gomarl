@@ -51,9 +51,17 @@ def build_plans(repo):
 
 def parse_home_quota(output):
     """Parse quota -v (raw KiB/counts), never df or human-rounded quota -s."""
-    rows = [line.split() for line in output.splitlines() if line.split()[:1] == ['/home']]
+    rows = []
+    for line in output.splitlines():
+        # OzSTAR appends a human-readable usage summary to the raw quota row.
+        # Remove only this recognized suffix, retaining strict quota validation.
+        line = re.sub(r'\s+\(Disk usage is at [^()\n]*\)\s*$', '', line)
+        fields = line.split()
+        if fields[:1] == ['/home']:
+            rows.append(fields)
     if len(rows) != 1 or len(rows[0]) not in (7, 8, 9):
-        raise RuntimeError('Cannot identify one complete /home byte+inode quota row; no submission')
+        raise RuntimeError('Cannot identify one complete /home byte+inode quota row; no submission. '
+                           'Observed /home rows: ' + repr(rows))
     fields = rows[0]
     def integer(token):
         if not re.fullmatch(r'[0-9]+\*?', token):
