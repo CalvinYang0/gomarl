@@ -3,6 +3,7 @@ from functools import partial
 from components.episode_buffer import EpisodeBatch
 from multiprocessing import Pipe, Process
 from utils.battle_trace import model_diagnostics
+from utils.mixer_state_refresh import begin as begin_mixer_state_refresh
 import numpy as np
 import torch as th
 import time
@@ -236,6 +237,7 @@ class ParallelRunner:
 
     def reset(self, test_mode=False):
         self.batch = self.new_batch()
+        self.mixer_state_cache = begin_mixer_state_refresh(self.args, self.episode_limit, self.batch_size, self.t_env)
 
         for env_idx in range(self.batch_size):
             self._send_worker(env_idx, "reset", None)
@@ -262,6 +264,8 @@ class ParallelRunner:
 
         self._initial_reset = False
 
+        if self.mixer_state_cache is not None:
+            pre_transition_data = self.mixer_state_cache.apply(pre_transition_data, 0)
         self.batch.update(pre_transition_data, ts=0)
 
         self.t = 0
@@ -453,6 +457,8 @@ class ParallelRunner:
 
             self.t += 1
 
+            if self.mixer_state_cache is not None:
+                pre_transition_data = self.mixer_state_cache.apply(pre_transition_data, self.t, envs_not_terminated)
             self.batch.update(pre_transition_data, bs=envs_not_terminated, ts=self.t, mark_filled=True)
 
         if test_mode and hasattr(

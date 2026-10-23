@@ -14,6 +14,7 @@ from utils.hyper_obs_importance import HyperObsImportanceSession
 from utils.battle_video import BattleVideoSession
 from utils.policy_importance import PolicyImportanceSession
 from utils.visualization_requirements import preflight_visualizations, record_visualization_inventory
+from utils.mixer_state_refresh import extra_scheme as mixer_state_refresh_scheme
 from os.path import dirname, abspath
 
 from learners import REGISTRY as le_REGISTRY
@@ -246,6 +247,7 @@ def run_sequential(args, logger):
         "reward": {"vshape": (1,)},
         "terminated": {"vshape": (1,), "dtype": th.uint8},
     }
+    scheme.update(mixer_state_refresh_scheme(args, env_info['state_shape'], env_info['episode_limit']))
     # Epsilon-greedy value learners do not produce policy probabilities.  Do
     # not reserve and sample a full [buffer, time, agent, action] float tensor
     # that will remain all-zero for the entire run.

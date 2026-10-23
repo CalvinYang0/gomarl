@@ -2,6 +2,7 @@ from envs import REGISTRY as env_REGISTRY
 from functools import partial
 from components.episode_buffer import EpisodeBatch
 from utils.battle_trace import model_diagnostics
+from utils.mixer_state_refresh import begin as begin_mixer_state_refresh
 import numpy as np
 
 
@@ -72,6 +73,7 @@ class EpisodeRunner:
         self.batch = self.new_batch()
         self.env.reset()
         self.t = 0
+        self.mixer_state_cache = begin_mixer_state_refresh(self.args, self.episode_limit, 1, self.t_env)
 
     def run(self, test_mode=False):
         self.reset(test_mode=test_mode)
@@ -124,6 +126,8 @@ class EpisodeRunner:
                 "avail_actions": [self.env.get_avail_actions()],
                 "obs": [self.env.get_obs()]
             }
+            if self.mixer_state_cache is not None:
+                pre_transition_data = self.mixer_state_cache.apply(pre_transition_data, self.t)
 
             self.batch.update(pre_transition_data, ts=self.t)
 
@@ -187,6 +191,8 @@ class EpisodeRunner:
             "avail_actions": [self.env.get_avail_actions()],
             "obs": [self.env.get_obs()]
         }
+        if self.mixer_state_cache is not None:
+            last_data = self.mixer_state_cache.apply(last_data, self.t)
         self.batch.update(last_data, ts=self.t)
 
         actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)

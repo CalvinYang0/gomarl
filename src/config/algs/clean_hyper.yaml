@@ -24,6 +24,12 @@ mixing_embed_dim: 32
 hypernet_embed: 64
 hypernet_layers: 2
 
+# Opt-in curriculum, historical qmix_minimal actor only. The collected `state`
+# field is held for K equal maximum-length episode segments; raw state is kept
+# separately. No gates, extra loss or forced final timestep-frequency stage.
+mixer_state_refresh_enabled: False
+mixer_state_refresh_stage_steps: 1000000
+
 # Independent slot-input controls. These do not alter existing clean models.
 double_q: True
 slot_group_interval: 1000       # optimizer updates, NOT environment steps
