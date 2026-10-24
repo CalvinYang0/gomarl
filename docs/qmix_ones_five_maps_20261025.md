@@ -1,5 +1,22 @@
 # QMIX 对比 all-ones：GRF 三地图 + MMM2 + 3s5z_vs_3s6z
 
+## 最新范围调整：先不跑 GRF
+
+用户随后决定 GRF 暂不跑。CLI 默认改为 `--domain smac`，仅提交 MMM2 和
+3s5z_vs_3s6z：两模型 × 三种子 × 两地图 = 12 jobs，不进行 GRF reset/step 预检。
+模型、10M 步、24h 和配额门槛保持不变；不取消现有任务，也不自动清理数据。
+专用批次为 `qmix_vs_ones_mmm2_3s5z_10m_12jobs_20261025`。
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch &&
+git pull --ff-only origin codex/linear-id-baselines &&
+SUBMIT=YES REPO_DIR="$PWD" /home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_submit_qmix_ones_five_maps_30jobs.py --domain smac
+```
+
+文件名保留兼容性，不代表当前会提交 30 个。下方为原五图方案存档；
+只有显式传入 `--domain all` 才加入三张 GRF 地图。代码的 `build_plans(repo)` 默认全图供历史测试使用，
+CLI 会显式传入实际选择，不把全图默认函数直接交给提交器。
+
 ## 范围与口径
 
 用户要求在三个既有 GRF 场景、MMM2 和 3s5z_vs_3s6z 上比较普通 QMIX 与 all-ones。
@@ -46,7 +63,7 @@ GRF 沿用不录制视频、不生成 full/goal dumps 的节省空间设置。
 ```bash
 cd /home/kyang/code/gomarl-dual-branch &&
 git pull --ff-only origin codex/linear-id-baselines &&
-SUBMIT=YES REPO_DIR="$PWD" /home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_submit_qmix_ones_five_maps_30jobs.py
+SUBMIT=YES REPO_DIR="$PWD" /home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_submit_qmix_ones_five_maps_30jobs.py --domain all
 ```
 
 不设 SUBMIT=YES 时只预览计划。提交前检查个人 /home 至少 5 GiB + 50,000 空余 inode，

@@ -32,6 +32,11 @@ def extras(plan):
 def plan_checks():
     plans = study.build_plans(ROOT)
     assert len(plans) == len({p['job_name'] for p in plans}) == 30
+    smac = study.build_plans(ROOT, 'smac')
+    assert len(smac) == len({p['job_name'] for p in smac}) == 12
+    assert {p['map_name'] for p in smac} == {'MMM2', '3s5z_vs_3s6z'}
+    assert all(p['domain'] == 'smac' and p['exports']['GROUP_NAME'] == study.SMAC_GROUP for p in smac)
+    validate_config_keys(ROOT, smac)
     validate_config_keys(ROOT, plans)
     for scene, map_name, domain, _, _ in study.SCENES:
         for seed in study.SEEDS:
@@ -132,14 +137,15 @@ def model_checks(plans):
             print('PASS:', map_name, optimizer, 'historical head/init; live actor; constant all W/b train/target; old ones algebra; TD update')
 
 
-def scheduler_checks():
+def scheduler_checks(domain):
+    count = len(study.build_plans(ROOT, domain))
     with tempfile.TemporaryDirectory(prefix='SYNTHETIC-qmix-ones-submit-') as temp:
         logs = Path(temp)
         retained, calls = {}, []
         def run_command(cmd, **kwargs):
             if cmd == ['id', '-un']: return 'SYNTHETIC_USER'
             if cmd == ['git', 'rev-parse', 'HEAD']: return 'SYNTHETIC_COMMIT'
-            assert cmd[:2] == ['sbatch', '--parsable'] and calls.count('preflight') == 30
+            assert cmd[:2] == ['sbatch', '--parsable'] and calls.count('preflight') == count
             calls.append('submit')
             return str(95000+calls.count('submit'))
         def subprocess_command(cmd, **kwargs):
@@ -161,17 +167,17 @@ def scheduler_checks():
                     patch.object(base, 'completed_jobs', return_value={}), \
                     patch.object(base, 'run', side_effect=run_command), \
                     patch.object(subprocess, 'run', side_effect=subprocess_command):
-                study.main([])
+                study.main(['--domain', domain])
                 env_probe.assert_called_once()
-                assert calls.count('submit') == calls.count('preflight') == 30
-                manifest = json.loads(next(logs.glob(study.GROUP+'_*.json')).read_text())
+                assert calls.count('submit') == calls.count('preflight') == count
+                manifest = json.loads(next(logs.glob(study.group_for(domain)+'_*.json')).read_text())
                 retained.update(manifest['submitted'])
                 calls.clear()
-                study.main([])
+                study.main(['--domain', domain])
                 assert not calls, 'Repeated submit duplicated active jobs'
         finally:
             os.chdir(cwd)
-    print('PASS: all thirty Slurm preflights before submission, manifest persistence, idempotence (all mocked)')
+    print('PASS:', domain, count, 'Slurm preflights before submission, manifest persistence, idempotence (all mocked)')
 
 
 def environment_probe_checks():
@@ -209,11 +215,39 @@ def environment_probe_checks():
     print('PASS: GRF reset/step probe wiring, recording disabled, close; quota failure precedes all submission work (mocked)')
 
 
+def smac_only_checks():
+    import smac.env.starcraft2.maps.smac_maps as installed
+    with tempfile.TemporaryDirectory(prefix='SYNTHETIC-smac-assets-') as temp:
+        root = Path(temp)
+        binary = root/'Versions/Base000/SC2_x64'
+        binary.parent.mkdir(parents=True)
+        binary.write_text('SYNTHETIC placeholder, not executable')
+        (root/'Maps').mkdir()
+        for name in ('MMM2', '3s5z_vs_3s6z'):
+            (root/'Maps'/(name+'.SC2Map')).write_text('SYNTHETIC map placeholder')
+        params = {'MMM2': dict(n_agents=10, n_enemies=12), '3s5z_vs_3s6z': dict(n_agents=8, n_enemies=9)}
+        with redirect_stdout(io.StringIO()), patch.dict(os.environ, SC2PATH=temp), \
+                patch.object(installed, 'get_smac_map_registry', return_value=params), \
+                patch.object(subprocess, 'run', side_effect=AssertionError('SMAC-only cannot launch GRF probes')):
+            study.validate_environments('smac')
+    for argv in ([], ['--domain', 'smac']):
+        with patch.dict(os.environ, SUBMIT='NO'), patch.object(study, 'submit_suite') as submit:
+            study.main(argv)
+            args, kwargs = submit.call_args
+            assert args[0] == study.SMAC_GROUP and len(args[2](ROOT)) == 12
+            with patch.object(study, 'validate_environments') as validate:
+                kwargs['map_validator']()
+                validate.assert_called_once_with('smac')
+    print('PASS: default/explicit SMAC-only = 12 jobs, dedicated cohort, no GRF simulator/probe/submission')
+
+
 def main():
     plans = plan_checks()
     model_checks(plans)
     environment_probe_checks()
-    scheduler_checks()
+    smac_only_checks()
+    scheduler_checks('all')
+    scheduler_checks('smac')
 
 
 if __name__ == '__main__':
