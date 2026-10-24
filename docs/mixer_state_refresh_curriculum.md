@@ -64,4 +64,24 @@ SUBMIT=YES REPO_DIR="$PWD" /home/kyang/.conda/envs/marl_cpu/bin/python -u script
 map、配置、合成测试和 sbatch test-only 均通过后才提交；相同名字 active/completed job 保留，
 不取消现有任务。回执保存在 runtime 的 ozstar_logs，批次名为
 `5m6m_mixer_state_refresh_10m_9jobs_20261023`。
-W&B 离线写入沿用历史设置；本改动不声称已经提交 job 或配置了新批次自动上传/三种子聚合。
+W&B 离线写入沿用历史设置；这不是新批次的长期自动上传循环。
+
+## 完成后更新（2026-10-25）
+
+用户提供的 sacct 显示 19086819–19086827 共九个 job 全部 COMPLETED / 0:0。
+调度完成不等同于每条测试曲线已覆盖 10M；更新器另行检查实际数据。
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch &&
+git pull --ff-only origin codex/linear-id-baselines &&
+/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_upload_mixer_state_refresh_results.py
+```
+
+仅本批：补传/验证九个原始 run，生成三组单 seed 面板及 mean ± sample std 曲线，
+上传三条可单独勾选、未平滑的 mean3 scalar run。只创建 5m6m section；不混入旧基线。
+按 manifest 精确 job ID 核对 accounting，非 COMPLETED / 0:0 不进入上传。
+不取消、不重跑、不删除、不更改 tmux 范围。`--no-upload` 仅生成本地结果，
+不查询调度器或云端，也不代表数据已经上传。输出与审计报告在 runtime 的
+`figures/5m6m_mixer_state_refresh_20261023_3seeds/`。
+缺失/不足 10M、原 run 同步失败或 workspace 保存失败均报告 PARTIAL/INCOMPLETE，
+不以已生成图片冒充完整上传；本地数据缺失时应检查云端来源，不猜测补齐。
