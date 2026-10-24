@@ -23,6 +23,7 @@ mixer: "qmix"                 # qmix | vdn | none
 mixing_embed_dim: 32
 hypernet_embed: 64
 hypernet_layers: 2
+qmix_condition_input: "state"  # state | ones; same plain QMixer/CleanLearner, all W/b paths
 
 # Opt-in curriculum, historical qmix_minimal actor only. The collected `state`
 # field is held for K equal maximum-length episode segments; raw state is kept

@@ -12,6 +12,11 @@ class QMixer(nn.Module):
         self.state_dim = int(np.prod(args.state_shape))
         self.embed_dim = args.mixing_embed_dim
         self.hypernet_layers = int(getattr(args, "hypernet_layers", 1))
+        # Same weights, initialization and TD learner in both conditions. This
+        # replaces every state path, not the actor observations or agent Qs.
+        self.condition_input = getattr(args, "qmix_condition_input", "state")
+        if self.condition_input not in {"state", "ones"}:
+            raise ValueError("qmix_condition_input must be state or ones")
 
         if self.hypernet_layers == 1:
             self.hyper_w1 = nn.Linear(self.state_dim, self.embed_dim * self.n_agents)
@@ -42,6 +47,8 @@ class QMixer(nn.Module):
         batch_size, seq_len, _ = agent_qs.shape
         flat_q = agent_qs.view(-1, 1, self.n_agents)
         flat_states = states.reshape(-1, self.state_dim)
+        if self.condition_input == "ones":
+            flat_states = th.ones_like(flat_states)
 
         w1 = th.abs(self.hyper_w1(flat_states)).view(-1, self.n_agents, self.embed_dim)
         b1 = self.hyper_b1(flat_states).view(-1, 1, self.embed_dim)
