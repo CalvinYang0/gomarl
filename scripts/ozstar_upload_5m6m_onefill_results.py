@@ -68,7 +68,10 @@ def main(argv=None):
     runtime = args.runtime_root.resolve()
     output = runtime / 'figures' / SUBDIR
     output.mkdir(parents=True, exist_ok=True)
-    expected = {p['job_name'] for p in cohort.build_plans(repo)}
+    planned = cohort.build_plans(repo)
+    expected = {p['job_name'] for p in planned}
+    expected_models = {(p['scene'], p['label']) for p in planned}
+    model_count = len(expected_models)
     report = dict(cohort=cohort.GROUP, expected_runs=sorted(expected), dry_run=args.no_upload,
                   original_sync=None, figures=None, mean3=[], skipped=[], errors=[])
     if not args.no_upload and not args.skip_original_sync:
@@ -85,7 +88,7 @@ def main(argv=None):
             report['errors'].append('Some original-run uploads failed or have no local source; see original_sync')
         if audit['checked'] < len(expected):
             report['errors'].append('Fewer than {} original local runs audited; do not assume every job was uploaded'.format(len(expected)))
-    print('STAGE 2/3: local-only single-seed panels and three-seed figures for {} models'.format(len(cohort.LABELS)), flush=True)
+    print('STAGE 2/3: local-only single-seed panels and three-seed figures for {} map/model groups'.format(model_count), flush=True)
     plans, inventory, outputs = local_figures(runtime, args.project, output)
     report['inventory'] = inventory
     incomplete = [row['run_name'] for row in inventory if row['coverage'] != 'complete']
@@ -103,11 +106,11 @@ def main(argv=None):
             if metadata.exists():
                 report['figures'] = json.loads(metadata.read_text())
             print('Figure/layout stage incomplete; still attempting mean3: ' + str(exc), flush=True)
-    print('STAGE 3/3: selectable UNSMOOTHED mean3 runs ({} models, seeds 1/2/3)'.format(len(cohort.LABELS)), flush=True)
+    print('STAGE 3/3: selectable UNSMOOTHED mean3 runs ({} map/model groups, seeds 1/2/3)'.format(model_count), flush=True)
     records, skipped = aggregate_models(output / 'seed_curves.csv', plans, study.charts.SCENES)
     report['skipped'] = skipped
-    if len(records) != len(cohort.LABELS):
-        report['errors'].append('Not all {} models have readable seeds 1/2/3; missing mean3 models are not fabricated'.format(len(cohort.LABELS)))
+    if {(r['scene'], r['model']) for r in records} != expected_models:
+        report['errors'].append('Not all {} map/model groups have readable seeds 1/2/3; missing mean3 models are not fabricated'.format(model_count))
     for record in records:
         if not args.no_upload:
             try:

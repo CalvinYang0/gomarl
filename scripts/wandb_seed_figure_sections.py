@@ -56,7 +56,11 @@ def make_workspace(entity, project, run_id, records, summaries):
         layout_settings=ws.SectionLayoutSettings(columns=1, rows=2),
         panels=[wr.MediaBrowser(title=title, media_keys=[key], num_columns=1)
                 for title, key in summaries])]
-    names = [name for name in ('5m6m', '8m9m') if any(r['section'] == name for r in records)]
+    names = [name for name in ('5m6m', '8m9m', 'mmm2', 'corridor')
+             if any(r['section'] == name for r in records)]
+    unknown = {r['section'] for r in records} - set(names)
+    if unknown:
+        raise ValueError('Unsupported model sections: ' + ', '.join(sorted(unknown)))
     for name in names:
         panels = [wr.MediaBrowser(title=r['title'], media_keys=[r['key']], num_columns=1)
                   for r in records if r['section'] == name]
@@ -86,7 +90,7 @@ def upload_sectioned(project, output_dir, outputs, inventory, window, charts, re
                     name=charts.GROUP + '_figures', group=charts.GROUP, job_type='analysis', mode='online',
                     dir=str(output_dir), config=dict(target_steps=charts.TARGET_STEPS, mean_window=window,
                         selection='latest attempt per seed', seeds=[1, 2, 3],
-                        individual_seed_layout='one readable image per model; Media/5m6m/8m9m sections')) as run:
+                        individual_seed_layout='one readable image per model; Media and per-map sibling sections')) as run:
         payload = {'seed_inventory': wandb.Table(columns=list(charts.FIELDS),
                    data=charts.inventory_table_data(inventory))}
         for (_, key), (scene, paths) in zip(summaries, outputs.items()):
