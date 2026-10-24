@@ -121,6 +121,20 @@ def direct_cleanup_check(runtime):
     shared.write_text("shared log stays")
     (directory / "logs").mkdir()
     (directory / "logs/debug-core.log").symlink_to(shared)
+    source = runtime / 'results/sacred/manual_verified_diagnostic.json'
+    source.write_text('keep original diagnostic')
+    (directory / 'files/step_001.json').symlink_to(source)
+    (directory / 'files/dangling.json').symlink_to(runtime / 'missing-target.json')
+    external_dir = runtime / 'external-media'
+    external_dir.mkdir()
+    (external_dir / 'keep.mp4').write_text('keep original media')
+    (directory / 'files/external-media').symlink_to(external_dir, target_is_directory=True)
+    try:
+        cleaner.snapshot(directory)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('Cloud-verified mode must still reject arbitrary links')
     with patch.object(cleaner, "identity", side_effect=AssertionError("No SDK/cloud checks")), \
          patch.object(cleaner, "verify_cloud", side_effect=AssertionError("No cloud checks")):
         assert expect_retained(directory, args, None) == 0
@@ -144,7 +158,7 @@ def direct_cleanup_check(runtime):
                     pass
                 else:
                     raise AssertionError("Requeued/nonterminal job must stay")
-        before = cleaner.snapshot(directory)
+        before = cleaner.snapshot(directory, allow_links=True)
         changed = dict(before, new_payload=(1, 1, 1))
         with patch.object(cleaner, "snapshot", side_effect=[before, changed]):
             assert expect_retained(directory, args, None, RuntimeError) == 0
@@ -156,6 +170,8 @@ def direct_cleanup_check(runtime):
             assert cleaner.process(directory, {"123"}, args, None) > 0
             upload.assert_not_called()
     assert not directory.exists() and shared.read_text() == "shared log stays"
+    assert source.read_text() == 'keep original diagnostic'
+    assert (external_dir / 'keep.mp4').read_text() == 'keep original media'
     audit = json.loads((root / "completed_cleanup_audit.jsonl").read_text())
     assert audit["cloud_verified"] is False
     assert audit["status"] == "ended_local_before_remove"

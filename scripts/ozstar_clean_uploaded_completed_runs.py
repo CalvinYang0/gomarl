@@ -76,8 +76,8 @@ def job_index(log_root, wandb_root, repo, progress=False, job_ids=None):
     return result
 
 
-def snapshot(directory):
-    """Never follow links; allow only the SDK's debug-core.log link itself."""
+def snapshot(directory, allow_links=False):
+    """Never follow links; direct local cleanup may unlink any link itself."""
     result = {}
     def scan_error(error):
         raise error
@@ -87,10 +87,10 @@ def snapshot(directory):
             key = str(path.relative_to(directory))
             entry = path.lstat()
             if stat.S_ISLNK(entry.st_mode):
-                if key != "logs/debug-core.log":
+                if not allow_links and key != "logs/debug-core.log":
                     raise RuntimeError("Symlink in run directory; retain: " + str(path))
-                # Core points this at a shared service log. Snapshot the link,
-                # not its target (which may change for other running jobs).
+                # Snapshot the link, never its target. Direct cleanup unlinks
+                # SDK saved-file links too, preserving external source data.
                 result[key] = (entry.st_size, entry.st_mtime_ns, entry.st_ino,
                                os.readlink(path))
             elif stat.S_ISREG(entry.st_mode):
@@ -231,8 +231,8 @@ def process(directory, jobs, args, api_factory):
     if not match or not directory.is_dir():
         raise RuntimeError("Not an ordinary offline-run directory")
     data = directory / ("run-" + match.group(2) + ".wandb")
-    before = snapshot(directory)
     direct = getattr(args, "delete_ended_local", False)
+    before = snapshot(directory, allow_links=True) if direct else snapshot(directory)
     if ((not direct and not data.is_file()) or
             (before and time.time() - max(p[1] for p in before.values()) / 1e9 < args.min_age)):
         print("RETAIN missing/recently modified data: " + directory.name, flush=True)
@@ -247,7 +247,7 @@ def process(directory, jobs, args, api_factory):
             return 0
         if (jobs & live_jobs() or not all(job_finished(j, args.repo) for j in jobs) or
                 directory.is_symlink() or directory.resolve().parent != args.wandb_root or
-                not unchanged(before, snapshot(directory))):
+                not unchanged(before, snapshot(directory, allow_links=True))):
             raise RuntimeError("Job/files changed before local deletion; retain")
         audit = dict(time=time.time(), directory=str(directory), jobs=sorted(jobs),
                      bytes=size, cloud_verified=False, status="ended_local_before_remove")

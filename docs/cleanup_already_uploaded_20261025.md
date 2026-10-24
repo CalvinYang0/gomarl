@@ -27,3 +27,18 @@ quota -sv
 清理后以 quota 实测余量为准，不把候选文件体积当成已释放配额。
 脚本遇到单项核验失败会保留该项并继续，最后返回非零；即使如此也应执行 quota 检查已完成的部分清理。
 不自动启动新的训练或重新提交 12 个 SMAC 任务。
+
+## 人工确认备份后，不再查询云端
+
+用户已明确表示人工检查完成、不要继续云端核验。可以停止旧核验进程（当前终端 Ctrl+C），
+使用既有的 `--delete-ended-local` 模式，只清已证明结束且不再变化的本地 W&B run。
+此模式不校验 SDK 关闭记录或云端备份；是否可恢复取决于用户人工确认的备份。
+SDK 保存的文件/目录符号链接只删除链接本身，不跟随、不删除其指向的原文件。
+活动/未知任务、Sacred、作业日志、诊断原文件及云端记录仍保留。
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch &&
+git pull --ff-only origin codex/linear-id-baselines &&
+/home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_clean_uploaded_completed_runs.py --apply --delete-ended-local
+quota -sv
+```
