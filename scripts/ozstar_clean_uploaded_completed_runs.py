@@ -2,6 +2,7 @@
 """Per-job final sync, verify and remove ONLY closed local W&B offline runs.
 
 Preview by default. --apply permits final upload and irreversible local removal.
+--only-already-uploaded skips that upload: verify existing cloud backup or retain.
 Never delete Sacred, Slurm logs, shared caches, or a live/unknown job's records.
 --delete-ended-local explicitly skips upload/cloud checks for terminal jobs.
 """
@@ -261,13 +262,17 @@ def process(directory, jobs, args, api_factory):
         ",".join(sorted(jobs)), size / 1024**3, destination), flush=True)
     if not args.apply:
         return 0
-    print("SYNC final upload: " + directory.name, flush=True)
-    subprocess.run([sys.executable, "-m", "wandb", "sync", "--append",
-                    "--include-offline", "--include-synced", "--no-mark-synced",
-                    "--skip-console", "-e", args.entity, "-p", args.project, str(directory)],
-                   check=True, timeout=args.sync_timeout)
+    only_uploaded = getattr(args, "only_already_uploaded", False)
+    if only_uploaded:
+        print("CHECK existing cloud backup only; NO final upload: " + directory.name, flush=True)
+    else:
+        print("SYNC final upload: " + directory.name, flush=True)
+        subprocess.run([sys.executable, "-m", "wandb", "sync", "--append",
+                        "--include-offline", "--include-synced", "--no-mark-synced",
+                        "--skip-console", "-e", args.entity, "-p", args.project, str(directory)],
+                       check=True, timeout=args.sync_timeout)
     after_sync = snapshot(directory)
-    if not unchanged(before, after_sync, allow_sync_metadata=True):
+    if not unchanged(before, after_sync, allow_sync_metadata=not only_uploaded):
         raise RuntimeError("Run payload changed during final sync; retain")
     print("VERIFY full cloud history and saved files: " + destination, flush=True)
     remote = api_factory().run(destination)
@@ -279,6 +284,7 @@ def process(directory, jobs, args, api_factory):
     # Log evidence BEFORE irreversible removal; do not delete if disk cannot save audit.
     audit = dict(time=time.time(), directory=str(directory), jobs=sorted(jobs),
                  cloud=destination, bytes=size, history_points=points, verified_files=files,
+                 cloud_verified=True, final_sync_performed=not only_uploaded,
                  status="verified_before_remove")
     write_audit(args, audit)
     shutil.rmtree(directory)
@@ -297,8 +303,11 @@ def write_audit(args, audit):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--delete-ended-local", action="store_true",
-                        help="Delete terminal jobs' local W&B directories WITHOUT upload/cloud verification; irreversible")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--delete-ended-local", action="store_true",
+                      help="Delete terminal jobs' local W&B directories WITHOUT upload/cloud verification; irreversible")
+    mode.add_argument("--only-already-uploaded", action="store_true",
+                      help="Do not upload; remove only after full existing cloud history/file verification")
     parser.add_argument("--repo", type=Path, default=Path(os.environ.get("REPO_DIR", "/home/kyang/code/gomarl-dual-branch")))
     parser.add_argument("--runtime-root", type=Path, default=Path(os.environ.get("RUNTIME_ROOT", "/home/kyang/gomarl-runtime/gomarl-dual-branch")))
     parser.add_argument("--min-age", type=int, default=300)
@@ -327,6 +336,9 @@ def main():
     else:
         import wandb
         api_factory = lambda: wandb.Api(timeout=90)
+        if args.only_already_uploaded:
+            print("MODE already-uploaded only: no cloud writes; full history/files must already match, "
+                  "otherwise retain. Preview alone does not perform cloud verification.", flush=True)
     index = job_index(logs, args.wandb_root, args.repo, progress=True)
     print("INDEX done: {} run directories mapped".format(len(index)), flush=True)
     removed = failed = 0

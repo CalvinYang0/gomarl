@@ -164,6 +164,37 @@ def direct_cleanup_check(runtime):
     print("PASS: explicit ended-local mode skips SDK/cloud/upload; unfinished SDK record removable only with terminal job proof; live/unknown/requeued/recent/changing files protected, audit failure retains, shared/Sacred/job logs kept")
 
 
+def already_uploaded_check(runtime):
+    root = runtime / 'already-uploaded'
+    root.mkdir()
+    directory, _, remote, media, rows = fixture(root, 'already123')
+    args = SimpleNamespace(repo=runtime/'repo', wandb_root=root, apply=True,
+        only_already_uploaded=True, min_age=0, sync_timeout=10, entity='hjh331-sjtu', project='gomarl')
+    api = SimpleNamespace(run=lambda path: remote)
+    remote.scan_history = lambda **kwargs: iter(rows[:1])
+    assert expect_retained(directory, args, api, RuntimeError) == 0
+    remote.scan_history = lambda **kwargs: iter(deepcopy(rows))
+    digest = media.md5
+    media.md5 = 'SYNTHETIC mismatch'
+    assert expect_retained(directory, args, api, RuntimeError) == 0
+    media.md5 = digest
+    def unavailable(path): raise ConnectionError('SYNTHETIC cloud unavailable')
+    assert expect_retained(directory, args, SimpleNamespace(run=unavailable), ConnectionError) == 0
+    with patch.object(cleaner, 'write_audit', side_effect=OSError('SYNTHETIC audit failure')):
+        assert expect_retained(directory, args, api, OSError) == 0
+    with patch.object(cleaner, 'live_jobs', return_value=set()), \
+            patch.object(cleaner, 'job_finished', return_value=True), \
+            patch.object(cleaner.subprocess, 'run', side_effect=AssertionError('No final upload permitted')) as upload:
+        assert cleaner.process(directory, {'123'}, args, lambda: api) > 0
+        upload.assert_not_called()
+    assert not directory.exists()
+    audit = json.loads((root/'completed_cleanup_audit.jsonl').read_text())
+    assert audit['cloud_verified'] is True and audit['final_sync_performed'] is False
+    assert (runtime/'results/sacred/keep.json').is_file()
+    print('PASS: already-uploaded-only deletes only matching cloud backup; zero uploads; '
+          'missing history/media, cloud failure and audit failure retain local data')
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="gomarl-safe-cleanup-") as tmp:
         runtime = Path(tmp).resolve()
@@ -304,6 +335,7 @@ def main():
                 assert not cleaner.job_finished("123", args.repo)
         real_sdk_check(runtime)
         direct_cleanup_check(runtime)
+        already_uploaded_check(runtime)
     print("PASS: synthetic and real core SDK runs; exact terminal job proof, active/unknown/requeued protection, preview, failed sync/API/history/media verification retains; SDK debug link/dangling link accepted without following target, shared log preserved, replaced/non-SDK links blocked; audit failure retains, only verified W&B copy removed; Sacred/job logs kept")
 
 
