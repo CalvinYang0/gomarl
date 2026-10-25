@@ -29,14 +29,19 @@ def reference_plans(repo):
             if p['label'] == 'qmix']
 
 
-def build_plans(repo):
+def build_plans(repo, stage_steps=STAGE_STEPS, group=GROUP, suffix='refresh20261023'):
+    stage_steps = tuple(stage_steps)
+    if (not stage_steps or len(set(stage_steps)) != len(stage_steps)
+            or any(type(s) is not int or s <= 0 or s % 1000 for s in stage_steps)):
+        raise ValueError('Require distinct positive stage lengths in whole thousands of environment steps')
     plans = []
     for original in reference_plans(repo):
-        for stage in STAGE_STEPS:
+        for stage in stage_steps:
             plan = copy.deepcopy(original)
             label = 'qmix_state_refresh_{}k'.format(stage // 1000)
-            name = 'smac_5m6m_{}_10m_s{}_refresh20261023'.format(label, plan['seed'])
+            name = 'smac_5m6m_{}_10m_s{}_{}'.format(label, plan['seed'], suffix)
             rename(plan, name)
+            plan['exports']['GROUP_NAME'] = group
             extra = dict(arg.split('=', 1) for arg in shlex.split(plan['exports']['EXTRA_ARGS']))
             extra.update(learner='mixer_state_refresh_learner',
                          mixer_state_refresh_enabled='True',
@@ -51,8 +56,8 @@ def build_plans(repo):
                 'boundaries=floor(j*episode_limit/K); replay/target use collected held state; '
                 'actor obs live; no gate/aux loss/forced final frequency; 24h allocation'.format(stage))
             plans.append(plan)
-    if len(plans) != len({p['job_name'] for p in plans}) or len(plans) != 9:
-        raise RuntimeError('Expected exactly nine unique 5m6m refresh jobs')
+    if len(plans) != len({p['job_name'] for p in plans}) or len(plans) != len(stage_steps)*3:
+        raise RuntimeError('Expected three unique 5m6m refresh seeds per stage length')
     return plans
 
 
@@ -61,7 +66,7 @@ def require_capacity(quota):
         quota['free_gib'], quota['free_inodes'], MIN_FREE_GIB, MIN_FREE_INODES), flush=True)
     if quota['free_gib'] < MIN_FREE_GIB or quota['free_inodes'] < MIN_FREE_INODES:
         raise RuntimeError('Insufficient byte/inode headroom; no jobs submitted. Do not bypass the guard.')
-    print('Startup reserve only, not a nine-run lifetime capacity guarantee; '
+    print('Startup reserve only, not a full-batch lifetime capacity guarantee; '
           'existing periodic videos and diagnostics remain enabled.', flush=True)
 
 

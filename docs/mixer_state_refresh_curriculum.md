@@ -1,5 +1,31 @@
 # Mixer state 刷新频率消融（2026-10-23）
 
+## 2026-10-26：补充 5M / 10M 阶段长度
+
+只增加 5m_vs_6m 的 S=5,000,000、10,000,000 两组，各 seeds 1/2/3，共六个新 job。
+严格复用旧九任务的模型、两层 ELU 行动头、TD、采集、测试、视频和诊断配置；
+仍为约 10M 总训练（t_max=10,050,000）、24h，不重新提交 0.5M/1M/2M。
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch &&
+git pull --ff-only origin codex/linear-id-baselines &&
+SUBMIT=YES REPO_DIR="$PWD" /home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_submit_5m6m_mixer_state_refresh_slow_6jobs.py
+```
+
+批次为 `5m6m_mixer_state_refresh_slow_10m_6jobs_20261026`，名称分别为
+`smac_5m6m_qmix_state_refresh_5000k_10m_s{1,2,3}_refresh20261026` 和
+`smac_5m6m_qmix_state_refresh_10000k_10m_s{1,2,3}_refresh20261026`。
+新批次与旧九任务隔离，不拼接旧 seed 或断点续训；得到实际 job ID 才能确认提交。
+保留原 5 GiB / 50,000 inode 门槛、地图/模型检查、先全部 Slurm 预检及逐任务落盘回执。
+同名活动/成功任务保留；不清理空间、不降低门槛、不取消其他任务。
+
+协议没有改成永久 K=1：S=5M 时，T<5M 为 K=1、5M<=T<10M 为 K=2，
+T>=10M 为 K=3；S=10M 时，T<10M 为 K=1、T>=10M 为 K=2。
+由于沿用最后 50k 步预算余量，10M 阶段在余量部分可能采到 K=2 的 episode，
+最终评估也按当时 T 使用 K=2；不能将其描述为整个运行严格固定 K=1。
+每局 K 仍在 reset 固定，只冻结 mixer state；actor 实时 obs 不变。
+旧 `ozstar_upload_mixer_state_refresh_results.py` 仍仅处理原九任务，本次不更改或执行上传。
+
 ## 本轮设置
 
 先跑 5m_vs_6m。阶段长度 S 分别为 500,000、1,000,000、2,000,000 个训练环境步，
