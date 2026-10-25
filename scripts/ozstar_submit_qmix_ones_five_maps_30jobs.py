@@ -32,10 +32,15 @@ SMOKE_SCRIPTS = ('scripts/smoke_test_qmix_ones_five_maps.py',)
 MIN_FREE_GIB, MIN_FREE_INODES = 5.0, 50000
 
 
-def selected_scenes(domain):
+def selected_scenes(domain, scene=None):
     if domain not in {'smac', 'all'}:
         raise ValueError('domain must be smac or all')
-    return tuple(s for s in SCENES if domain == 'all' or s[2] == domain)
+    selected = tuple(s for s in SCENES if domain == 'all' or s[2] == domain)
+    if scene is not None:
+        selected = tuple(s for s in selected if s[0] == scene)
+        if not selected:
+            raise ValueError('Scene is not in selected domain: ' + scene)
+    return selected
 
 
 def group_for(domain):
@@ -43,14 +48,17 @@ def group_for(domain):
     return SMAC_GROUP if domain == 'smac' else GROUP
 
 
-def build_plans(repo, domain='all'):
-    scenes, group = selected_scenes(domain), group_for(domain)
+def build_plans(repo, domain='all', scene=None, model=None):
+    scenes, group = selected_scenes(domain, scene), group_for(domain)
+    if model is not None and model not in LABELS:
+        raise ValueError('Unknown model: ' + model)
+    labels = (model,) if model is not None else LABELS
     profiles = _load_profiles(repo)
     if profiles.ALL_PROFILES['baseline'] != {}:
         raise RuntimeError('Expected ungated baseline without auxiliary losses')
     plans = []
     for scene, map_name, domain, _, _ in scenes:
-        for label in LABELS:
+        for label in labels:
             for seed in SEEDS:
                 name = '{}_{}_10m_s{}_stateones20261025'.format(scene, label, seed)
                 plan = _plan(repo, profiles, scene, map_name, domain, 'linear_baseline', seed, name, '32G', group)
@@ -70,7 +78,7 @@ def build_plans(repo, domain='all'):
                         'fresh 10M, 24h, 28 CPU/32G; original domain rewards/evaluation preserved')
                 plan['sbatch_args'] = ['--time=1-00:00:00' if a.startswith('--time=') else a for a in plan['sbatch_args']]
                 plans.append(plan)
-    if len(plans) != len({p['job_name'] for p in plans}) or len(plans) != len(scenes)*6:
+    if len(plans) != len({p['job_name'] for p in plans}) or len(plans) != len(scenes)*len(labels)*len(SEEDS):
         raise RuntimeError('Unexpected job count for selected maps')
     return plans
 
@@ -121,8 +129,8 @@ def probe_grf(map_name):
             env.close()
 
 
-def validate_environments(domain='all'):
-    scenes = selected_scenes(domain)
+def validate_environments(domain='all', scene=None):
+    scenes = selected_scenes(domain, scene)
     from smac.env.starcraft2.maps.smac_maps import get_smac_map_registry
     registry = get_smac_map_registry()
     sc2 = Path(os.environ.get('SC2PATH', '/home/kyang/StarCraftII'))
@@ -148,17 +156,23 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--domain', choices=('smac', 'all'), default='smac',
                         help='Default smac: MMM2 and 3s5z_vs_3s6z only (12 jobs); all explicitly adds GRF (30 jobs)')
+    parser.add_argument('--scene', choices=[s[0] for s in SCENES],
+                        help='Select one scene without changing existing run names or duplicate-protection lock')
+    parser.add_argument('--model', choices=LABELS,
+                        help='Select one model; with one scene this submits only three seeds')
     parser.add_argument('--probe-grf', choices=[s[1] for s in SCENES if s[2] == 'grf'], help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.probe_grf:
         probe_grf(args.probe_grf)
         return
+    selected_scenes(args.domain, args.scene)
     if os.environ.get('SUBMIT') == 'YES':
         quota = subprocess.run(['quota', '-v'], check=True, text=True, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, timeout=30)
         require_capacity(parse_home_quota(quota.stdout))
-    submit_suite(group_for(args.domain), __file__, lambda repo: build_plans(repo, args.domain), SMOKE_SCRIPTS,
-                 map_validator=lambda: validate_environments(args.domain))
+    submit_suite(group_for(args.domain), __file__,
+                 lambda repo: build_plans(repo, args.domain, args.scene, args.model), SMOKE_SCRIPTS,
+                 map_validator=lambda: validate_environments(args.domain, args.scene))
 
 
 if __name__ == '__main__':

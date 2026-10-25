@@ -17,6 +17,26 @@ SUBMIT=YES REPO_DIR="$PWD" /home/kyang/.conda/envs/marl_cpu/bin/python -u script
 只有显式传入 `--domain all` 才加入三张 GRF 地图。代码的 `build_plans(repo)` 默认全图供历史测试使用，
 CLI 会显式传入实际选择，不把全图默认函数直接交给提交器。
 
+## 仅补 MMM2 普通 QMIX 三种子
+
+```bash
+cd /home/kyang/code/gomarl-dual-branch &&
+git pull --ff-only origin codex/linear-id-baselines &&
+SUBMIT=YES REPO_DIR="$PWD" /home/kyang/.conda/envs/marl_cpu/bin/python -u scripts/ozstar_submit_qmix_ones_five_maps_30jobs.py --scene smac_mmm2 --model qmix
+```
+
+仅 seeds 1/2/3，10M，24h；不提交 all-ones、其他 SMAC 地图或 GRF。
+沿用两层 ELU 行动头及本批训练设置，不切换官方 PyMARL2 基线。
+复用 `smac_mmm2_qmix_10m_s{1,2,3}_stateones20261025` 名称及整批的共享提交锁，
+同名活动/已完成任务保留；不是另起一套重复 baseline。
+保留 5 GiB/50,000 inode 门槛、MMM2 地图资源检查、模型合成测试、Slurm 预检和逐 job 回执。
+预览不能证明提交，得到 job ID 后才能确认。
+
+Corridor：用户提供的 sacct 证据确认 `qmix_onefill_p10` 重跑三种子
+19013237/19013243/19013249 已 COMPLETED；这不是普通 QMIX。
+旧普通 QMIX 提交器存在，但所见终端只有被 Ctrl+C 中断的启动命令，不能声称已完成。
+本次未授权补 Corridor，不增加其任务。
+
 ## 范围与口径
 
 用户要求在三个既有 GRF 场景、MMM2 和 3s5z_vs_3s6z 上比较普通 QMIX 与 all-ones。

@@ -38,6 +38,13 @@ def plan_checks():
     assert all(p['domain'] == 'smac' and p['exports']['GROUP_NAME'] == study.SMAC_GROUP for p in smac)
     validate_config_keys(ROOT, smac)
     validate_config_keys(ROOT, plans)
+    mmm2 = study.build_plans(ROOT, 'smac', 'smac_mmm2', 'qmix')
+    assert len(mmm2) == 3 and {p['seed'] for p in mmm2} == {1, 2, 3}
+    assert mmm2 == [p for p in smac if p['scene'] == 'smac_mmm2' and p['label'] == 'qmix']
+    validate_config_keys(ROOT, mmm2)
+    try: study.build_plans(ROOT, 'smac', 'grf_counter', 'qmix')
+    except ValueError: pass
+    else: raise AssertionError('A scene outside the chosen domain must fail')
     for scene, map_name, domain, _, _ in study.SCENES:
         for seed in study.SEEDS:
             pair = [p for p in plans if p['scene'] == scene and p['seed'] == seed]
@@ -137,8 +144,11 @@ def model_checks(plans):
             print('PASS:', map_name, optimizer, 'historical head/init; live actor; constant all W/b train/target; old ones algebra; TD update')
 
 
-def scheduler_checks(domain):
-    count = len(study.build_plans(ROOT, domain))
+def scheduler_checks(domain, scene=None, model=None):
+    count = len(study.build_plans(ROOT, domain, scene, model))
+    argv = ['--domain', domain]
+    if scene: argv += ['--scene', scene]
+    if model: argv += ['--model', model]
     with tempfile.TemporaryDirectory(prefix='SYNTHETIC-qmix-ones-submit-') as temp:
         logs = Path(temp)
         retained, calls = {}, []
@@ -167,14 +177,18 @@ def scheduler_checks(domain):
                     patch.object(base, 'completed_jobs', return_value={}), \
                     patch.object(base, 'run', side_effect=run_command), \
                     patch.object(subprocess, 'run', side_effect=subprocess_command):
-                study.main(['--domain', domain])
+                study.main(argv)
                 env_probe.assert_called_once()
                 assert calls.count('submit') == calls.count('preflight') == count
                 manifest = json.loads(next(logs.glob(study.group_for(domain)+'_*.json')).read_text())
                 retained.update(manifest['submitted'])
                 calls.clear()
-                study.main(['--domain', domain])
+                study.main(argv)
                 assert not calls, 'Repeated submit duplicated active jobs'
+                if scene is not None:
+                    # A later full-suite invocation must retain the same jobs.
+                    whole = study.build_plans(ROOT, domain)
+                    assert set(retained) <= {p['job_name'] for p in whole}
         finally:
             os.chdir(cwd)
     print('PASS:', domain, count, 'Slurm preflights before submission, manifest persistence, idempotence (all mocked)')
@@ -230,6 +244,8 @@ def smac_only_checks():
                 patch.object(installed, 'get_smac_map_registry', return_value=params), \
                 patch.object(subprocess, 'run', side_effect=AssertionError('SMAC-only cannot launch GRF probes')):
             study.validate_environments('smac')
+            (root/'Maps/3s5z_vs_3s6z.SC2Map').unlink()
+            study.validate_environments('smac', 'smac_mmm2')
     for argv in ([], ['--domain', 'smac']):
         with patch.dict(os.environ, SUBMIT='NO'), patch.object(study, 'submit_suite') as submit:
             study.main(argv)
@@ -237,7 +253,14 @@ def smac_only_checks():
             assert args[0] == study.SMAC_GROUP and len(args[2](ROOT)) == 12
             with patch.object(study, 'validate_environments') as validate:
                 kwargs['map_validator']()
-                validate.assert_called_once_with('smac')
+                validate.assert_called_once_with('smac', None)
+    with patch.dict(os.environ, SUBMIT='NO'), patch.object(study, 'submit_suite') as submit:
+        study.main(['--scene', 'smac_mmm2', '--model', 'qmix'])
+        args, kwargs = submit.call_args
+        assert args[0] == study.SMAC_GROUP and len(args[2](ROOT)) == 3
+        with patch.object(study, 'validate_environments') as validate:
+            kwargs['map_validator']()
+            validate.assert_called_once_with('smac', 'smac_mmm2')
     print('PASS: default/explicit SMAC-only = 12 jobs, dedicated cohort, no GRF simulator/probe/submission')
 
 
@@ -248,6 +271,7 @@ def main():
     smac_only_checks()
     scheduler_checks('all')
     scheduler_checks('smac')
+    scheduler_checks('smac', 'smac_mmm2', 'qmix')
 
 
 if __name__ == '__main__':
