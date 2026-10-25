@@ -19,6 +19,10 @@ CLI 会显式传入实际选择，不把全图默认函数直接交给提交器�
 
 ## 仅补 MMM2 普通 QMIX 三种子
 
+后续用户表示 MMM2 可能已在上一批提交，改为只补 Corridor。
+不要为此再次运行下面的 MMM2 命令；当前补跑入口见
+[Corridor baseline](corridor_value_diagnostics.md) 的 2026-10-25 节。
+
 ```bash
 cd /home/kyang/code/gomarl-dual-branch &&
 git pull --ff-only origin codex/linear-id-baselines &&
