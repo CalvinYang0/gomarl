@@ -56,7 +56,7 @@ def make_workspace(entity, project, run_id, records, summaries):
         layout_settings=ws.SectionLayoutSettings(columns=1, rows=2),
         panels=[wr.MediaBrowser(title=title, media_keys=[key], num_columns=1)
                 for title, key in summaries])]
-    names = [name for name in ('5m6m', '8m9m', 'mmm2', 'corridor')
+    names = [name for name in ('5m6m', '8m9m', 'mmm2', 'corridor', '3s5z')
              if any(r['section'] == name for r in records)]
     unknown = {r['section'] for r in records} - set(names)
     if unknown:
