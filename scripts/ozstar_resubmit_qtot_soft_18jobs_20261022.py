@@ -53,6 +53,9 @@ def parse_home_quota(output):
     """Parse quota -v (raw KiB/counts), never df or human-rounded quota -s."""
     rows = []
     for line in output.splitlines():
+        # quota's site wrapper can color either numbers or the usage summary.
+        # Strip only ANSI SGR styling; unknown extra columns still fail closed.
+        line = re.sub(r'\x1b\[[0-9;]*m', '', line)
         # OzSTAR appends a human-readable usage summary to the raw quota row.
         # Remove only this recognized suffix, retaining strict quota validation.
         line = re.sub(r'\s+\(Disk usage is at [^()\n]*\)\s*$', '', line)

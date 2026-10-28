@@ -55,18 +55,28 @@ Disk quotas for grp oz501 (gid 10855):
     assert current['free_gib'] == (20969520-15845771)/1024**2
     assert 4.88 < current['free_gib'] < 4.89
     assert current['used_kib'] == 15845771 and current['hard_inodes'] == 200000
+    # Exact colored summary from the October 28 failed soft+refresh submission.
+    colored = ('/home 18620972 0 20969520 - 165573 0 200000 - '
+               '(\x1b[40;33;01mDisk usage is at 88%, 17.8 GiB of 20.0 GiB\x1b[0m, '
+               'Inode usage is at 82%)')
+    colored_quota = rerun.parse_home_quota(colored)
+    assert colored_quota['free_gib'] == (20969520-18620972)/1024**2
+    assert colored_quota['free_inodes'] == 34427
+    assert rerun.parse_home_quota('\x1b[33m'+ozstar+'\x1b[0m') == current
+    assert rerun.parse_home_quota(colored.replace('18620972', '\x1b[1m18620972\x1b[0m')) == colored_quota
     for bad in ('', '/home 1 0 2 -', '/home 1M 0 20G - 10 0 200000 -',
                 '/home 1 0 0 - 10 0 200000 -', '/home 1 0 20000000 - 10 0 0 -',
                 '/home 1 0 20000000 - 10 0 200000 -\n/home 1 0 20000000 - 10 0 200000 -',
                 '/home 1 0 20000000 - 10 0 200000 - unexpected extra columns',
-                '/home 1 0 20000000 - 10 0 200000 - (Unrecognized summary)'):
+                '/home 1 0 20000000 - 10 0 200000 - (Unrecognized summary)',
+                '/home 1 0 20000000 - 10 0 200000 - (\x1b[33mUnrecognized summary\x1b[0m)'):
         try:
             rerun.parse_home_quota(bad)
         except RuntimeError:
             pass
         else:
             raise AssertionError('Unreadable quota was accepted: ' + bad)
-    for low in (q, current, dict(free_gib=20, free_inodes=49999), dict(free_gib=4.99, free_inodes=100000)):
+    for low in (q, current, colored_quota, dict(free_gib=20, free_inodes=49999), dict(free_gib=4.99, free_inodes=100000)):
         try:
             rerun.require_capacity(low)
         except RuntimeError:
@@ -86,6 +96,17 @@ Disk quotas for grp oz501 (gid 10855):
             assert 'Insufficient /home byte/inode headroom' in str(exc)
         else:
             raise AssertionError('Real insufficient quota reached submission')
+        submit.assert_not_called()
+    import ozstar_submit_soft_onefill_refresh_three_maps_18jobs as latest
+    with patch.dict(rerun.os.environ, SUBMIT='YES', REPO_DIR=str(repo)), \
+            patch.object(latest.subprocess, 'run', return_value=SimpleNamespace(stdout=colored)), \
+            patch.object(latest, 'submit_suite') as submit:
+        try:
+            latest.main()
+        except RuntimeError as exc:
+            assert 'Insufficient byte/inode headroom' in str(exc)
+        else:
+            raise AssertionError('Colored insufficient quota reached latest submission')
         submit.assert_not_called()
     import ozstar_calibration_suite_sync as sync
     expected = {str(job): p['job_name'] for job, p in zip(rerun.SOURCE_JOBS, sources)}
