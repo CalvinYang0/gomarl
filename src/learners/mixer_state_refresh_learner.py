@@ -8,7 +8,10 @@ from .clean_learner import CleanLearner
 from utils.mixer_state_refresh import validate, segments, source_times
 
 
-class MixerStateRefreshLearner(CleanLearner):
+class MixerStateRefreshAuditMixin:
+    """Audit/log/checkpoint held inputs without changing the underlying TD."""
+    refresh_architecture = 'historical_qmix_minimal'
+
     def __init__(self, mac, scheme, logger, args):
         validate(args)
         if not getattr(args, 'mixer_state_refresh_enabled', False):
@@ -19,7 +22,7 @@ class MixerStateRefreshLearner(CleanLearner):
         super().__init__(mac, scheme, logger, args)
         self.refresh_limit = int(args.mixer_state_refresh_episode_limit)
         self.refresh_log_t = -int(args.learner_log_interval)-1
-        self.refresh_contract = dict(version=1, architecture='historical_qmix_minimal',
+        self.refresh_contract = dict(version=1, architecture=self.refresh_architecture,
             stage_steps=args.mixer_state_refresh_stage_steps, episode_limit=self.refresh_limit,
             schedule='K=min(L,1+floor(collection_t_env/stage_steps)); boundaries=floor(j*L/K)',
             condition='state is collected held state; mixer_state_raw is original environment state',
@@ -74,3 +77,7 @@ class MixerStateRefreshLearner(CleanLearner):
         if not contract.is_file() or json.loads(contract.read_text()) != self.refresh_contract:
             raise ValueError('Mixer-state refresh checkpoint contract differs or is missing; use a fresh run')
         super().load_models(path)
+
+
+class MixerStateRefreshLearner(MixerStateRefreshAuditMixin, CleanLearner):
+    """Historical CleanLearner with unchanged collected-state checks."""
