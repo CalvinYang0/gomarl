@@ -143,9 +143,14 @@ def main(argv=None):
     with source_scope():
         rows = audit_jobs(repo, runtime, plans)
         ready, skipped = full_models(plans, rows)
-        report = dict(jobs=rows, skipped_mean3=skipped, originals=None, mean3=[], errors=[])
+        counts = {}
+        for row in rows:
+            counts[row['state']] = counts.get(row['state'], 0) + 1
+        print('JOB STATUS COUNTS: ' + json.dumps(counts, sort_keys=True), flush=True)
+        report = dict(jobs=rows, state_counts=counts, skipped_mean3=skipped, originals=None, mean3=[], errors=[])
         if args.status_only:
-            print('STATUS ONLY: {} / 7 models have three successful jobs; no uploads'.format(len(ready)), flush=True)
+            print('STATUS ONLY: {} / {} models have three successful jobs; no uploads'.format(
+                len(ready), len(ready)+len(skipped)), flush=True)
             return report
         output = runtime/'figures'/GROUP
         output.mkdir(parents=True, exist_ok=True)
@@ -169,9 +174,9 @@ def main(argv=None):
                 report['errors'].append('Original backfill incomplete; missing local source is NOT proof of missing cloud data')
         else:
             print('No confirmed terminal jobs to backfill', flush=True)
-        # Only seven exact model groups; partial/failed groups never become a complete mean3.
+        # Exact model groups only; partial/failed groups never become a complete mean3.
         import wandb
-        api = wandb.Api(timeout=30)
+        api = wandb.Api(timeout=30) if ready else None
         for selected in ready:
             scene, model = selected[0]['scene'], selected[0]['label']
             try:
