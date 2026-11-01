@@ -28,10 +28,13 @@ class SoftOneFillGateMixer(nn.Module):
         self.alpha_logit = self.temperature = None
         self.residual_scale = 0.
 
+    def coefficients(self):
+        return self.gate_logits.sigmoid()
+
     def gate_values(self, states, mode="train"):
         if mode not in {"train", "target", "eval"}:
             raise ValueError("Unknown soft one-fill forward mode")
-        return self.gate_logits.sigmoid().expand_as(states)
+        return self.coefficients().expand_as(states)
 
     def controlled_input(self, states, values):
         return values * states + (1 - values)

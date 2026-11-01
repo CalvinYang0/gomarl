@@ -67,6 +67,8 @@ mixer_onefill_kl_prior: 0.1  # KEEP probability, not a coefficient or drop proba
 mixer_onefill_mc_coef: 1.0
 mixer_onefill_residual: False  # all-ones base + centered raw W1/W2 residual, then abs
 mixer_onefill_residual_scale: 0.1  # fixed; residual output heads start at zero
+mixer_soft_gate_freeze_steps: 5000000 # opt-in freeze learners only; before first update at/after this step
+mixer_soft_gate_freeze_threshold: 0.9 # p > threshold => 1; equality and below => 0
 mixer_residual_fill_value: 1  # residual branch only: 0 => mask*state centered at R(0); base always all ones
 mixer_residual_combination: "centered"  # centered | bounded | sum | alpha_sum; opt-in two-branch weight composition
 mixer_residual_secondary_ones: False  # direct-sum control only; no operative field gate

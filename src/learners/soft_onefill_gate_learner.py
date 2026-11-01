@@ -27,7 +27,7 @@ class SoftOneFillGateLearner(OneFillGateLearner):
 
     def _snapshot(self, t_env, states=None, valid=None):
         import matplotlib.pyplot as plt
-        values = self.mixer.gate_logits.sigmoid().detach().cpu()
+        values = self.mixer.coefficients().detach().cpu()
         directory = Path(self.args.local_results_path) / "mixer_soft_onefill_gate" / self.args.unique_token
         directory.mkdir(parents=True, exist_ok=True)
         stem = "step_{:09d}_update_{:07d}".format(int(t_env), self.train_steps)
@@ -36,6 +36,11 @@ class SoftOneFillGateLearner(OneFillGateLearner):
             run_name=self.args.wandb_run_name, state_slot_names=self.names,
             gate_value=values.tolist(), contract=self.contract,
             note="Static sigmoid interpolation coefficients; not sampled masks or field importance; x=p*state+(1-p)")
+        if hasattr(self.mixer, 'freeze_metadata'):
+            record.update(gate_freeze=self.mixer.freeze_metadata())
+            record['note'] = 'Sigmoid warmup then fixed binary mask; closed fields fill 1; not a field-importance score'
+        elif not hasattr(self.mixer, 'gate_logits'):
+            record['note'] = 'Direct coefficient projected to [0,1] after each optimizer step; initial value is exactly 1'
         path.write_text(json.dumps(record, indent=2, allow_nan=False))
         fig, ax = plt.subplots(figsize=(max(14, len(self.names) * .15), 3), constrained_layout=True)
         try:
@@ -48,6 +53,10 @@ class SoftOneFillGateLearner(OneFillGateLearner):
                 title += ' / refresh={} / eval={}'.format(
                     getattr(self.args, 'mixer_state_refresh_schedule', 'linear'),
                     'every timestep' if getattr(self.args, 'mixer_state_refresh_eval_live', False) else 'training schedule')
+            if 'gate_freeze' in record:
+                title += ' / gate={}'.format('FROZEN binary' if record['gate_freeze']['frozen'] else 'trainable warmup')
+            elif not hasattr(self.mixer, 'gate_logits'):
+                title += ' / projected gate / initial=1 exactly'
             if self.args.wandb_run_name.startswith("SYNTHETIC"):
                 title = "SYNTHETIC QA — NOT EXPERIMENT DATA\n" + title
             ax.set_title(title)

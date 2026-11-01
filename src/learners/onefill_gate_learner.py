@@ -107,7 +107,14 @@ class OneFillGateLearner(MixerInputLearner):
                 p.requires_grad_(flag)
         return self.mc_coef * (prediction - g).square().mean(), int(indices.sum())
 
+    def _before_training_update(self, t_env):
+        """Opt-in gate scheduling; default historical learners do nothing."""
+
+    def _after_main_optimizer_step(self):
+        """Opt-in parameter projection, before target copy and diagnostics."""
+
     def train(self, batch, t_env, episode_num):
+        self._before_training_update(t_env)
         self.mac.agent.train()
         rewards, terminated = batch["reward"][:, :-1], batch["terminated"][:, :-1].float()
         valid = batch["filled"][:, :-1].float() * batch["filled"][:, 1:].float()
@@ -160,6 +167,7 @@ class OneFillGateLearner(MixerInputLearner):
             if not th.isfinite(gate_norm):
                 raise RuntimeError("Non-finite direct gate MC gradient")
         self.optimiser.step()
+        self._after_main_optimizer_step()
         if gate_grads is not None:
             self.gate_optimiser.step()
         self.train_steps += 1
@@ -170,7 +178,8 @@ class OneFillGateLearner(MixerInputLearner):
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
             metrics = dict(loss_td=td.item(), grad_norm=norm.item(),
                 td_error_abs=selected_error.abs().mean().item())
-            p = self.mixer.gate_logits.sigmoid().detach()
+            p = (self.mixer.coefficients() if hasattr(self.mixer, 'coefficients')
+                 else self.mixer.gate_logits.sigmoid()).detach()
             metrics.update({"mixer_input/loss_total": loss.item(), "mixer_input/train_updates": self.train_steps})
             if not self.mixer.secondary_ones:
                 metrics.update(self._gate_metrics(p))

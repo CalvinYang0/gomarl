@@ -19,7 +19,8 @@ def validate(args):
     if (getattr(args, 'clean_model_type', None) != 'qmix_minimal'
             or getattr(args, 'mixer', None) != 'qmix'
             or getattr(args, 'learner', None) not in {
-                'mixer_state_refresh_learner', 'soft_onefill_refresh_learner'}):
+                'mixer_state_refresh_learner', 'soft_onefill_refresh_learner',
+                'soft_onefill_freeze_refresh_learner'}):
         raise ValueError('Mixer-state refresh requires historical qmix_minimal + qmix + an audited refresh learner')
     interval = getattr(args, 'mixer_state_refresh_stage_steps', None)
     if isinstance(interval, bool) or not isinstance(interval, int) or interval <= 0:
