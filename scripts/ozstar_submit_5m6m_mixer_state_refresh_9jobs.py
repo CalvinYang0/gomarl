@@ -67,7 +67,7 @@ def require_capacity(quota):
     if quota['free_gib'] < MIN_FREE_GIB or quota['free_inodes'] < MIN_FREE_INODES:
         raise RuntimeError('Insufficient byte/inode headroom; no jobs submitted. Do not bypass the guard.')
     print('Startup reserve only, not a full-batch lifetime capacity guarantee; '
-          'existing periodic videos and diagnostics remain enabled.', flush=True)
+          'media follow the runtime policy; existing running jobs are unchanged.', flush=True)
 
 
 def main():

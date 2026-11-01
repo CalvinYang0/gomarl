@@ -83,6 +83,9 @@ def session_and_requirements(mac, batch, logger):
         args.wandb_run_name = args.name
         args.local_results_path = temp
         args.test_visualizations_required = True
+        # This case explicitly exercises legacy mandatory-video behavior.
+        args.disable_video_media = False
+        args.test_battle_videos = True
         logger.use_wandb, logger.wandb_current_t, logger.wandb_current_data = True, 1000000, {}
         logger.wandb_module = SimpleNamespace(Image=lambda path: path)
         logger.wandb = SimpleNamespace(log=lambda *args, **kwargs: None)

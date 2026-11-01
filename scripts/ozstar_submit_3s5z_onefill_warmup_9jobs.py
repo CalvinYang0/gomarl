@@ -16,7 +16,7 @@ MODES = {
     'freeze5m': ('qmix_soft_onefill_p10_freeze5m_t90', 'soft_onefill_freeze_learner', False, '0.1'),
     'freeze5m_refresh': ('qmix_soft_onefill_p10_freeze5m_t90_refresh2000k', 'soft_onefill_freeze_refresh_learner', True, '0.1'),
 }
-SMOKE_SCRIPTS = ('scripts/smoke_test_onefill_warmup_freeze.py',)
+SMOKE_SCRIPTS = ('scripts/smoke_test_no_video_startup.py', 'scripts/smoke_test_onefill_warmup_freeze.py')
 
 
 def build_plans(repo, variant='all'):

@@ -9,17 +9,27 @@ from utils.battle_video import check_video_dependencies
 def preflight_visualizations(args):
     if args.env != "sc2" or not getattr(args, "test_visualizations_required", False):
         return
-    for key in ("test_battle_videos", "test_policy_importance"):
+    # Required image diagnostics remain mandatory. The no-video policy is a
+    # supported production configuration, not a reason to disable ALL checks.
+    video_required = not getattr(args, "disable_video_media", True)
+    required_keys = ["test_policy_importance"]
+    prefixes = ["test_policy_importance"]
+    if video_required:
+        required_keys.append("test_battle_videos")
+        prefixes.append("test_battle_video")
+    for key in required_keys:
         if not getattr(args, key, False):
             raise ValueError("Required SMAC visualization disabled: " + key +
                              "; short/debug runs may explicitly set test_visualizations_required=False")
     try:
-        check_video_dependencies()
+        if video_required:
+            check_video_dependencies()
         import matplotlib.pyplot  # noqa: F401
     except Exception as exc:
-        raise RuntimeError("Required SMAC visualization dependencies missing; install imageio, "
-                           "imageio-ffmpeg, Pillow and matplotlib BEFORE launch") from exc
-    for prefix in ("test_battle_video", "test_policy_importance"):
+        dependencies = "imageio, imageio-ffmpeg, Pillow and matplotlib" if video_required else "matplotlib"
+        raise RuntimeError("Required SMAC visualization dependencies missing; install " +
+                           dependencies + " BEFORE launch") from exc
+    for prefix in prefixes:
         if int(getattr(args, prefix + "_interval", 0)) <= 0:
             raise ValueError("Invalid visualization interval: " + prefix)
         count = int(getattr(args, prefix + "_episodes", 0))

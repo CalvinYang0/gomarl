@@ -15,7 +15,7 @@ MODES = {
     'faster_stages': ('qmix_soft_onefill_p10_refresh_faststages8m_evallive', 'faster_stages'),
     'larger_jumps': ('qmix_soft_onefill_p10_refresh_bigjumps8m_evallive', 'larger_jumps'),
 }
-SMOKE_SCRIPTS = ('scripts/smoke_test_refresh_live_schedules.py',)
+SMOKE_SCRIPTS = ('scripts/smoke_test_no_video_startup.py', 'scripts/smoke_test_refresh_live_schedules.py')
 
 
 def build_plans(repo, variant='all'):
