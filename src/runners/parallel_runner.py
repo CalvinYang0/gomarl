@@ -237,7 +237,7 @@ class ParallelRunner:
 
     def reset(self, test_mode=False):
         self.batch = self.new_batch()
-        self.mixer_state_cache = begin_mixer_state_refresh(self.args, self.episode_limit, self.batch_size, self.t_env)
+        self.mixer_state_cache = begin_mixer_state_refresh(self.args, self.episode_limit, self.batch_size, self.t_env, test_mode=test_mode)
 
         for env_idx in range(self.batch_size):
             self._send_worker(env_idx, "reset", None)

@@ -44,6 +44,10 @@ class SoftOneFillGateLearner(OneFillGateLearner):
             ax.set_xticks(range(len(self.names)), labels=self.names, rotation=90, fontsize=6)
             title = "{} / soft one-fill / seed={} / step={} / x=p*state+(1-p); no sampling".format(
                 self.args.env_args.get("map_name"), self.args.seed, t_env)
+            if getattr(self.args, 'mixer_state_refresh_enabled', False):
+                title += ' / refresh={} / eval={}'.format(
+                    getattr(self.args, 'mixer_state_refresh_schedule', 'linear'),
+                    'every timestep' if getattr(self.args, 'mixer_state_refresh_eval_live', False) else 'training schedule')
             if self.args.wandb_run_name.startswith("SYNTHETIC"):
                 title = "SYNTHETIC QA — NOT EXPERIMENT DATA\n" + title
             ax.set_title(title)

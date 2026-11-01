@@ -5,7 +5,7 @@ from pathlib import Path
 import torch as th
 
 from .clean_learner import CleanLearner
-from utils.mixer_state_refresh import validate, segments, source_times
+from utils.mixer_state_refresh import validate, scheduled_segments, source_times
 
 
 class MixerStateRefreshAuditMixin:
@@ -28,6 +28,15 @@ class MixerStateRefreshAuditMixin:
             condition='state is collected held state; mixer_state_raw is original environment state',
             target='same collected state and its recorded next snapshot; no current-stage reinterpretation',
             terminal='t=L holds last segment', stage_scope='fixed per episode/reset rollout batch')
+        mode = getattr(args, 'mixer_state_refresh_schedule', 'linear')
+        eval_live = getattr(args, 'mixer_state_refresh_eval_live', False)
+        if mode != 'linear' or eval_live:
+            self.refresh_contract.update(version=2, schedule_mode=mode, eval_live=eval_live,
+                full_steps=getattr(args, 'mixer_state_refresh_full_steps', 8000000) if mode != 'linear' else None,
+                schedule={'linear': 'legacy K=min(L,1+floor(t/S))',
+                    'faster_stages': 'K=1+floor((L-1)*(min(t,H)/H)^2)',
+                    'larger_jumps': 'K=ceil(L**(min(floor(t/S),H/S)/(H/S)))'}[mode],
+                terminal='live stages and eval_live include t=L; otherwise hold last segment')
 
     def _check_batch(self, batch):
         valid = batch['filled'].squeeze(-1).bool()
@@ -38,9 +47,11 @@ class MixerStateRefreshAuditMixin:
             raise ValueError('Replay exceeds configured maximum episode length')
         expected = []
         for count, t_env in zip(counts.tolist(), collected.tolist()):
-            if count != segments(t_env, self.args.mixer_state_refresh_stage_steps, self.refresh_limit):
+            if count != scheduled_segments(self.args, t_env, self.refresh_limit):
                 raise ValueError('Replay segment count differs from its collection-time stage')
-            expected.append(source_times(self.refresh_limit, count, batch.max_seq_length))
+            live = (getattr(self.args, 'mixer_state_refresh_schedule', 'linear') != 'linear'
+                    and count == self.refresh_limit)
+            expected.append(source_times(self.refresh_limit, count, batch.max_seq_length, live_terminal=live))
         expected = sources.new_tensor(expected)
         if not th.equal(sources[valid], expected[valid]):
             raise ValueError('Replay source timestamps differ from maximum-length partition')
@@ -57,7 +68,7 @@ class MixerStateRefreshAuditMixin:
         valid, sources, counts = self._check_batch(batch)
         result = super().train(batch, t_env, episode_num)
         if t_env-self.refresh_log_t >= self.args.learner_log_interval:
-            current = segments(t_env, self.args.mixer_state_refresh_stage_steps, self.refresh_limit)
+            current = scheduled_segments(self.args, t_env, self.refresh_limit)
             self.logger.log_stat('mixer_input/refresh_current_segments', current, t_env)
             self.logger.log_stat('mixer_input/refresh_replay_segments_mean', counts.float().mean().item(), t_env)
             self.logger.log_stat('mixer_input/refresh_replay_segments_min', counts.min().item(), t_env)

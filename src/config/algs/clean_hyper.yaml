@@ -27,9 +27,12 @@ qmix_condition_input: "state"  # state | ones; same plain QMixer/CleanLearner, a
 
 # Opt-in curriculum, historical qmix_minimal actor only. The collected `state`
 # field is held for K equal maximum-length episode segments; raw state is kept
-# separately. No gates, extra loss or forced final timestep-frequency stage.
+# separately. Legacy mode has no forced final timestep-frequency stage.
 mixer_state_refresh_enabled: False
 mixer_state_refresh_stage_steps: 1000000
+mixer_state_refresh_schedule: "linear" # legacy +1 K/stage | faster_stages | larger_jumps
+mixer_state_refresh_full_steps: 8000000 # new schedules reach live state at this training step
+mixer_state_refresh_eval_live: False # opt-in: test mixer state updates at EVERY timestep
 
 # Independent slot-input controls. These do not alter existing clean models.
 double_q: True

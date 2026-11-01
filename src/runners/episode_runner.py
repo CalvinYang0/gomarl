@@ -73,7 +73,7 @@ class EpisodeRunner:
         self.batch = self.new_batch()
         self.env.reset()
         self.t = 0
-        self.mixer_state_cache = begin_mixer_state_refresh(self.args, self.episode_limit, 1, self.t_env)
+        self.mixer_state_cache = begin_mixer_state_refresh(self.args, self.episode_limit, 1, self.t_env, test_mode=test_mode)
 
     def run(self, test_mode=False):
         self.reset(test_mode=test_mode)
