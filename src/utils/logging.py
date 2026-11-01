@@ -20,6 +20,7 @@ class Logger:
         # probability summaries are uploaded.
         self.wandb_minimal_logging = True
         self.wandb_test_gate_trajectory = True
+        self.disable_video_media = True
         self.media_interval = 100000
         self._media_last = {}
 
@@ -109,6 +110,7 @@ class Logger:
 
         self.use_wandb = True
         self.wandb_module = wandb
+        self.disable_video_media = bool(config.get("disable_video_media", True))
         self.wandb_minimal_logging = bool(
             config.get("wandb_minimal_logging", True)
         )
@@ -471,7 +473,7 @@ class Logger:
 
     def log_test_battle_video(self, path, t, episode, trace, fps=6):
         """Separate stable keys prevent ten clips at one step overwriting each other."""
-        if not self.use_wandb:
+        if not self.use_wandb or self.disable_video_media:
             return
         caption = "{} seed {} | episode {} | {} | t_env={}".format(
             trace.get("map_name"), trace.get("seed"), episode,
@@ -486,7 +488,7 @@ class Logger:
 
         if self.wandb_minimal_logging:
             video_path = paths.get("video")
-            if video_path:
+            if video_path and not self.disable_video_media:
                 video_format = "gif" if video_path.endswith(".gif") else "mp4"
                 self._update_wandb_buffer(
                     "test_trajectory_video",
@@ -515,7 +517,7 @@ class Logger:
                 self.wandb_module.Image(paths["alignment"]),
                 t,
             )
-        if "relation_dynamics_video" in paths:
+        if "relation_dynamics_video" in paths and not self.disable_video_media:
             video_path = paths["relation_dynamics_video"]
             video_format = "gif" if video_path.endswith(".gif") else "mp4"
             self._update_wandb_buffer(
@@ -523,7 +525,7 @@ class Logger:
                 self.wandb_module.Video(video_path, fps=fps, format=video_format),
                 t,
             )
-        if "video" in paths:
+        if "video" in paths and not self.disable_video_media:
             video_path = paths["video"]
             video_format = "gif" if video_path.endswith(".gif") else "mp4"
             self._update_wandb_buffer(

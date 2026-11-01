@@ -61,7 +61,8 @@ battle_trace_make_video: False # Do not render mp4/gif during training
 battle_trace_frame_stride: 1 # Render every Nth environment frame into video
 battle_trace_fps: 6 # Video playback FPS
 battle_trace_similarity_sample_size: 256 # Max agent-time samples for similarity heatmaps
-test_battle_videos: True # Future SMAC runs: first 10 normal test episodes at each 1M milestone
+disable_video_media: True # User storage policy: overrides suite video flags; keep scalar/image diagnostics
+test_battle_videos: False # No video capture/render/upload for future runs by default
 test_battle_video_interval: 1000000
 test_battle_video_episodes: 10 # Not an additional evaluation suite; requires test_nepisode >= 10
 test_battle_video_fps: 6 # One frame per environment decision; simulated top-down view

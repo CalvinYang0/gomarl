@@ -341,7 +341,8 @@ def run_sequential(args, logger):
     model_save_time = 0
     last_battle_trace_T = 0
     battle_videos = BattleVideoSession(args, logger)
-    if args.env == "sc2" and getattr(args, "test_visualizations_required", False) and not battle_videos.enabled:
+    if (args.env == "sc2" and getattr(args, "test_visualizations_required", False)
+            and not getattr(args, "disable_video_media", True) and not battle_videos.enabled):
         raise RuntimeError("Required SMAC battle videos unavailable; training has not started")
     test_video_written = False
     behavior_collection_index = 0
@@ -505,6 +506,11 @@ def run_sequential(args, logger):
 
 
 def args_sanity_check(config, _log):
+
+    # Apply after all suite/CLI flags have been merged. Old suites explicitly
+    # enable videos; changing only default.yaml would not disable those runs.
+    from utils.video_media_policy import apply_video_media_policy
+    apply_video_media_policy(config)
 
     # set CUDA flags
     # config["use_cuda"] = True # Use cuda whenever possible!

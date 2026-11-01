@@ -30,6 +30,8 @@ results_path = os.environ.get(
 def my_main(_run, _config, _log):
     # Setting the random seed throughout the modules
     config = config_copy(_config)
+    from utils.video_media_policy import apply_video_media_policy
+    apply_video_media_policy(config)
     torch_num_threads = config.get("torch_num_threads")
     if torch_num_threads is None and not bool(config.get("use_cuda", False)):
         torch_num_threads = os.environ.get("SLURM_CPUS_PER_TASK")
