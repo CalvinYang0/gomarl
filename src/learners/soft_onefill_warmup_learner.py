@@ -28,6 +28,17 @@ class ProjectedOneFillGateLearner(SoftOneFillGateLearner):
                 raise ValueError('Projected gate checkpoint is outside [0,1]')
 
 
+class ProjectedOneFillRefreshLearner(MixerStateRefreshAuditMixin, ProjectedOneFillGateLearner):
+    """Same projected gate/TD, after collection-time raw-state refresh."""
+    refresh_architecture = 'historical_qmix_minimal_projected_onefill_initial1'
+
+    def __init__(self, mac, scheme, logger, args):
+        super().__init__(mac, scheme, logger, args)
+        self.contract.update(architecture='single_qmix_projected_onefill_initial1_with_refresh',
+            mixer_state_refresh=self.refresh_contract,
+            state_selection='collected held raw state BEFORE direct gate interpolation')
+
+
 class WarmupFreezeOneFillLearner(SoftOneFillGateLearner):
     mixer_class = WarmupFreezeOneFillGateMixer
 
