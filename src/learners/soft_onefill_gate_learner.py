@@ -38,9 +38,11 @@ class SoftOneFillGateLearner(OneFillGateLearner):
             note="Static sigmoid interpolation coefficients; not sampled masks or field importance; x=p*state+(1-p)")
         if hasattr(self.mixer, 'freeze_metadata'):
             record.update(gate_freeze=self.mixer.freeze_metadata())
-            record['note'] = 'Sigmoid warmup then fixed binary mask; closed fields fill 1; not a field-importance score'
+            kind = 'Sigmoid' if hasattr(self.mixer, 'gate_logits') else 'Projected'
+            record['note'] = kind+' warmup then fixed binary mask; closed fields fill 1; not a field-importance score'
         elif not hasattr(self.mixer, 'gate_logits'):
-            record['note'] = 'Direct coefficient projected to [0,1] after each optimizer step; initial value is exactly 1'
+            record['note'] = ('Direct coefficient projected to [0,1] after each optimizer step; initial value={:g}'
+                .format(self.contract['initial_probability']))
         path.write_text(json.dumps(record, indent=2, allow_nan=False))
         fig, ax = plt.subplots(figsize=(max(14, len(self.names) * .15), 3), constrained_layout=True)
         try:
@@ -56,7 +58,7 @@ class SoftOneFillGateLearner(OneFillGateLearner):
             if 'gate_freeze' in record:
                 title += ' / gate={}'.format('FROZEN binary' if record['gate_freeze']['frozen'] else 'trainable warmup')
             elif not hasattr(self.mixer, 'gate_logits'):
-                title += ' / projected gate / initial=1 exactly'
+                title += ' / projected gate / initial={:g}'.format(self.contract['initial_probability'])
             if self.args.wandb_run_name.startswith("SYNTHETIC"):
                 title = "SYNTHETIC QA — NOT EXPERIMENT DATA\n" + title
             ax.set_title(title)
