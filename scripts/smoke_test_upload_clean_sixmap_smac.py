@@ -81,6 +81,27 @@ def main():
         assert len(list((runtime/'results').rglob('*.json'))) == 3
         entries = (runtime/'wandb/completed_cleanup_audit.jsonl').read_text().splitlines()
         assert len(entries) == 2 and all(json.loads(x)['cloud_verified'] for x in entries)
+        rows[2]['state'] = 'TIMEOUT'
+        known = dict(id='demo103', name=group[2]['job_name'], lastHistoryStep=8123000)
+        upload_api = SimpleNamespace(Api=lambda **kw: SimpleNamespace(run=lambda dest: SimpleNamespace(**known)))
+        snapshot = SimpleNamespace(run_id='demo103', entity='hjh331-sjtu', project='gomarl',
+                                   history_count=10, last_step=8123000)
+        with patch.dict('sys.modules', {'wandb': upload_api}), \
+                patch.object(suite.integrity, 'audit_latest', return_value=rows), \
+                patch.object(suite.cleanup, 'live_jobs', return_value={'104'}), \
+                patch.object(suite.verified_sync, 'read_snapshot', return_value=snapshot), \
+                patch.object(suite.cleanup.subprocess, 'run') as sync, \
+                patch.object(suite, 'clean_original', side_effect=AssertionError('Upload-only cannot delete')):
+            try:
+                suite.run(repo, runtime, False, upload_only=True)
+            except SystemExit as exc:
+                assert 'PARTIAL' in str(exc)
+            sync.assert_not_called()
+        report = json.loads((runtime/'figures'/suite.GROUP/'upload_only_report.json').read_text())
+        assert report['originals'][2]['last_step'] == 8123000
+        assert report['originals'][2]['slurm_state'] == 'TIMEOUT'
+        assert report['originals'][3]['status'] == 'unverified' and not report['groups']
+        assert originals['103'].is_dir() and unowned.is_dir()
         name = group[2]['job_name']
         link = originals['103']/'files/step_000010000_update_0000001.json'
         link.resolve().write_text(json.dumps({'run_name': 'another job'}))

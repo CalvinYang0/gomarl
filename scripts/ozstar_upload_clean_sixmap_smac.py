@@ -145,7 +145,87 @@ def save_report(path, report):
     temp.replace(path)
 
 
-def run(repo, runtime, apply):
+def upload_original(directory, job, name, runtime, repo, api_factory):
+    root = runtime/'wandb'
+    if directory.is_symlink() or directory.resolve().parent != root or not directory.is_dir():
+        raise RuntimeError('Unsafe local run path: '+str(directory))
+    match = cleanup.RUN_RE.fullmatch(directory.name)
+    if not match:
+        raise RuntimeError('Not an offline W&B run directory: '+str(directory))
+    rid = match.group(2)
+    data = directory/('run-'+rid+'.wandb')
+    if data.is_symlink() or not data.is_file():
+        raise RuntimeError('Missing or linked original W&B record: '+str(data))
+    snapshot = verified_sync.read_snapshot(directory)
+    if (snapshot.run_id != rid or snapshot.project != PROJECT.split('/')[1] or
+            snapshot.entity not in ('', PROJECT.split('/')[0]) or not snapshot.history_count):
+        raise RuntimeError('Unexpected original run destination or no readable history: '+str(directory))
+    destination = PROJECT+'/'+rid
+
+    def current():
+        remote = api_factory().run(destination)
+        if remote.id != rid or remote.name != name:
+            raise ValueError('Cloud run ID/name differs from job ownership: '+destination)
+        if remote.lastHistoryStep is None or remote.lastHistoryStep < snapshot.last_step:
+            raise RuntimeError('Cloud history behind local snapshot: '+destination)
+
+    try:
+        current()
+    except ValueError:
+        raise
+    except Exception:
+        if job in cleanup.live_jobs() or not cleanup.job_finished(job, repo):
+            raise RuntimeError('Job no longer confirmed ended: '+job)
+        subprocess.run([sys.executable, str(Path(verified_sync.__file__).resolve()), str(directory),
+                        '-e', PROJECT.split('/')[0], '-p', PROJECT.split('/')[1]],
+                       check=True, timeout=900)
+        current()
+        status = 'synced; cloud history endpoint verified'
+    else:
+        status = 'already present; cloud history endpoint verified'
+    print('ORIGINAL {}: {} ({}, step={})'.format(job, status, destination, snapshot.last_step), flush=True)
+    return dict(run_id=rid, url='https://wandb.ai/'+PROJECT+'/runs/'+rid,
+                last_step=snapshot.last_step, status=status)
+
+
+def upload_ended(repo, runtime, rows, output, report, path, api_factory):
+    live = cleanup.live_jobs()
+    selected = {r['job_ids'][0]: r for r in rows if len(r['job_ids']) == 1 and
+                r['state'] in cleanup.TERMINAL and r['job_ids'][0] not in live}
+    jobs = {job: row['name'] for job, row in selected.items()}
+    directories = owned_directories(repo, runtime, jobs)
+    for row in rows:
+        item = dict(name=row['name'], slurm_state=row['state'], jobs=row['job_ids'])
+        report['originals'].append(item)
+        try:
+            ids = row['job_ids']
+            if len(ids) != 1 or ids[0] not in selected:
+                raise RuntimeError('Job not confirmed terminal')
+            job = ids[0]
+            targets = [d for d in directories[job] if d.exists() or d.is_symlink()]
+            if len(targets) != 1:
+                if targets:
+                    raise RuntimeError('Multiple local originals; cannot select unambiguously')
+                # A prior verified cleanup may have removed the local copy. Check
+                # only the original ID established by this exact job's log.
+                known = directories[job]
+                if len(known) != 1:
+                    raise RuntimeError('No local original or unique logged W&B ID')
+                rid = cleanup.RUN_RE.fullmatch(known[0].name).group(2)
+                remote = api_factory().run(PROJECT+'/'+rid)
+                if remote.id != rid or remote.name != row['name'] or remote.lastHistoryStep is None:
+                    raise RuntimeError('Original without local copy not confirmed on W&B')
+                item.update(run_id=rid, last_step=remote.lastHistoryStep, status='cloud present; no local copy')
+            else:
+                item.update(upload_original(targets[0], job, row['name'], runtime, repo, api_factory))
+        except Exception as exc:
+            item.update(status='unverified', error=str(exc))
+            report['errors'].append('{}: {}'.format(row['name'], exc))
+            print('ORIGINAL UNVERIFIED {}: {}'.format(row['name'], exc), flush=True)
+        save_report(path, report)
+
+
+def run(repo, runtime, apply, upload_only=False):
     plans = cohort.build_plans(repo, 'smac')
     if len(plans) != 27 or {p['scene'] for p in plans} != set(SCENES):
         raise RuntimeError('Expected exactly the Nov13 SMAC transfer cohort')
@@ -157,12 +237,12 @@ def run(repo, runtime, apply):
     ready, skipped = up.full_models(plans, [dict(r, state='LIVE_QUEUE') if live.intersection(r['job_ids'])
                                            else r for r in rows])
     print('Three COMPLETED seeds: {}/9 groups; test history must still reach 10M'.format(len(ready)), flush=True)
-    if not apply or not ready:
+    if not (apply or upload_only) or (not ready and not upload_only):
         return
     output = runtime/'figures'/GROUP
     output.mkdir(parents=True, exist_ok=True)
-    path = output/'upload_report.json'
-    report = dict(jobs=rows, skipped=skipped, groups=[], errors=[])
+    path = output/('upload_only_report.json' if upload_only else 'upload_report.json')
+    report = dict(jobs=rows, skipped=skipped, groups=[], originals=[], errors=[])
     import wandb
     api = wandb.Api(timeout=30)
     api_factory = lambda: wandb.Api(timeout=90)
@@ -172,6 +252,8 @@ def run(repo, runtime, apply):
         except BlockingIOError:
             raise SystemExit('W&B shared sync lock busy; nothing uploaded or removed by this command')
         save_report(path, report)
+        if upload_only:
+            upload_ended(repo, runtime, rows, output, report, path, api_factory)
         for selected in ready:
             scene, label = selected[0]['scene'], selected[0]['label']
             group = dict(scene=scene, model=label, originals=[])
@@ -193,6 +275,8 @@ def run(repo, runtime, apply):
                 report['errors'].append('{} {}: {}'.format(scene, label, exc))
                 print('RETAIN GROUP: {} {}: {}'.format(scene, label, exc), flush=True)
                 save_report(path, report)
+                continue
+            if upload_only:
                 continue
             for job, name in jobs.items():
                 targets = [d for d in directories[job] if d.exists() or d.is_symlink()]
@@ -216,13 +300,18 @@ def run(repo, runtime, apply):
                if item['status'] == 'verified then removed']
     print('Mean3 verified: {}; local copies removed: {}; report: {}'.format(
         sum('mean3' in group for group in report['groups']), len(removed), path), flush=True)
+    if upload_only:
+        print('Original run visibility/history endpoint checks: {}/{}; no cleanup or submission'.format(
+            sum(item['status'] != 'unverified' for item in report['originals']), len(rows)), flush=True)
     if report['errors']:
-        raise SystemExit('PARTIAL: unverified local copies retained; see report')
+        raise SystemExit('PARTIAL: see report; unverified local copies retained')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--apply', action='store_true', help='Upload and remove only fully verified local W&B copies')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--apply', action='store_true', help='Upload and remove only fully verified local W&B copies')
+    mode.add_argument('--upload-only', action='store_true', help='All ended originals and complete mean3; never delete')
     parser.add_argument('--job-repo', type=Path, default=Path('/home/kyang/code/gomarl-sixmap-9b8d3a2'))
     parser.add_argument('--runtime-root', type=Path, default=Path('/home/kyang/gomarl-runtime/gomarl-dual-branch'))
     args = parser.parse_args()
@@ -230,7 +319,7 @@ def main():
     if (runtime.resolve(strict=True) != runtime or Path('/home/kyang') not in runtime.parents or
             any(not p.is_dir() or p.is_symlink() for p in (runtime/'wandb', runtime/'ozstar_logs'))):
         raise SystemExit('Unsafe runtime/W&B/log root')
-    run(repo, runtime, args.apply)
+    run(repo, runtime, args.apply, args.upload_only)
 
 
 if __name__ == '__main__':
