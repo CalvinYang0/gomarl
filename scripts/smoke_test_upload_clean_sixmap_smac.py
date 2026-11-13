@@ -72,6 +72,9 @@ def main():
             else:
                 raise AssertionError('Expected one unverified original to be retained')
             sync.assert_called_once()
+            assert Path(sync.call_args.args[0][1]).name == 'ozstar_wandb_sync_verified.py'
+            assert sync.call_args.args[0][2:] == [str(originals['103']), '-e', 'hjh331-sjtu', '-p', 'gomarl']
+            assert sync.call_args.kwargs == dict(check=True, timeout=900)
         assert order == ['render', 'publish']
         assert not originals['101'].exists() and not originals['102'].exists()
         assert originals['103'].is_dir() and unowned.is_dir()

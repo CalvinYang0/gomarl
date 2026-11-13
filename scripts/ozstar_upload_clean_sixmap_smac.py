@@ -6,12 +6,16 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
+import sys
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import ozstar_clean_uploaded_completed_runs as cleanup
 import ozstar_submit_projected_faststages_six_maps_54jobs as cohort
 import ozstar_upload_3s5z_refresh_warmup_results as integrity
+import ozstar_wandb_sync_verified as verified_sync
 
 up = integrity.uploader
 PROJECT = 'hjh331-sjtu/gomarl'
@@ -97,19 +101,38 @@ def clean_original(directory, job, name, runtime, repo, api_factory):
     if dest != PROJECT+'/'+match.group(2) or actual_name != name:
         raise RuntimeError('Original name/project mismatch: '+str(directory))
     scoped_snapshot = snapshot_for(runtime, name)
-    scoped_snapshot(directory)
+    before = scoped_snapshot(directory)
+    if (job in cleanup.live_jobs() or not cleanup.job_finished(job, repo) or
+            (before and time.time() - max(entry[1] for entry in before.values()) / 1e9 < 300)):
+        print('RETAIN live/unknown or recently modified original: '+directory.name, flush=True)
+        return 0
     # Avoid append when full history and files are already in the cloud.
+    synced = False
     try:
         cleanup.verify_cloud(api_factory().run(dest), data, directory, name)
     except Exception as exc:
         print('Original needs final sync/verification: {} ({})'.format(dest, exc), flush=True)
-        current = False
-    else:
-        current = True
+        # The old raw CLI can report "done" while hiding a sender/worker
+        # error. Reuse the compatibility uploader, with visibility retries,
+        # before invoking the stricter deletion verification below.
+        if job in cleanup.live_jobs() or not cleanup.job_finished(job, repo):
+            raise RuntimeError('Job status changed before final sync; retain')
+        subprocess.run([sys.executable, str(Path(verified_sync.__file__).resolve()), str(directory),
+                        '-e', PROJECT.split('/')[0], '-p', PROJECT.split('/')[1]],
+                       check=True, timeout=900)
+        after = scoped_snapshot(directory)
+        if not cleanup.unchanged(before, after, allow_sync_metadata=True):
+            raise RuntimeError('Run payload changed during final sync; retain')
+        synced = True
     args = SimpleNamespace(repo=repo, wandb_root=root, entity=PROJECT.split('/')[0],
-        project=PROJECT.split('/')[1], apply=True, only_already_uploaded=current,
-        min_age=300, sync_timeout=900)
-    with patch.object(cleanup, 'snapshot', side_effect=scoped_snapshot):
+        project=PROJECT.split('/')[1], apply=True, only_already_uploaded=True,
+        # SDK metadata may have just been rewritten by our own sync. The age
+        # check above preceded the sync; process still rechecks file stability.
+        min_age=0 if synced else 300, sync_timeout=900)
+    write_audit = cleanup.write_audit
+    with patch.object(cleanup, 'snapshot', side_effect=scoped_snapshot), \
+            patch.object(cleanup, 'write_audit', side_effect=lambda args, audit:
+                         write_audit(args, dict(audit, final_sync_performed=synced))):
         return cleanup.process(directory, {job}, args, api_factory)
 
 
