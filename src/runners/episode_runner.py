@@ -71,6 +71,8 @@ class EpisodeRunner:
 
     def reset(self, test_mode=False):
         self.batch = self.new_batch()
+        if self.args.env_args.get('mixer_state_noise', False):
+            self.env.set_noise_test_mode(bool(test_mode))
         self.env.reset()
         self.t = 0
         self.mixer_state_cache = begin_mixer_state_refresh(self.args, self.episode_limit, 1, self.t_env, test_mode=test_mode)

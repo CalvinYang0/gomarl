@@ -84,12 +84,16 @@ class ParallelRunner:
         pipes = [Pipe() for _ in range(self.batch_size)]
         self.parent_conns, self.worker_conns = zip(*pipes)
         self.ps = []
-        for worker_conn in self.worker_conns:
+        for env_idx, worker_conn in enumerate(self.worker_conns):
+            worker_env_fn = self._env_fn
+            if self.args.env_args.get('mixer_state_noise', False):
+                worker_env_fn = CloudpickleWrapper(partial(env_REGISTRY[self.args.env],
+                    **dict(self.args.env_args, mixer_state_noise_stream=env_idx)))
             process = Process(
                 target=env_worker,
                 args=(
                     worker_conn,
-                    self._env_fn,
+                    worker_env_fn,
                     self.worker_reset_retries,
                     self.worker_reset_retry_delay,
                 ),
@@ -240,7 +244,8 @@ class ParallelRunner:
         self.mixer_state_cache = begin_mixer_state_refresh(self.args, self.episode_limit, self.batch_size, self.t_env, test_mode=test_mode)
 
         for env_idx in range(self.batch_size):
-            self._send_worker(env_idx, "reset", None)
+            noise_mode = {'mixer_noise_test_mode': bool(test_mode)} if self.args.env_args.get('mixer_state_noise', False) else None
+            self._send_worker(env_idx, "reset", noise_mode)
             if (
                 self._initial_reset
                 and self.worker_startup_stagger > 0
@@ -574,12 +579,14 @@ def env_worker(remote, env_fn, reset_retries=0, reset_retry_delay=1.0):
         nonlocal env
         env = env_fn.x()
 
-    def reset_with_retry():
+    def reset_with_retry(noise_test_mode=None):
         last_error = None
         for attempt in range(reset_retries + 1):
             try:
                 if env is None:
                     create_env()
+                if noise_test_mode is not None:
+                    env.set_noise_test_mode(noise_test_mode)
                 env.reset()
                 return
             except Exception as err:
@@ -646,7 +653,8 @@ def env_worker(remote, env_fn, reset_retries=0, reset_retry_delay=1.0):
                 elif cmd == "render_trace":
                     remote.send({"render_frame": safe_render_frame()})
                 elif cmd == "reset":
-                    reset_with_retry()
+                    noise_test_mode = data.get('mixer_noise_test_mode') if isinstance(data, dict) else None
+                    reset_with_retry(noise_test_mode)
                     response = {
                         "state": env.get_state(),
                         "avail_actions": env.get_avail_actions(),

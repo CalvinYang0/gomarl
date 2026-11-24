@@ -19,7 +19,19 @@ def env_fn(env, **kwargs) -> MultiAgentEnv:
     return env(**kwargs)
 
 REGISTRY = {}
-REGISTRY["sc2"] = partial(env_fn, env=StarCraft2Env)
+
+def sc2_env(**kwargs):
+    noise = kwargs.pop('mixer_state_noise', False)
+    noise_seed = kwargs.pop('mixer_state_noise_seed', 271828)
+    noise_stream = kwargs.pop('mixer_state_noise_stream', 0)
+    if type(noise) is not bool:
+        raise ValueError('mixer_state_noise must be boolean')
+    if noise:
+        from .starcraft_mixer_noise import MixerNoiseStarCraft2Env
+        return MixerNoiseStarCraft2Env(noise_seed=noise_seed, noise_stream=noise_stream, **kwargs)
+    return StarCraft2Env(**kwargs)
+
+REGISTRY["sc2"] = sc2_env
 
 if gfootball:
     REGISTRY["gfootball"] = partial(env_fn, env=GoogleFootballEnv)

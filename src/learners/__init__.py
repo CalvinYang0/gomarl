@@ -11,6 +11,8 @@ from .soft_onefill_refresh_learner import SoftOneFillRefreshLearner
 from .soft_onefill_warmup_learner import (ProjectedOneFillGateLearner, ProjectedOneFillRefreshLearner,
     ProjectedFreezeOneFillRefreshLearner, WarmupFreezeOneFillLearner, WarmupFreezeOneFillRefreshLearner)
 
+from .fixed_mask_noise_learner import FixedOneFillMaskLearner, NoiseProjectedRefreshLearner
+
 REGISTRY = {}
 
 REGISTRY["clean_learner"] = CleanLearner
@@ -28,3 +30,5 @@ REGISTRY["projected_onefill_refresh_learner"] = ProjectedOneFillRefreshLearner
 REGISTRY["projected_onefill_freeze_refresh_learner"] = ProjectedFreezeOneFillRefreshLearner
 REGISTRY["soft_onefill_freeze_learner"] = WarmupFreezeOneFillLearner
 REGISTRY["soft_onefill_freeze_refresh_learner"] = WarmupFreezeOneFillRefreshLearner
+REGISTRY["fixed_onefill_mask_learner"] = FixedOneFillMaskLearner
+REGISTRY["noise_projected_refresh_learner"] = NoiseProjectedRefreshLearner

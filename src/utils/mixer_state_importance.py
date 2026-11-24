@@ -4,6 +4,7 @@ These scores measure current mixer dependence, not action flips or win-rate
 contribution. Mean replacement can be off-manifold for correlated state fields.
 """
 from hashlib import sha256
+from copy import copy
 import json
 from pathlib import Path
 
@@ -12,6 +13,12 @@ import torch as th
 
 def state_slot_names(args, state_dim):
     env = args.env_args
+    if env.get('mixer_state_noise', False):
+        if state_dim <= 0 or state_dim % 2:
+            raise ValueError('Noise state requires D real plus D noise fields')
+        raw = copy(args)
+        raw.env_args = dict(env, mixer_state_noise=False)
+        return state_slot_names(raw, state_dim//2) + ['noise_{}'.format(i) for i in range(state_dim//2)]
     marine_maps = {"5m_vs_6m": (5, 6), "8m_vs_9m": (8, 9)}
     if env.get("map_name") in marine_maps and not env.get("obs_instead_of_state", False):
         allies, enemies = marine_maps[env["map_name"]]

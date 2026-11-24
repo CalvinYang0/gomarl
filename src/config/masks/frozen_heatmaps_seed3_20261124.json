@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "selection": "User-provided frozen binary heatmaps, source seed 3 per map; no performance-based mask selection",
+  "fill_value": 1,
+  "records": {
+    "corridor": {
+      "state_dim": 282,
+      "source_seed": 3,
+      "source_step": 10021935,
+      "closed_indices": [4, 30, 33, 36, 39, 42, 45, 48, 51, 54, 60, 63, 66, 69, 72, 81, 87, 90, 93, 96, 99],
+      "source_image": "codex-clipboard-5d379e96-feae-40a7-9aab-8151b214a73e.png",
+      "source_image_sha256": "035e6c25c496605b554224db9bf86fd54c8bd8855c44dfd01633d5822c6b967b"
+    },
+    "3s_vs_5z": {
+      "state_dim": 68,
+      "source_seed": 3,
+      "source_step": 9826071,
+      "closed_indices": [0, 5, 15, 19, 23, 27, 30, 31],
+      "source_image": "codex-clipboard-e5dbd9b0-c39f-4439-b533-f1ac530a02f5.png",
+      "source_image_sha256": "efe0e90ae30e5e9ee6b14a0750cf0a62ace5acc0daabae8bee7cd852ec07830b"
+    },
+    "5m_vs_6m": {
+      "state_dim": 98,
+      "source_seed": 3,
+      "source_step": 10005678,
+      "closed_indices": [4, 8, 12, 16, 26, 29, 35],
+      "source_image": "codex-clipboard-d35a5bae-a839-4302-9639-42465bee5c55.png",
+      "source_image_sha256": "1674ec19182aaf162a551e28baae91e303741a232289709773f179a5287c31ff"
+    }
+  }
+}

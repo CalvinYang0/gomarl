@@ -224,6 +224,9 @@ def _run_force_open_test(args, runner, n_test_runs, learner=None):
 
 def run_sequential(args, logger):
 
+    if getattr(args, 'mixer_state_noise', False):
+        from envs.starcraft_mixer_noise import configure_noise_env
+        configure_noise_env(args)
     preflight_visualizations(args)
     # Init runner so we can get env info
     runner = r_REGISTRY[args.runner](args=args, logger=logger)

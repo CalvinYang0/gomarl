@@ -113,3 +113,10 @@ repeat_id: 1
 label: "default_label"
 
 run: "default"
+
+# Fixed binary mixer mask retraining (opt-in; no effect on historical learners).
+mixer_fixed_mask_kind: "heatmap"
+mixer_fixed_mask_bundle: ""
+mixer_fixed_mask_sha256: ""
+mixer_state_noise: False
+mixer_state_noise_seed: 271828
