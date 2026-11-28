@@ -14,7 +14,8 @@ def configure_noise_env(args):
     if not getattr(args, 'mixer_state_noise', False):
         return
     if (args.env != 'sc2' or args.clean_model_type != 'qmix_minimal' or args.mixer != 'qmix' or
-            args.learner not in {'fixed_onefill_mask_learner', 'noise_projected_refresh_learner'}):
+            args.learner not in {'fixed_onefill_mask_learner', 'noise_projected_refresh_learner',
+                                'noise_projected_freeze_refresh_learner'}):
         raise ValueError('State noise is opt-in to the audited ordinary-agent mixer experiments only')
     args.env_args = dict(args.env_args, mixer_state_noise=True,
                         mixer_state_noise_seed=args.mixer_state_noise_seed, mixer_state_noise_stream=0)

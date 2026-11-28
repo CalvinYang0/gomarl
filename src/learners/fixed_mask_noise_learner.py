@@ -5,7 +5,8 @@ from pathlib import Path
 import torch as th
 
 from .soft_onefill_gate_learner import SoftOneFillGateLearner
-from .soft_onefill_warmup_learner import ProjectedOneFillRefreshLearner
+from .soft_onefill_warmup_learner import (ProjectedOneFillRefreshLearner,
+    ProjectedFreezeOneFillRefreshLearner)
 from modules.mixers.fixed_onefill_mask import FixedOneFillMaskMixer
 
 
@@ -62,3 +63,36 @@ class NoiseProjectedRefreshLearner(UniqueMaskDiagnostics, ProjectedOneFillRefres
         self.contract.update(noise_distribution='uniform_0_1', noise_ratio=1,
             noise_scope='global mixer state only; private per-worker train/eval RNG; stored in replay',
             noise_refresh='full concatenated state uses the historical 8M curriculum')
+
+
+class NoiseProjectedFreezeRefreshLearner(UniqueMaskDiagnostics, ProjectedFreezeOneFillRefreshLearner):
+    """Same collected-noise/TD recipe, with one explicit binary gate freeze."""
+    def __init__(self, mac, scheme, logger, args):
+        if not args.env_args.get('mixer_state_noise', False):
+            raise ValueError('Noise freeze learner requires the collected D+D state')
+        super().__init__(mac, scheme, logger, args)
+        # Keep freeze time explicit, rather than implicitly coupling it to the
+        # refresh endpoint. The submitter pins both for the requested experiment.
+        steps = args.mixer_soft_gate_freeze_steps
+        if type(steps) is not int or steps <= 0:
+            raise ValueError('Noise gate freeze step must be a positive integer')
+        self.freeze_steps = steps
+        self.contract.update(freeze_steps=steps, noise_distribution='uniform_0_1', noise_ratio=1,
+            noise_scope='global mixer state only; private per-worker train/eval RNG; stored in replay',
+            noise_refresh='full concatenated state uses the pinned curriculum',
+            noise_refresh_full_steps=self.refresh_contract['full_steps'])
+
+    def _gate_metrics(self, values):
+        metrics = super()._gate_metrics(values)
+        half = values.numel()//2
+        metrics.update({'mixer_input/real_exact_closed_slots': int((values[:half] == 0).sum()),
+                        'mixer_input/noise_exact_closed_slots': int((values[half:] == 0).sum())})
+        return metrics
+
+    def _before_training_update(self, t_env):
+        was_frozen = self.mixer.freeze_t_env.item() >= 0
+        super()._before_training_update(t_env)
+        if not was_frozen and self.mixer.freeze_t_env.item() >= 0 and not self.mixer.coefficients().any():
+            self.logger.console_logger.warning(
+                'All real/noise gates closed at freeze: effective mixer input is all ones; '
+                'training continues without overriding the requested threshold.')
